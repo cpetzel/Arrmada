@@ -141,17 +141,18 @@ type ShowFolderInfo struct {
 // from it.
 func msg56(roots []string, first, f string) string {
 	const still = "new episodes of a season it already has still import next to the others, and the rest wait in Needs you"
+	const waits = "its new episodes wait in Needs you"
 	const startOver = "delete the show in Arrmada keeping its files (leave \"Also delete files from disk\" unticked), %s, then use Scan library on the Series page to add it back"
 	root, ok := rootOf(roots, first)
 	switch {
 	case !ok || !libfolders.StrictlyUnder(f, root):
 		return fmt.Sprintf("its files aren't in a folder of its own inside the TV folder (%s), so Arrmada won't guess its folder; %s. "+
-			"To change that, "+startOver, filepath.Dir(first), still,
+			"To change that, "+startOver, filepath.Dir(first), waits,
 			"move its files into a folder named after the show, in season folders named \"Season 01\", \"Season 02\"…")
 	case filepath.Dir(f) == root:
 		return fmt.Sprintf("its folder %s, right inside the TV folder, is named like a season, so Arrmada won't guess its folder; %s. "+
 			"If it holds files #56 misplaced, move them into their show's own folder. If it is the show's own folder, "+startOver,
-			f, still, "rename that folder so its name doesn't read like a season")
+			f, waits, "rename that folder so its name doesn't read like a season")
 	case filepath.Dir(filepath.Dir(f)) == root:
 		return fmt.Sprintf("its season folders are named like seasons (%s), so Arrmada won't guess its folder; %s. "+
 			"To change that, if %s is the show's own folder: "+startOver+". If %[3]s is a category or franchise folder holding other shows, keep the show as it is",

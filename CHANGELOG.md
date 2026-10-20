@@ -45,8 +45,9 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   anything: keep the show as it is.
 
 - **Shows whose own folder is named like a season** (`Special`, `Series 7 (2001)`,
-  `S1 (2020)`), and episodes loose in the TV folder, are refused the same way. Renaming
-  their season folders doesn't help. Rename the show's own folder so it doesn't read like a
+  `S1 (2020)`), and episodes loose in the TV folder, are refused too: all their new
+  episodes wait in Needs you, and the same actions are refused. Renaming their season
+  folders doesn't help. Rename the show's own folder so it doesn't read like a
   season (or move loose episodes into a folder named after the show), then start the show
   over (below) without the renaming step.
 
@@ -57,7 +58,9 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   3. On the Series page, use **Scan library**. The show is added back with its files.
 
   It comes back with searching off and no quality profile: turn searching on and pick its
-  profile again. Its history in Arrmada starts over. New episodes then go into its
+  profile again. Its history in Arrmada starts over, and so do its other settings: an
+  Anime switch you set by hand, its numbering source, aliases, a display title you chose,
+  "monitor new seasons" and per-episode monitoring. New episodes then go into its
   `Season 01`, `Season 02`… folders. The library scan only looks at the folders right
   inside a TV folder, so this doesn't work for a show inside a category folder.
 
