@@ -65,21 +65,23 @@ func (a *api) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	quota := requests.GlobalLimits(func(key string) string { return a.deps.Settings.Get(ctx, key, "") })
 	out := map[string]any{
-		"search_on_add":           a.deps.Settings.GetBool(ctx, keySearchOnAdd, true),
-		"series_monitor_default":  a.seriesMonitorDefault(ctx),
-		"naming_movie_folder":     a.deps.Settings.Get(ctx, keyNamingFolder, library.DefaultMovieFolder),
-		"naming_movie_file":       a.deps.Settings.Get(ctx, keyNamingFile, library.DefaultMovieFile),
-		"naming_series_folder":    a.deps.Settings.Get(ctx, keyNamingSeriesFolder, library.DefaultSeriesFolder),
-		"naming_series_season":    a.deps.Settings.Get(ctx, keyNamingSeriesSeason, library.DefaultSeasonFolder),
-		"naming_series_episode":   a.deps.Settings.Get(ctx, keyNamingSeriesEpisode, library.DefaultEpisodeFile),
-		"write_nfo":               a.deps.Settings.GetBool(ctx, keyWriteNFO, false),
-		"download_artwork":        a.deps.Settings.GetBool(ctx, keyDownloadArtwrk, false),
-		"books_enabled":           a.booksEnabled(ctx),
-		"music_enabled":           a.musicEnabled(ctx),
-		"plex_login_enabled":      a.deps.Settings.GetBool(ctx, "plex_login_enabled", false),
-		"plex_signin_staff":       a.deps.Settings.GetBool(ctx, keyPlexSignInStaff, false),
-		"tmdb_region":             a.deps.Settings.Get(ctx, "tmdb_region", ""),
-		"plex_login_auto_approve": a.plexAutoApproval(ctx).All(),
+		"search_on_add":          a.deps.Settings.GetBool(ctx, keySearchOnAdd, true),
+		"series_monitor_default": a.seriesMonitorDefault(ctx),
+		"naming_movie_folder":    a.deps.Settings.Get(ctx, keyNamingFolder, library.DefaultMovieFolder),
+		"naming_movie_file":      a.deps.Settings.Get(ctx, keyNamingFile, library.DefaultMovieFile),
+		"naming_series_folder":   a.deps.Settings.Get(ctx, keyNamingSeriesFolder, library.DefaultSeriesFolder),
+		"naming_series_season":   a.deps.Settings.Get(ctx, keyNamingSeriesSeason, library.DefaultSeasonFolder),
+		"naming_series_episode":  a.deps.Settings.Get(ctx, keyNamingSeriesEpisode, library.DefaultEpisodeFile),
+		// A new show folder keeps {year} only when another show shares its title (off = always).
+		"naming_series_year_when_needed": a.deps.Settings.GetBool(ctx, settings.KeyNamingSeriesYearWhenNeeded, false),
+		"write_nfo":                      a.deps.Settings.GetBool(ctx, keyWriteNFO, false),
+		"download_artwork":               a.deps.Settings.GetBool(ctx, keyDownloadArtwrk, false),
+		"books_enabled":                  a.booksEnabled(ctx),
+		"music_enabled":                  a.musicEnabled(ctx),
+		"plex_login_enabled":             a.deps.Settings.GetBool(ctx, "plex_login_enabled", false),
+		"plex_signin_staff":              a.deps.Settings.GetBool(ctx, keyPlexSignInStaff, false),
+		"tmdb_region":                    a.deps.Settings.Get(ctx, "tmdb_region", ""),
+		"plex_login_auto_approve":        a.plexAutoApproval(ctx).All(),
 		// Which media types a new Plex sign-in auto-approves ("movie,series,book").
 		"plex_login_auto_approve_types": a.plexAutoApproval(ctx).String(),
 		// Sign in with Jellyfin (off until the owner turns it on), its Quick Connect (on with
@@ -201,6 +203,8 @@ type settingsUpdate struct {
 	NamingSeriesFolder   *string `json:"naming_series_folder"`
 	NamingSeriesSeason   *string `json:"naming_series_season"`
 	NamingSeriesEpisode  *string `json:"naming_series_episode"`
+	// NamingSeriesYearWhenNeeded: a new show folder keeps {year} only when it's needed.
+	NamingSeriesYearWhenNeeded *bool `json:"naming_series_year_when_needed"`
 	// Book naming (books_naming.go): checked as templates before anything is saved.
 	NamingAudiobookFolder *string `json:"naming_audiobook_folder"`
 	NamingAudiobookFile   *string `json:"naming_audiobook_file"`
@@ -520,6 +524,9 @@ func (a *api) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.NamingSeriesEpisode != nil && !save(a.deps.Settings.Set(ctx, keyNamingSeriesEpisode, *req.NamingSeriesEpisode)) {
+		return
+	}
+	if req.NamingSeriesYearWhenNeeded != nil && !save(a.deps.Settings.SetBool(ctx, settings.KeyNamingSeriesYearWhenNeeded, *req.NamingSeriesYearWhenNeeded)) {
 		return
 	}
 	for _, f := range bookNamingFields {

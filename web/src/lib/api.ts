@@ -1188,6 +1188,8 @@ export interface AppSettings {
   naming_series_folder: string;
   naming_series_season: string;
   naming_series_episode: string;
+  /** A new show folder keeps the series folder's {year} only when another show shares its title. Off by default. */
+  naming_series_year_when_needed: boolean;
   /** Book naming: folder ("/" between levels), single file, and each file of a multi-file audiobook. */
   naming_audiobook_folder: string;
   naming_audiobook_file: string;

@@ -550,6 +550,12 @@ type SeriesNaming struct {
 	Folder       string
 	SeasonFolder string
 	EpisodeFile  string
+	// YearWhenNeeded keeps the series folder's {year} only when the show needs it to be
+	// told apart from another show with the same title ("Dark Matter (2024)" next to
+	// "Dark Matter"); otherwise {year} is empty and the brackets around it drop out. It
+	// only affects a NEW show folder: a show that has a folder keeps it, and so does a
+	// rename. Off by default, which is the folder the template always gave.
+	YearWhenNeeded bool
 }
 
 // NamingProvider supplies the (possibly user-customized) naming scheme at import
@@ -583,6 +589,9 @@ type Importer struct {
 	epTitleFn func(seriesTitle string, year, season, episode int) string
 	// seriesIDsFn resolves a show's ids by name/year for a new series folder's id tokens.
 	seriesIDsFn func(seriesTitle string, year int) SeriesIDs
+	// yearNeededFn says whether a new series folder needs the show's year to tell it
+	// apart from another show (SeriesNaming.YearWhenNeeded). nil = always needed.
+	yearNeededFn func(seriesTitle string, year int) bool
 	// copyReport hears this import's copies (Using); nil for every other importer.
 	copyReport CopyReport
 }
@@ -607,6 +616,28 @@ func (im *Importer) SetEpisodeTitleFunc(f func(seriesTitle string, year, season,
 // empty, and an empty Plex group drops out of the name.
 func (im *Importer) SetSeriesIDsFunc(f func(seriesTitle string, year int) SeriesIDs) {
 	im.seriesIDsFn = f
+}
+
+// SetSeriesYearNeededFunc installs the check behind SeriesNaming.YearWhenNeeded: whether
+// a new show folder needs the show's year because another show shares its title. It's
+// asked only when that setting is on, the folder template has {year}, and the show has
+// no folder yet. Unset, the year is always kept.
+func (im *Importer) SetSeriesYearNeededFunc(f func(seriesTitle string, year int) bool) {
+	im.yearNeededFn = f
+}
+
+// seriesFolderYear is the {year} a NEW series folder is named with: the show's year, or
+// "" when the year-when-needed setting is on and nothing shares the show's title. Every
+// doubt keeps the year — no check installed, no year known — because a year that wasn't
+// needed costs nothing, while a missing one can put two shows in one folder.
+func (im *Importer) seriesFolderYear(sn SeriesNaming, title string, year int) string {
+	if !sn.YearWhenNeeded || year <= 0 || !strings.Contains(sn.Folder, "{year}") || im.yearNeededFn == nil {
+		return yearToken(year)
+	}
+	if im.yearNeededFn(title, year) {
+		return yearToken(year)
+	}
+	return ""
 }
 
 func (im *Importer) seriesIDs(title string, year int) SeriesIDs {
@@ -1466,7 +1497,7 @@ func (im *Importer) episodeTargetIn(seriesFolder, title string, year, season, ep
 		// A new series folder: the scheme, with the show's ids when the template asks for
 		// them. An existing folder (seriesFolder) is always reused as it is.
 		folder = renderName(seriesFolderFormat(sn.Folder, ids), map[string]string{
-			"title": t, "year": yearToken(year),
+			"title": t, "year": im.seriesFolderYear(sn, title, year),
 		})
 		if folder == "" {
 			folder = t

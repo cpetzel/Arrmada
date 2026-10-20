@@ -252,6 +252,15 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   vanished or changed outside Arrmada and shows them as gone from disk; it never deletes anything
   and never downloads them again by itself. Artists are found under their other names too
   ("Beyonce", "宇多田ヒカル").
+- **Add the year to a show folder only when it's needed** (Settings → Naming → Series naming),
+  the way Sonarr's TheTVDB names look: "Breaking Bad", but "Dark Matter (2024)" because another
+  Dark Matter exists. The year is kept when another show in the library has the same title, a
+  folder with that title is already in a TV folder, or TMDB lists another show with that title
+  (titles compare ignoring case, punctuation and a leading "The"). If TMDB can't be asked, the
+  year is kept. It only names new show folders: a show that already has a folder keeps it, and
+  Rename never moves a show to another folder. It's off by default, so nothing changes until
+  you turn it on. A rename that would put a file in a folder where another show keeps its files
+  is now refused and shown as a conflict in the preview.
 
 ### Changed
 

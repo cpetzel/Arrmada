@@ -93,6 +93,8 @@ func (p libPrefs) SeriesNaming() library.SeriesNaming {
 		Folder:       p.s.Get(ctx, "naming_series_folder", library.DefaultSeriesFolder),
 		SeasonFolder: p.s.Get(ctx, "naming_series_season", library.DefaultSeasonFolder),
 		EpisodeFile:  p.s.Get(ctx, "naming_series_episode", library.DefaultEpisodeFile),
+		// Off by default: {year} is then always filled, as it always was.
+		YearWhenNeeded: p.s.GetBool(ctx, settings.KeyNamingSeriesYearWhenNeeded, false),
 	}
 }
 func (p libPrefs) AudiobookNaming() library.BookNaming {
@@ -670,6 +672,12 @@ func main() {
 	bookImporter.SetSeriesIDsFunc(func(seriesTitle string, year int) library.SeriesIDs {
 		tmdb, tvdb, imdb, _ := seriesSvc.IDsByName(context.Background(), seriesTitle, year)
 		return library.SeriesIDs{TMDB: tmdb, TVDB: tvdb, IMDB: imdb}
+	})
+	// "Add the year only when it's needed": a new show folder keeps {year} only when another
+	// show shares its title (series.FolderYears). Asked only with that setting on.
+	folderYears := series.NewFolderYears(seriesSvc)
+	bookImporter.SetSeriesYearNeededFunc(func(seriesTitle string, year int) bool {
+		return folderYears.Needed(context.Background(), seriesTitle, year)
 	})
 	coordinator.SetSeries(seriesSvc, bookImporter)
 	// Books share the importer set above; ebooks land in their own category.
