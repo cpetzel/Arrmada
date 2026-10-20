@@ -720,7 +720,7 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 	// still has gaps, so when a fix changes what WOULD have imported, pointing manual
 	// import at the folder is what applies it.
 	if fi, statErr := os.Stat(path); statErr == nil && fi.IsDir() {
-		if ferr := c.placementCheck(ctx, s, filepath.Base(path)); ferr != nil {
+		if ferr := c.placementCheckIn(ctx, s, filepath.Base(path), path); ferr != nil {
 			return ferr
 		}
 		placedRefs, matched, unresolved, importFailed := c.importSeriesInto(ctx, s, path, forceAll)

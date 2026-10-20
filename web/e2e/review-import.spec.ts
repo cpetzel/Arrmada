@@ -78,6 +78,39 @@ test.describe("manager", () => {
     expect(api.callsTo("POST", "/api/v1/reviews/2/map")[0].body).toEqual({ series_id: 1, files: [{ rel_path: "Fixture.Show.E01.mkv", season: 1, episodes: [1] }] });
   });
 
+  test("a show whose folder can't be told offers Map files…, after a refused import or when held for it", async ({ page, api }) => {
+    const refused = "nothing in this download could be imported: Can't tell which folder Fixture Show lives in: its season folders are named like seasons (S01) (this download isn't one season's episodes: its file Fixture.Show.Stagione.2.Episodio.5.mkv doesn't say which season and episode it is).";
+    const base = reviews.reviews[0];
+    await page.route("**/api/v1/reviews", (route) => route.fulfill({
+      json: {
+        reviews: [
+          { ...base, id: 3, name: "Fixture.Show.Stagione.2.ITA.1080p-GRP", reason_code: "mismatch", reason: "Grabbed for \"Fixture Show\" but the download looks like \"Fixture Show Stagione 2 ITA\"" },
+          { ...base, id: 4, name: "Fixture.Show.Stagione.3.ITA.1080p-GRP", reason_code: "import_failed", reason: refused.replace(/^nothing in this download could be imported: /, "") },
+          { ...base, id: 5, name: "Fixture.Show.Stagione.4.ITA.1080p-GRP", reason_code: "import_failed", reason: "write /media/tv: permission denied" },
+        ],
+      },
+    }));
+    await page.route("**/api/v1/reviews/3/files", (route) => route.fulfill({
+      json: { files: [{ rel_path: "Fixture.Show.Stagione.2.Episodio.5.mkv", size: 1e9, video: true, guess: {} }], truncated: false },
+    }));
+    await answerJob(page, () => ({ ...reviewImportJob, target: "review:3", status: "failed", message: "Importing…", error: refused }));
+    await page.goto("/activity/needs-you");
+    const card = (name: string) => page.getByTestId("review-card").filter({ hasText: name });
+
+    // Held for its folder: offered at once. Held for another reason: not offered.
+    await expect(card("Stagione.3.ITA").getByRole("button", { name: "Map files…" })).toBeVisible();
+    await expect(card("Stagione.4.ITA").getByRole("button", { name: "Map files…" })).toHaveCount(0);
+
+    // Doesn't match: offered once Import anyway is refused for the folder.
+    const held = card("Stagione.2.ITA");
+    await expect(held.getByRole("button", { name: "Map files…" })).toHaveCount(0);
+    await held.getByRole("button", { name: "Import anyway" }).click();
+    await expect(held.getByRole("alert")).toContainText("Can't tell which folder", { timeout: 15_000 });
+    await held.getByRole("button", { name: "Map files…" }).click();
+    await expect(page.getByRole("dialog", { name: "Map files to episodes" })).toBeVisible();
+    expect(api.callsTo("POST", "/api/v1/reviews/3/import")).toHaveLength(1);
+  });
+
   test("Import into… for a download Arrmada didn't grab follows its job, and a failure stays on the card", async ({ page, api }) => {
     let job: Job = { ...unmanagedImportJob, status: "running", progress: 0.25, message: "Copying… 2.1 of 8.4 GB", finished_at: null };
     await page.route(`**/api/v1/jobs/${unmanagedImportJob.id}`, (route) => route.fulfill({ json: job }));

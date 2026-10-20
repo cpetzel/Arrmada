@@ -21,6 +21,10 @@ const REASON: Record<ReviewReason, { label: string; tone: Tone }> = {
   no_media: { label: "Nothing to import", tone: "reject" },
 };
 
+// How the server starts a refusal because a show's folder can't be told
+// (series.ShowFolderError).
+const SHOW_FOLDER_REFUSED = "Can't tell which folder";
+
 // Where a review's title lives in the app.
 function titleLink(r: ImportReview): string | null {
   if (r.expected_id <= 0) return null;
@@ -347,6 +351,11 @@ function ReviewCard({ r, busy: acting, importJob, importError, onImportDone, sel
   const label = kindLabel(r.media_type);
   const held = heldAt(r.created_at);
   const linked = r.expected_id > 0;
+  // The show's folder couldn't be told for this download (#56: its name says no season the
+  // import can read): the hold's reason or the last import's error says so. Mapping its
+  // files by hand still puts each season only into that season's own folder.
+  const folderRefused = r.media_type === "series" && linked && r.reason_code !== "numbering" &&
+    [r.reason, importError ?? ""].some((t) => t.includes(SHOW_FOLDER_REFUSED));
 
   const btn = "rounded-lg px-3 py-1.5 text-sm font-semibold";
   const primary = { border: "1px solid var(--line)", color: "var(--ink)" };
@@ -422,6 +431,7 @@ function ReviewCard({ r, busy: acting, importJob, importError, onImportDone, sel
         {r.reason_code === "no_media" && (
           <button onClick={() => onReject(true)} disabled={busy} className={btn} style={danger}>{linked ? "Reject & find another" : "Reject"}</button>
         )}
+        {folderRefused && <button onClick={onMap} disabled={busy} className={btn} style={primary}>Map files…</button>}
         <button onClick={onDismiss} disabled={busy} className="ml-auto rounded-lg px-3 py-1.5 text-sm text-ink-dim hover:text-[var(--ink)]" title="Leave the files in the downloads folder and handle it yourself">Dismiss</button>
       </div>
     </div>

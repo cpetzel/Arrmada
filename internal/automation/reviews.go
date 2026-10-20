@@ -726,7 +726,7 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		if err != nil {
 			return err
 		}
-		if ferr := c.placementCheck(ctx, s, r.Name); ferr != nil {
+		if ferr := c.placementCheckIn(ctx, s, r.Name, r.ContentPath); ferr != nil {
 			return fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 		}
 		placed, matched, unresolved, failed := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
