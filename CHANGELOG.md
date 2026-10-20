@@ -9,6 +9,23 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 [semantic](https://semver.org/). How to update:
 [Updating Arrmada](https://github.com/tristenlammi/Arrmada/blob/main/docs/updating.md).
 
+## [0.3.3] - 2026-10-20
+
+### Fixed
+
+- **A season pack whose name gives the season in another language now imports** (#56).
+  For a show whose season folders aren't named "Season N" (such as `S01`, `S02`), a pack
+  named like `Show.Stagione.2.ITA.1080p…` was refused with "Can't tell which folder…", even
+  with Import anyway, because Arrmada couldn't read the season from the name. Now it looks
+  at the episode files inside: when every one is named as an episode of the same season
+  (`S02E05`, `2x05`), they go into that season's existing folder, next to its other
+  episodes. Anything else is still refused, and the message says why, for example
+  "its files are from seasons 1 and 2". Other shows import exactly as in v0.3.2.
+- **Map files… is offered when a show's folder can't be told.** If the files inside don't
+  say their episode either, the download's card in Activity → Needs you offers
+  **Map files…** once the import is refused, so you can say which episode each file is.
+  Each file still goes only into its season's existing folder.
+
 ## [0.3.2] - 2026-10-20
 
 ### Before you update
@@ -290,6 +307,7 @@ The first tagged release (early development).
 - **Safety nets**: hardlinked imports, a recycle bin, nightly backups, a blocklist, and
   `update.sh` with automatic rollback.
 
+[0.3.3]: https://github.com/tristenlammi/Arrmada/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tristenlammi/Arrmada/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tristenlammi/Arrmada/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tristenlammi/Arrmada/compare/v0.2.0...v0.3.0
