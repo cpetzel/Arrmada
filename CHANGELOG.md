@@ -20,7 +20,8 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   at the episode files inside: when every one is named as an episode of the same season
   (`S02E05`, `2x05`), they go into that season's existing folder, next to its other
   episodes. Anything else is still refused, and the message says why, for example
-  "its files are from seasons 1 and 2". Other shows import exactly as in v0.3.2.
+  "its files are from seasons 1 and 2". The automatic import does the same for a download
+  grabbed for such a show. Other shows import exactly as in v0.3.2.
 - **Map files… is offered when a show's folder can't be told.** If the files inside don't
   say their episode either, the download's card in Activity → Needs you offers
   **Map files…** once the import is refused, so you can say which episode each file is.
