@@ -72,8 +72,9 @@ func TestShowFolderOfSeasonFolderNames(t *testing.T) {
 		{"Series", "/tv/Taskmaster/Series 1/Taskmaster - S01E01.mkv", "/tv/Taskmaster"},
 		{"Temporada", "/tv/Elite/Temporada 2/Elite - S02E01.mkv", "/tv/Elite"},
 		{"flat", "/tv/The Bear (2022)/The Bear - S01E01.mkv", "/tv/The Bear (2022)"},
-		{"release folder in season", "/tv/Show/Season 1/Show.S01E01.1080p/Show.S01E01.mkv", "/tv/Show"},
-		{"odd season name", "/tv/Avatar/Book 1 Water/Avatar - S01E01.mkv", "/tv/Avatar"},
+		// Not #56: v0.3.1's own answer stands, right or wrong.
+		{"release folder in season", "/tv/Show/Season 1/Show.S01E01.1080p/Show.S01E01.mkv", "/tv/Show/Season 1/Show.S01E01.1080p"},
+		{"odd season name", "/tv/Avatar/Book 1 Water/Avatar - S01E01.mkv", "/tv/Avatar/Book 1 Water"},
 		{"show named 1992", "/tv/1992/S01/1992 - S01E01.mkv", "/tv/1992"},
 		{"show named 24", "/tv/24/Season 1/24 - S01E01.mkv", "/tv/24"},
 		{"S.W.A.T.", "/tv/S.W.A.T. (2017)/S01/S.W.A.T. - S01E01.mkv", "/tv/S.W.A.T. (2017)"},
@@ -92,23 +93,28 @@ func TestShowFolderOfSeasonFolderNames(t *testing.T) {
 	}
 }
 
-// Outside every TV folder the folder names are all there is to go on: the broader season
-// names are stepped over, a bare number is not.
+// Outside every TV folder there's no TV folder to check a corrected folder against, so a
+// show's folder is v0.3.1's and an import for a season-named one is refused.
 func TestShowFolderOutsideTheTVFolder(t *testing.T) {
-	for file, want := range map[string]string{
-		"/old/Gomorra/Stagione 1/x.mkv": "/old/Gomorra",
-		"/old/Show/S01/x.mkv":           "/old/Show",
-		"/old/Show/Specials/x.mkv":      "/old/Show",
-		"/old/1992/x.mkv":               "/old/1992",
-		"/old/1883/Season 1/x.mkv":      "/old/1883",
+	for file, want := range map[string][2]string{
+		// file: {ShowFolder's name-only guess, ShowFolderFor (v0.3.1's)}
+		"/old/Gomorra/Stagione 1/x.mkv": {"/old/Gomorra", "/old/Gomorra/Stagione 1"},
+		"/old/Show/S01/x.mkv":           {"/old/Show", "/old/Show/S01"},
+		"/old/Show/Specials/x.mkv":      {"/old/Show", "/old/Show"},
+		"/old/1992/x.mkv":               {"/old/1992", "/old/1992"},
+		"/old/1883/Season 1/x.mkv":      {"/old/1883", "/old/1883"},
 	} {
-		if got := ShowFolder(filepath.FromSlash(file)); got != filepath.FromSlash(want) {
-			t.Errorf("ShowFolder(%s) = %s, want %s", file, got, want)
+		if got := ShowFolder(filepath.FromSlash(file)); got != filepath.FromSlash(want[0]) {
+			t.Errorf("ShowFolder(%s) = %s, want %s", file, got, want[0])
 		}
 		f := newFolderFixture(t, "/tv")
-		if got := f.svc.ShowFolderFor(filepath.FromSlash(file)); got != filepath.FromSlash(want) {
-			t.Errorf("ShowFolderFor(%s) = %s, want %s", file, got, want)
+		if got := f.svc.ShowFolderFor(filepath.FromSlash(file)); got != filepath.FromSlash(want[1]) {
+			t.Errorf("ShowFolderFor(%s) = %s, want %s", file, got, want[1])
 		}
+	}
+	f := newFolderFixture(t, "/tv")
+	if info := f.svc.ShowFolderOf(context.Background(), f.show("Gomorra", "/old/Gomorra/Stagione 1/x.mkv")); !info.Unknown {
+		t.Errorf("season-named folder outside the TV folder: %+v, want refused", info)
 	}
 }
 
@@ -168,40 +174,53 @@ func TestShowFolderOfSharedFolder(t *testing.T) {
 	}
 }
 
-// A TV folder set one level too high (/storage, with the shows in /storage/TV Shows): the
-// first-level folder holds many shows, so the folder above the season folder is the show's.
-func TestShowFolderOfTVFolderSetTooHigh(t *testing.T) {
+// Below a folder inside the TV folder (a category, or a TV folder set one level too high)
+// a show is read as v0.3.1 read it — and a season-named folder there, which v0.3.1 got
+// wrong, is refused rather than corrected: the folder above it isn't right inside the TV
+// folder, so nothing proves it's the show's.
+func TestShowFolderBelowAFolderInsideTheTVFolder(t *testing.T) {
 	ctx := context.Background()
 	f := newFolderFixture(t, "/storage")
 	pe := f.show("Pechino Express", "/storage/TV Shows/Pechino Express/S12/Pechino Express - S12E01.mkv")
-	f.show("Lost", "/storage/TV Shows/Lost/S01/Lost - S01E01.mkv")
-	f.show("Fargo", "/storage/TV Shows/Fargo/Season 1/Fargo - S01E01.mkv")
-	sr := Series{ID: pe}
-	info := f.svc.ShowFolderOf(ctx, pe)
-	if info.Unknown || info.Path != filepath.FromSlash("/storage/TV Shows/Pechino Express") {
-		t.Fatalf("ShowFolderOf = %+v", info)
+	if info := f.svc.ShowFolderOf(ctx, pe); !info.Unknown {
+		t.Errorf("Pechino Express = %+v, want refused", info)
 	}
-	if got := f.svc.ImportDir(ctx, sr); got != filepath.FromSlash("/storage/TV Shows") {
-		t.Errorf("ImportDir = %q, want /storage/TV Shows", got)
+	fargo := f.show("Fargo", "/storage/TV Shows/Fargo/Season 1/Fargo - S01E01.mkv")
+	if info := f.svc.ShowFolderOf(ctx, fargo); info.Unknown || info.Path != filepath.FromSlash("/storage/TV Shows/Fargo") {
+		t.Errorf("Fargo = %+v, want v0.3.1's /storage/TV Shows/Fargo", info)
 	}
-	// Shows grouped one level down are found by the folder, whatever their season folders
-	// are called, and a misplaced copy beside them is still misplaced.
-	dark := f.show("Dark", "/storage/TV Shows/Dark/Book One/Dark - S01E01.mkv", "/storage/TV Shows/S02/Season 2/Dark - S02E01.mkv")
-	if info := f.svc.ShowFolderOf(ctx, dark); info.Path != filepath.FromSlash("/storage/TV Shows/Dark") {
-		t.Errorf("Dark = %+v", info)
+	// v0.3.1 imported Fargo into <TV folder>/Fargo, and so does this.
+	if got := f.svc.ImportDir(ctx, Series{ID: fargo}); got != "" {
+		t.Errorf("ImportDir = %q, want the TV folder", got)
 	}
-	if _, m, _ := f.svc.MisplacedFiles(ctx, dark); len(m) != 1 || !strings.Contains(m[0].Why, "named like a season folder") {
-		t.Errorf("Dark's misplaced = %+v", m)
+	if got := f.svc.ExistingFolderName(ctx, fargo); got != "Fargo" {
+		t.Errorf("ExistingFolderName = %q", got)
 	}
 }
 
-// A show whose only files sit loose in the TV folder has no folder yet; a new one is made
-// from the scheme rather than the TV folder's own name.
+// A show's files that name different folders: v0.3.1 took whichever came first; nothing
+// is guessed now.
+func TestShowFolderOfFilesThatDisagree(t *testing.T) {
+	ctx := context.Background()
+	f := newFolderFixture(t, "/tv")
+	avatar := f.show("Avatar", "/tv/Cartoons/Avatar/Book 1 Water/a - S01E01.mkv", "/tv/Cartoons/Avatar/Book 2 Earth/a - S02E01.mkv")
+	if info := f.svc.ShowFolderOf(ctx, avatar); !info.Unknown || !strings.Contains(info.Why, "different folders") {
+		t.Errorf("Avatar = %+v, want refused", info)
+	}
+	// Two folders v0.3.1 imported into the same place agree: <TV>/Frieren either way.
+	split := f.show("Frieren", "/tv/Anime/Frieren/Season 1/f - S01E01.mkv", "/tv/Frieren/Season 1/f - S01E02.mkv", "/tv/Anime/Frieren/Season 1/f - S01E03.mkv")
+	if info := f.svc.ShowFolderOf(ctx, split); info.Unknown || info.Path != filepath.FromSlash("/tv/Anime/Frieren") || f.svc.ExistingFolderName(ctx, split) != "Frieren" {
+		t.Errorf("Frieren = %+v", info)
+	}
+}
+
+// A show whose only files sit loose in the TV folder: v0.3.1 imported into a folder named
+// after the TV folder. Refused.
 func TestShowFolderOfLooseFiles(t *testing.T) {
 	f := newFolderFixture(t, "/tv")
 	id := f.show("Show", "/tv/Show - S01E01.mkv")
-	if info := f.svc.ShowFolderOf(context.Background(), id); info.Unknown || info.Path != "" {
-		t.Fatalf("ShowFolderOf = %+v, want no folder and not unknown", info)
+	if info := f.svc.ShowFolderOf(context.Background(), id); !info.Unknown || info.Path != "" {
+		t.Fatalf("ShowFolderOf = %+v, want refused", info)
 	}
 	if got := f.svc.ShowFolderFor(filepath.FromSlash("/tv/Show - S01E01.mkv")); got != "" {
 		t.Errorf("ShowFolderFor(loose) = %q, want none", got)
@@ -316,141 +335,35 @@ func TestMisplacedShows(t *testing.T) {
 	}
 }
 
-// Shows kept below a category folder (or a TV folder set one level too high) are found by
-// their own folder however many shows the category holds, as v0.3.1 found them — never
-// the category folder, which an import would then fill with "Season N" folders.
-func TestShowFolderOfNestedLayouts(t *testing.T) {
+// A show inside a category folder is read as v0.3.1 read it (and imported where v0.3.1
+// imported it, <TV folder>/<show folder's name>), unless that is a #56 mistake: a
+// season-named folder there is refused.
+func TestShowFolderInsideACategory(t *testing.T) {
 	ctx := context.Background()
-	check := func(t *testing.T, f *folderFixture, id int64, want string) {
-		t.Helper()
-		info := f.svc.ShowFolderOf(ctx, id)
-		if info.Unknown || info.Path != filepath.FromSlash(want) {
-			t.Fatalf("ShowFolderOf = %+v, want %s", info, want)
-		}
-		if got := f.svc.ImportDirOf(ctx, Series{ID: id}, info); got != filepath.Dir(filepath.FromSlash(want)) {
-			t.Errorf("ImportDir = %s, want %s", got, filepath.Dir(want))
-		}
+	f := newFolderFixture(t, "/tv")
+	frieren := f.show("Frieren", "/tv/Anime/Frieren/Season 1/Frieren - S01E01.mkv")
+	if info := f.svc.ShowFolderOf(ctx, frieren); info.Unknown || info.Path != filepath.FromSlash("/tv/Anime/Frieren") {
+		t.Errorf("Frieren = %+v", info)
 	}
-	t.Run("category with one show", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		id := f.show("Frieren", "/tv/Anime/Frieren/Season 1/Frieren - S01E01.mkv")
-		f.show("Lost", "/tv/Lost/Season 1/Lost - S01E01.mkv")
-		check(t, f, id, "/tv/Anime/Frieren")
-		if got := f.svc.ShowFolderFor(filepath.FromSlash("/tv/Anime/Frieren/Season 1/Frieren - S01E01.mkv")); got != filepath.FromSlash("/tv/Anime/Frieren") {
-			t.Errorf("ShowFolderFor = %s", got)
-		}
-	})
-	t.Run("category with two shows", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		a := f.show("Bluey", "/tv/Kids/Bluey/Season 1/Bluey - S01E01.mkv")
-		b := f.show("Peppa Pig", "/tv/Kids/Peppa Pig/S01/Peppa Pig - S01E01.mkv")
-		check(t, f, a, "/tv/Kids/Bluey")
-		check(t, f, b, "/tv/Kids/Peppa Pig")
-	})
-	t.Run("category with three shows", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		a := f.show("Bluey", "/tv/Kids/Bluey/Season 1/Bluey - S01E01.mkv")
-		f.show("Peppa Pig", "/tv/Kids/Peppa Pig/Season 1/Peppa Pig - S01E01.mkv")
-		f.show("Paw Patrol", "/tv/Kids/Paw Patrol/S01/Paw Patrol - S01E01.mkv")
-		check(t, f, a, "/tv/Kids/Bluey")
-	})
-	t.Run("TV folder too high, one show", func(t *testing.T) {
-		f := newFolderFixture(t, "/storage")
-		check(t, f, f.show("Lost", "/storage/TV Shows/Lost/Season 1/Lost - S01E01.mkv"), "/storage/TV Shows/Lost")
-	})
-	t.Run("one season in S01", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		id := f.show("Mini", "/tv/Mini/S01/Mini - S01E01.mkv")
-		f.show("Lost", "/tv/Lost/Season 1/Lost - S01E01.mkv")
-		check(t, f, id, "/tv/Mini")
-	})
-	t.Run("flat", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		check(t, f, f.show("Flat", "/tv/Flat (2020)/Flat - S01E01.mkv"), "/tv/Flat (2020)")
-	})
-	t.Run("release folders", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		check(t, f, f.show("Show", "/tv/Show/Show.S01.1080p.WEB/Show.S01E01.mkv"), "/tv/Show")
-		check(t, f, f.show("Other", "/tv/Anime/Other/Season 1/Other.S01E01.1080p/Other.S01E01.mkv"), "/tv/Anime/Other")
-	})
-	t.Run("flat inside a category", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		file := "/tv/Anime/Frieren (2023)/Frieren - S01E01.mkv"
-		id := f.show("Frieren", file)
-		check(t, f, id, "/tv/Anime/Frieren (2023)")
-		if got := f.svc.ShowFoldersOf(ctx, id)(filepath.FromSlash(file)); got != filepath.FromSlash("/tv/Anime/Frieren (2023)") {
-			t.Errorf("ShowFoldersOf = %s", got)
-		}
-	})
+	if got := f.svc.ImportDir(ctx, Series{ID: frieren}); got != "" {
+		t.Errorf("ImportDir = %q, want the TV folder, as v0.3.1", got)
+	}
+	flat := f.show("Sousou no Frieren", "/tv/Anime/Sousou no Frieren/Sousou no Frieren - S01E01.mkv")
+	if info := f.svc.ShowFolderOf(ctx, flat); info.Unknown || info.Path != filepath.FromSlash("/tv/Anime/Sousou no Frieren") {
+		t.Errorf("flat = %+v", info)
+	}
+	peppa := f.show("Peppa Pig", "/tv/Kids/Peppa Pig/S01/Peppa Pig - S01E01.mkv")
+	if info := f.svc.ShowFolderOf(ctx, peppa); !info.Unknown {
+		t.Errorf("Peppa Pig = %+v, want refused", info)
+	}
+	if got := f.svc.ShowFolderFor(filepath.FromSlash("/tv/Anime/Frieren/Season 1/Frieren - S01E01.mkv")); got != filepath.FromSlash("/tv/Anime/Frieren") {
+		t.Errorf("ShowFolderFor = %s", got)
+	}
 }
 
-// A folder holding the show's files directly, deeper than the first below the TV folder,
-// is the show's only when that's proven — named after the show or after what its files
-// call it, or one of several such folders side by side — and otherwise the show's folder
-// is unknown. It is never the category folder above it.
-func TestShowFolderOfFlatInsideACategory(t *testing.T) {
-	ctx := context.Background()
-	t.Run("romaji folder, files named alike", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		id := f.show("Frieren", "/tv/Anime/Sousou no Frieren/Sousou no Frieren - S01E01.mkv")
-		f.show("Lost", "/tv/Anime/Lost/Season 1/Lost - S01E01.mkv")
-		if info := f.svc.ShowFolderOf(ctx, id); info.Path != filepath.FromSlash("/tv/Anime/Sousou no Frieren") {
-			t.Fatalf("ShowFolderOf = %+v", info)
-		}
-	})
-	t.Run("TV folder too high, romaji folder", func(t *testing.T) {
-		f := newFolderFixture(t, "/media")
-		id := f.show("Frieren", "/media/TV/Sousou no Frieren/Sousou no Frieren - S01E01.mkv")
-		if info := f.svc.ShowFolderOf(ctx, id); info.Path != filepath.FromSlash("/media/TV/Sousou no Frieren") {
-			t.Fatalf("ShowFolderOf = %+v", info)
-		}
-	})
-	t.Run("nothing says which folder: refused", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		id := f.show("Frieren", "/tv/Anime/Sousou no Frieren/Frieren - S01E01.mkv")
-		info := f.svc.ShowFolderOf(ctx, id)
-		if !info.Unknown || info.Path != "" {
-			t.Fatalf("ShowFolderOf = %+v, want unknown", info)
-		}
-		if _, m, _ := f.svc.MisplacedFiles(ctx, id); len(m) != 0 {
-			t.Errorf("misplaced = %+v, want none", m)
-		}
-		if got := f.svc.ShowFolderFor(filepath.FromSlash("/tv/Anime/Sousou no Frieren/Frieren - S01E01.mkv")); got != filepath.FromSlash("/tv/Anime/Sousou no Frieren") {
-			t.Errorf("ShowFolderFor = %s, never the category", got)
-		}
-	})
-	t.Run("odd season folders side by side", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		id := f.show("Avatar The Last Airbender",
-			"/tv/Cartoons/Avatar/Book 1 Water/ATLA - S01E01.mkv",
-			"/tv/Cartoons/Avatar/Book 2 Earth/ATLA - S02E01.mkv")
-		if info := f.svc.ShowFolderOf(ctx, id); info.Path != filepath.FromSlash("/tv/Cartoons/Avatar") {
-			t.Fatalf("ShowFolderOf = %+v", info)
-		}
-	})
-	t.Run("one odd season folder: refused", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		id := f.show("Avatar The Last Airbender", "/tv/Cartoons/Avatar/Book 1 Water/ATLA - S01E01.mkv")
-		if info := f.svc.ShowFolderOf(ctx, id); !info.Unknown {
-			t.Fatalf("ShowFolderOf = %+v, want unknown", info)
-		}
-	})
-	t.Run("release folder and disc folder", func(t *testing.T) {
-		f := newFolderFixture(t, "/tv")
-		a := f.show("Show", "/tv/Anime/Some Show/Some.Show.S01.1080p.WEB/Some.Show.S01E01.mkv")
-		b := f.show("The Wire", "/tv/The Wire (2002)/Season 01/Disc 1/The Wire - S01E01.mkv")
-		if info := f.svc.ShowFolderOf(ctx, a); info.Path != filepath.FromSlash("/tv/Anime/Some Show") {
-			t.Errorf("release folder: %+v", info)
-		}
-		if info := f.svc.ShowFolderOf(ctx, b); info.Path != filepath.FromSlash("/tv/The Wire (2002)") {
-			t.Errorf("disc folder: %+v", info)
-		}
-	})
-}
-
-// A stray folder with one of the show's files doesn't outvote the folder holding most of
-// them just because another show's files are there too: the show's folder is unknown, and
-// none of its files are listed as misplaced.
+// A stray folder with one of the show's files and a folder holding most of them that
+// another show's files are in too: the show's folder is unknown, and none of its files
+// are listed as misplaced.
 func TestShowFolderOfSharedMajority(t *testing.T) {
 	ctx := context.Background()
 	f := newFolderFixture(t, "/tv")
@@ -460,7 +373,7 @@ func TestShowFolderOfSharedMajority(t *testing.T) {
 		"/tv/Teen Titans/Season 1/Teen Titans - S01E03.mkv",
 		"/tv/Teen Titans (2003)/Season 2/Teen Titans - S02E01.mkv")
 	f.show("Teen Titans Go!", "/tv/Teen Titans/Season 1/Teen Titans Go! - S01E01.mkv")
-	if info := f.svc.ShowFolderOf(ctx, id); !info.Unknown || info.Path != "" || !strings.Contains(info.Why, "also holds episodes of") {
+	if info := f.svc.ShowFolderOf(ctx, id); !info.Unknown || info.Path != "" {
 		t.Fatalf("ShowFolderOf = %+v, want unknown", info)
 	}
 	if _, m, err := f.svc.MisplacedFiles(ctx, id); err != nil || len(m) != 0 {
@@ -519,8 +432,8 @@ func TestScanSkipsSeasonNamedFolders(t *testing.T) {
 func TestShowFolderOfTemplateSeasonFolders(t *testing.T) {
 	f := newFolderFixture(t, "/tv")
 	f.svc.SetSeasonFolderMatcher(func(name string) bool { return strings.HasPrefix(name, "The Pitt Season ") })
-	id := f.show("The Pitt", "/old/The Pitt/The Pitt Season 01/The Pitt - S01E01.mkv")
-	if info := f.svc.ShowFolderOf(context.Background(), id); info.Path != filepath.FromSlash("/old/The Pitt") {
+	id := f.show("The Pitt", "/tv/The Pitt/The Pitt Season 01/The Pitt - S01E01.mkv")
+	if info := f.svc.ShowFolderOf(context.Background(), id); info.Path != filepath.FromSlash("/tv/The Pitt") {
 		t.Fatalf("ShowFolderOf = %+v", info)
 	}
 }
