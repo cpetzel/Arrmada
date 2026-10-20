@@ -175,7 +175,7 @@ func (c *Coordinator) ApplyReviewMap(ctx context.Context, p ReviewMapPlan) (int,
 	}
 	// A copy across drives reports its bytes to ctx's ImportProgress.
 	ctx = withCopyAccounting(ctx, r)
-	imp, folder, ferr := c.seriesPlacement(ctx, s)
+	imp, folder, ferr := c.seriesImportPlacement(ctx, s)
 	if ferr != nil {
 		return 0, fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 	}

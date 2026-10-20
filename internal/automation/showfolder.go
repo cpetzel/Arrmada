@@ -23,7 +23,25 @@ import (
 // folder, goes through this. Importing into a shared folder merged shows' season folders
 // and let their episodes overwrite each other (#56); walking one let a rescan claim
 // another show's files.
+//
+// The folder is "" for a show with no files yet: readers (a rescan, the duplicate check, a
+// rename) then read nothing, or only a folder provably the show's own. A placement that
+// WRITES uses seriesImportPlacement instead, which names the new folder.
 func (c *Coordinator) seriesPlacement(ctx context.Context, s series.Series) (*library.Importer, string, error) {
+	return c.placement(ctx, s, false)
+}
+
+// seriesImportPlacement is seriesPlacement for a placement that writes episode files: for
+// a show with no folder yet, the new folder is named here, once (placementFolder →
+// library.Importer.NewSeriesFolderName, where "Add the year only when it's needed" is
+// decided), and the safety check runs on that same name. The caller passes the returned
+// folder to every file it places, so the check and the write can never disagree and one
+// download never spans two folders.
+func (c *Coordinator) seriesImportPlacement(ctx context.Context, s series.Series) (*library.Importer, string, error) {
+	return c.placement(ctx, s, true)
+}
+
+func (c *Coordinator) placement(ctx context.Context, s series.Series, write bool) (*library.Importer, string, error) {
 	info := c.series.ShowFolderOf(ctx, s.ID)
 	if info.Unknown {
 		return nil, "", &series.ShowFolderError{Title: s.Title, Why: info.Why}
@@ -34,6 +52,9 @@ func (c *Coordinator) seriesPlacement(ctx context.Context, s series.Series) (*li
 	folder := ""
 	if info.Path != "" {
 		folder = filepath.Base(info.Path)
+	}
+	if write {
+		folder = placementFolder(imp, folder, s)
 	}
 	if why := c.series.UnsafeImportFolder(ctx, s, imp.SeriesFolderPath(folder, s.Title, s.Year)); why != "" {
 		return nil, "", &series.ShowFolderError{Title: s.Title, Why: why}

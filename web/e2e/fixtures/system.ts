@@ -217,6 +217,7 @@ export const settings: AppSettings = {
   naming_series_folder: "{Title} ({Year})",
   naming_series_season: "Season {Season:00}",
   naming_series_episode: "{Title} - S{Season:00}E{Episode:00}",
+  naming_series_year_when_needed: false,
   naming_audiobook_folder: "{Author}/{Title}",
   naming_audiobook_file: "{Title}",
   naming_audiobook_track: "{Original}",

@@ -338,9 +338,25 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   returns to the library page. Titles added before this update link their actors after
   their next metadata refresh (**Refresh & rescan** on the page; monitored shows also
   refresh on their own schedule).
+- **Add the year to a show folder only when it's needed** (Settings → Naming → Series naming),
+  the way Sonarr's TheTVDB names look: "Breaking Bad", but "Dark Matter (2024)" because another
+  Dark Matter exists. The year is kept when another show in the library has the same title, a
+  folder with that title is already in a TV folder, or TMDB lists another show with that title
+  (titles compare ignoring case, punctuation and a leading "The"). If a TV folder or TMDB can't
+  be checked, the year is kept. It only names new show folders, once per download, so a
+  download never splits across two folders. A show that already has a folder keeps it, and
+  Rename names files inside that folder (it only gathers a show that's split over two folders
+  into the one it uses). It's off by default, so nothing changes until you turn it on.
+- **A rename never gathers a show into another show's folder.** A move into a folder where
+  another show keeps its files is refused and shown as a conflict in the preview. Season
+  folders named "S01", "Staffel 1" or "Saison 1" are recognised as part of the show.
 
 ### Changed
 
+- **A library scan no longer guesses which show a year-less folder is** when more than one
+  show has exactly its title ("Dark Matter": 2015 and 2024). The folder goes to review with the
+  candidates, so you pick. A folder with a year, or a title only one show has, matches as
+  before.
 - **Built with Go 1.26.9**, because Go 1.25 is out of support. The Docker build pins Go to
   the patch release. Building from source outside Docker needs Go 1.26.
 - **Vulnerability scanning in CI.** Every change runs govulncheck (it fails when our code

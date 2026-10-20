@@ -781,7 +781,7 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 	// still has gaps, so when a fix changes what WOULD have imported, pointing manual
 	// import at the folder is what applies it.
 	if fi, statErr := os.Stat(path); statErr == nil && fi.IsDir() {
-		if _, _, ferr := c.seriesPlacement(ctx, s); ferr != nil {
+		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return ferr
 		}
 		placedRefs, matched, unresolved, importFailed := c.importSeriesInto(ctx, s, path, forceAll)
@@ -805,7 +805,7 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 		return nil
 	}
 
-	imp, folder, ferr := c.seriesPlacement(ctx, s)
+	imp, folder, ferr := c.seriesImportPlacement(ctx, s)
 	if ferr != nil {
 		return ferr
 	}

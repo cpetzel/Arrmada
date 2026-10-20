@@ -57,6 +57,28 @@ const PLEX_PRESET = {
 const render = (format: string) => renderNaming(format, SAMPLE);
 const renderSeries = (format: string) => renderNaming(seriesIdFormat(format, SERIES_SAMPLE), SERIES_SAMPLE);
 
+// The two outcomes of "Add the year only when it's needed": a title no other show has, so
+// its new folder leaves the year out, and one that another show shares (the 2001 UK The
+// Office), so its new folder keeps it. Real ids, so a Plex id template previews properly.
+const YEAR_NOT_NEEDED = { ...SERIES_SAMPLE, title: "Breaking Bad", year: "", tmdbid: "1396", tvdbid: "81189", imdbid: "tt0903747" };
+const YEAR_NEEDED = { ...SERIES_SAMPLE, title: "The Office", year: "2005", tmdbid: "2316", tvdbid: "73244", imdbid: "tt0386676" };
+const renderWith = (format: string, sample: Record<string, string>) => renderNaming(seriesIdFormat(format, sample), sample);
+
+// SeriesFolderPreview is the series folder template's preview: one sample show, or — with
+// the year only when it's needed — both outcomes side by side.
+function SeriesFolderPreview({ format, yearWhenNeeded }: { format: string; yearWhenNeeded: boolean }) {
+  if (!yearWhenNeeded) return <Preview>{renderSeries(format)}</Preview>;
+  if (!format.includes("{year}")) {
+    return <span className="text-xs text-ink-faint"><Preview>{renderSeries(format)}</Preview> — this template has no <code className="font-mono">{"{year}"}</code>, so “Add the year only when it’s needed” changes nothing.</span>;
+  }
+  return (
+    <span role="group" className="flex flex-col gap-0.5" aria-label="Series folder examples">
+      <span><Preview>{renderWith(format, YEAR_NOT_NEEDED)}</Preview> <span className="text-xs text-ink-faint">no other show has the title</span></span>
+      <span><Preview>{renderWith(format, YEAR_NEEDED)}</Preview> <span className="text-xs text-ink-faint">another show is called The Office</span></span>
+    </span>
+  );
+}
+
 // OrganizeEntry: a new scheme only names new imports. This previews what it would do to
 // the movies already in the library, and applies it from the same dialog.
 function OrganizeEntry() {
@@ -82,6 +104,7 @@ export function NamingSettings() {
   const seriesFolder = useSetting("naming_series_folder", { validate: notBlank });
   const seasonFolder = useSetting("naming_series_season", { validate: notBlank });
   const episodeFile = useSetting("naming_series_episode", { validate: notBlank });
+  const yearWhenNeeded = useSetting("naming_series_year_when_needed");
   const writeNFO = useSetting("write_nfo");
   const artwork = useSetting("download_artwork");
   const confirm = useConfirm();
@@ -131,7 +154,12 @@ export function NamingSettings() {
         <OrganizeEntry />
       </Section>
       <Section id="series-naming" title="Series naming" subtitle="How imported episodes are named: the show folder holds season folders, which hold episode files.">
-        <AutoText label="Series folder" save={seriesFolder}><Preview>{renderSeries(seriesFolder.value)}</Preview></AutoText>
+        <AutoText label="Series folder" save={seriesFolder}><SeriesFolderPreview format={seriesFolder.value} yearWhenNeeded={yearWhenNeeded.value} /></AutoText>
+        <AutoToggle
+          label="Add the year only when it’s needed"
+          hint="A new show folder keeps {year} only when another show has the same title: in the library, as a folder in a TV folder, or on TMDB. If a TV folder or TMDB can’t be checked, the year stays. Shows that already have a folder keep it. The trade-off: a library scan can’t tell which show a year-less folder is when several share its title, so it sends that folder to review for you to pick."
+          save={yearWhenNeeded}
+        />
         <AutoText label="Season folder" save={seasonFolder}><Preview>{renderSeries(seasonFolder.value)}</Preview></AutoText>
         <AutoText label="Episode file" save={episodeFile}><Preview>{renderSeries(episodeFile.value)}.mkv</Preview></AutoText>
         <p className="text-xs text-ink-faint">

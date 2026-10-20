@@ -768,7 +768,7 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		if err != nil {
 			return err
 		}
-		if _, _, ferr := c.seriesPlacement(ctx, s); ferr != nil {
+		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 		}
 		placed, matched, unresolved, failed := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
@@ -952,7 +952,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 	// "S01" folder importing into <TV folder>/S01, #56). That used to be a warning and the
 	// import went ahead; now nothing is placed. Callers check seriesPlacement first and
 	// hold the download for review with its reason; this is the backstop.
-	imp, folder, ferr := c.seriesPlacement(ctx, s)
+	imp, folder, ferr := c.seriesImportPlacement(ctx, s)
 	if ferr != nil {
 		c.log.Warn("series import: not importing — no safe folder for the show",
 			"series", s.Title, "content_path", contentPath, "err", ferr)
