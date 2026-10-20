@@ -729,7 +729,7 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 		return nil
 	}
 
-	folder := c.series.ExistingFolderName(ctx, seriesID)
+	folder := placementFolder(c.tvImp(ctx, s), c.series.ExistingFolderName(ctx, seriesID), s)
 	ei, ok, err := c.tvImp(ctx, s).ImportEpisodeInto(folder, s.Title, s.Year, path)
 	if err != nil {
 		return err

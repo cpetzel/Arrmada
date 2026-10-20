@@ -299,7 +299,7 @@ func (c *Coordinator) seriesRenamePreview(ctx context.Context, seriesID int64, f
 	if err != nil {
 		return nil, err
 	}
-	rows, held := c.holdOtherShowsFolders(ctx, seriesID, c.seriesRenameRows(ctx, s, c.series.ExistingFolderName(ctx, seriesID), fromRelease))
+	rows, held := c.holdOtherShowsFolders(ctx, seriesID, c.tvImp(ctx, s).TVRoot(), c.seriesRenameRows(ctx, s, c.series.ExistingFolderName(ctx, seriesID), fromRelease))
 	steps, conflicts := planSeriesRename(rows, renameOccupied)
 	conflicts = append(held, conflicts...)
 	items := make([]SeriesRenameItem, 0, len(steps)+len(conflicts))
@@ -346,7 +346,7 @@ func (c *Coordinator) seriesRename(ctx context.Context, seriesID int64, only []S
 		rows, res.Skipped = holdUnpreviewed(rows, only)
 	}
 	// After holdUnpreviewed, so a refused move the user confirmed is reported once.
-	rows, held := c.holdOtherShowsFolders(ctx, seriesID, rows)
+	rows, held := c.holdOtherShowsFolders(ctx, seriesID, c.tvImp(ctx, s).TVRoot(), rows)
 	res.Skipped = append(res.Skipped, held...)
 	steps, conflicts := planSeriesRename(rows, renameOccupied)
 	res.Skipped = append(res.Skipped, conflicts...)

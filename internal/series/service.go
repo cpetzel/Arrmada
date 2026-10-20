@@ -1887,7 +1887,7 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, progress
 		if err == nil && len(results) > 0 {
 			match, ok = bestSeriesMatch(results, rel.Title, rel.Year)
 		}
-		if !ok && err == nil {
+		if !ok && err == nil && !ambiguousYearless(results, rel.Title, rel.Year) {
 			// A folder named in one of the owner's extra title languages ("Haus des
 			// Geldes"): asked again in those languages, exactly one show must be named so.
 			if id, found := s.localizedScanMatch(ctx, rel.Title, rel.Year); found {
@@ -2031,7 +2031,15 @@ func (s *Service) dropUnmatched(root, folder string) {
 // confident match (exact normalized title, optionally confirmed by year). It
 // returns ok=false instead of falling back to the most popular hit, which is what
 // mis-filed "UNTAMED" (2025) as "The Untamed" (2019).
+//
+// A folder with no year whose title is exactly that of more than one show ("Dark Matter":
+// 2015 and 2024) is never matched: TitleYearMatch would take whichever TMDB listed first,
+// and a year-less "Dark Matter" folder of 2015 files was added as the 2024 show. It goes to
+// review with the candidates instead (ambiguousYearless).
 func bestSeriesMatch(results []metadata.SeriesResult, title string, year int) (metadata.SeriesResult, bool) {
+	if ambiguousYearless(results, title, year) {
+		return metadata.SeriesResult{}, false
+	}
 	return metadata.TitleYearMatch(results, title, year,
 		func(r metadata.SeriesResult) string { return r.Title },
 		func(r metadata.SeriesResult) int { return r.Year })

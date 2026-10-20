@@ -590,8 +590,9 @@ type Importer struct {
 	// seriesIDsFn resolves a show's ids by name/year for a new series folder's id tokens.
 	seriesIDsFn func(seriesTitle string, year int) SeriesIDs
 	// yearNeededFn says whether a new series folder needs the show's year to tell it
-	// apart from another show (SeriesNaming.YearWhenNeeded). nil = always needed.
-	yearNeededFn func(seriesTitle string, year int) bool
+	// apart from another show (SeriesNaming.YearWhenNeeded), given the folder's year-less
+	// name. nil = always needed.
+	yearNeededFn func(seriesTitle string, year int, yearless string) bool
 	// copyReport hears this import's copies (Using); nil for every other importer.
 	copyReport CopyReport
 }
@@ -619,25 +620,56 @@ func (im *Importer) SetSeriesIDsFunc(f func(seriesTitle string, year int) Series
 }
 
 // SetSeriesYearNeededFunc installs the check behind SeriesNaming.YearWhenNeeded: whether
-// a new show folder needs the show's year because another show shares its title. It's
-// asked only when that setting is on, the folder template has {year}, and the show has
-// no folder yet. Unset, the year is always kept.
-func (im *Importer) SetSeriesYearNeededFunc(f func(seriesTitle string, year int) bool) {
+// a new show folder needs the show's year because another show shares its title. yearless
+// is the folder's name without the year. It's asked only by NewSeriesFolderName, and only
+// when that setting is on and the folder template has {year}. Unset, the year is kept.
+func (im *Importer) SetSeriesYearNeededFunc(f func(seriesTitle string, year int, yearless string) bool) {
 	im.yearNeededFn = f
 }
 
-// seriesFolderYear is the {year} a NEW series folder is named with: the show's year, or
-// "" when the year-when-needed setting is on and nothing shares the show's title. Every
-// doubt keeps the year — no check installed, no year known — because a year that wasn't
-// needed costs nothing, while a missing one can put two shows in one folder.
-func (im *Importer) seriesFolderYear(sn SeriesNaming, title string, year int) string {
+// NewSeriesFolderName is the name of a NEW folder for the show: the series folder scheme,
+// with the show's ids when the template asks for them, and — with "Add the year only when
+// it's needed" on — without its year when no other show shares its title.
+//
+// It is the one place that decision is made. A caller placing a show with no folder names
+// the folder once with it and passes that name down to every file of the placement (and
+// to any check of where they'd go), so the check and the write can't disagree and a
+// download never spans two folders. A show that already has a folder keeps it, and this
+// isn't asked. Every doubt keeps the year — no check installed, no year known — because a
+// year that wasn't needed costs nothing, while a missing one can put two shows in one
+// folder.
+func (im *Importer) NewSeriesFolderName(title string, year int) string {
+	sn := im.seriesNamingScheme()
+	t := cleanTitleLoose(title)
+	if t == "" {
+		t = "Unknown"
+	}
+	var ids SeriesIDs
+	if hasIDToken(sn.Folder) {
+		ids = im.seriesIDs(title, year)
+	}
+	withYear := newSeriesFolderName(sn, ids, t, year)
 	if !sn.YearWhenNeeded || year <= 0 || !strings.Contains(sn.Folder, "{year}") || im.yearNeededFn == nil {
-		return yearToken(year)
+		return withYear
 	}
-	if im.yearNeededFn(title, year) {
-		return yearToken(year)
+	yearless := newSeriesFolderName(sn, ids, t, 0)
+	if yearless == withYear || im.yearNeededFn(title, year, yearless) {
+		return withYear
 	}
-	return ""
+	return yearless
+}
+
+// newSeriesFolderName is a new series folder's name: the scheme, with the show's ids when
+// the template asks for them. An existing folder is always reused as it is instead. Year 0
+// leaves {year} empty, and the brackets around it drop out.
+func newSeriesFolderName(sn SeriesNaming, ids SeriesIDs, t string, year int) string {
+	folder := renderName(seriesFolderFormat(sn.Folder, ids), map[string]string{
+		"title": t, "year": yearToken(year),
+	})
+	if folder == "" {
+		folder = t
+	}
+	return folder
 }
 
 func (im *Importer) seriesIDs(title string, year int) SeriesIDs {
@@ -1494,14 +1526,7 @@ func (im *Importer) episodeTargetIn(seriesFolder, title string, year, season, ep
 		ids = im.seriesIDs(title, year)
 	}
 	if folder == "" {
-		// A new series folder: the scheme, with the show's ids when the template asks for
-		// them. An existing folder (seriesFolder) is always reused as it is.
-		folder = renderName(seriesFolderFormat(sn.Folder, ids), map[string]string{
-			"title": t, "year": im.seriesFolderYear(sn, title, year),
-		})
-		if folder == "" {
-			folder = t
-		}
+		folder = newSeriesFolderName(sn, ids, t, year)
 	}
 
 	epPart := fmt.Sprintf("S%02dE%02d", season, episode)

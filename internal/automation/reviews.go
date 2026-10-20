@@ -942,7 +942,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 	// Route episodes into the show's existing on-disk folder when it has one, so a
 	// show already stored as "Below Deck" doesn't spawn a duplicate "Below Deck
 	// (2013)" folder on the next grab.
-	folder := c.series.ExistingFolderName(ctx, s.ID)
+	folder := placementFolder(c.tvImp(ctx, s), c.series.ExistingFolderName(ctx, s.ID), s) // named once for every file
 	// Following the existing folder is right when it's this show's own. It is NOT right
 	// when another series already stores episodes there: two shows in one directory merge
 	// their season folders, and any episode number they share overwrites. Observed with

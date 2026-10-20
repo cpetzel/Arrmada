@@ -157,7 +157,7 @@ export function NamingSettings() {
         <AutoText label="Series folder" save={seriesFolder}><SeriesFolderPreview format={seriesFolder.value} yearWhenNeeded={yearWhenNeeded.value} /></AutoText>
         <AutoToggle
           label="Add the year only when it’s needed"
-          hint="A new show folder keeps {year} only when another show has the same title: in the library, as a folder in a TV folder, or on TMDB. If TMDB can’t be checked, the year stays. Shows that already have a folder keep it, and Rename never changes it."
+          hint="A new show folder keeps {year} only when another show has the same title: in the library, as a folder in a TV folder, or on TMDB. If a TV folder or TMDB can’t be checked, the year stays. Shows that already have a folder keep it. The trade-off: a library scan can’t tell which show a year-less folder is when several share its title, so it sends that folder to review for you to pick."
           save={yearWhenNeeded}
         />
         <AutoText label="Season folder" save={seasonFolder}><Preview>{renderSeries(seasonFolder.value)}</Preview></AutoText>

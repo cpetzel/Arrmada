@@ -175,7 +175,7 @@ func (c *Coordinator) ApplyReviewMap(ctx context.Context, p ReviewMapPlan) (int,
 	}
 	// A copy across drives reports its bytes to ctx's ImportProgress.
 	ctx = withCopyAccounting(ctx, r)
-	folder := c.series.ExistingFolderName(ctx, s.ID)
+	folder := placementFolder(c.tvImp(ctx, s), c.series.ExistingFolderName(ctx, s.ID), s) // named once for every file
 	releaseName := filepath.Base(r.ContentPath)
 	release := parser.Parse(releaseName)
 	var placed []series.EpisodeRef

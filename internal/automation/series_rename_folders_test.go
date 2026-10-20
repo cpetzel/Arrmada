@@ -40,7 +40,7 @@ func newFolderLib(t *testing.T) *folderLib {
 	imp := library.NewImporter(root, log)
 	imp.SetSeriesNaming(yearWhenNeededNaming{})
 	// The worst case for a rename: the check says no show ever needs its year.
-	imp.SetSeriesYearNeededFunc(func(string, int) bool { return false })
+	imp.SetSeriesYearNeededFunc(func(string, int, string) bool { return false })
 	c := &Coordinator{db: st.DB(), log: log, bus: eventbus.New(log), series: series.NewService(st.DB(), nil, root, log), imp: imp}
 	return &folderLib{c: c, ctx: context.Background(), root: root}
 }

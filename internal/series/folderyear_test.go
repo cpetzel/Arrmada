@@ -28,14 +28,18 @@ func TestFolderYearNeeded(t *testing.T) {
 	onlySelf := tmdbSays(nil, metadata.SeriesResult{TMDBID: 200, Title: "Dark Matter", Year: 2024})
 
 	cases := []struct {
-		name    string
-		q       folderYearQuery
-		library []Series
-		folders []string // folders made directly in the TV root
-		files   []string // plain files made in the TV root
-		own     string   // the show's own folder, by name in the TV root
-		search  func(context.Context, string) ([]metadata.SeriesResult, error)
-		want    bool
+		name     string
+		q        folderYearQuery
+		library  []Series
+		folders  []string // folders made directly in the TV root
+		files    []string // plain files made in the TV root
+		own      string   // the show's own folder, by name in the TV root
+		yearless string   // the year-less folder name the scheme gives the show
+		tracked  []string // folders (by name in the TV root) another series has files in
+		symlinks []string // dangling symlinks made in the TV root
+		noRoot   bool     // the TV root can't be read
+		search   func(context.Context, string) ([]metadata.SeriesResult, error)
+		want     bool
 	}{
 		{name: "nothing shares the title", library: []Series{self}, search: onlySelf, want: false},
 		{name: "library duplicate", library: []Series{{ID: 1, TMDBID: 100, Title: "Dark Matter", Year: 2015}, self}, search: onlySelf, want: true},
@@ -68,6 +72,14 @@ func TestFolderYearNeeded(t *testing.T) {
 		{name: "not in the library yet: a library show of another year counts", q: folderYearQuery{Title: "Dark Matter", Year: 2024},
 			library: []Series{{ID: 1, Title: "Dark Matter", Year: 2015}}, search: onlySelf, want: true},
 		{name: "no year to compare keeps it", q: folderYearQuery{Title: "Dark Matter"}, library: []Series{self}, search: onlySelf, want: true},
+		{name: "an unreadable TV folder keeps the year", library: []Series{self}, noRoot: true, search: onlySelf, want: true},
+		{name: "an entry that can't be read keeps the year", library: []Series{self}, symlinks: []string{"Dark Matter"}, search: onlySelf, want: true},
+		{name: "the exact year-less name, any case, keeps the year", library: []Series{self}, yearless: "TV - Dark Matter",
+			folders: []string{"tv - dark matter"}, search: onlySelf, want: true},
+		{name: "the exact year-less name as the show's own folder doesn't", library: []Series{self}, yearless: "TV - Dark Matter",
+			folders: []string{"TV - Dark Matter"}, own: "TV - Dark Matter", search: onlySelf, want: false},
+		{name: "another series' files recorded under the year-less name", library: []Series{self}, yearless: "TV - Dark Matter",
+			tracked: []string{"TV - Dark Matter"}, search: onlySelf, want: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -82,14 +94,32 @@ func TestFolderYearNeeded(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			for _, l := range c.symlinks {
+				if err := os.Symlink(filepath.Join(root, "gone", "nowhere"), filepath.Join(root, l)); err != nil {
+					t.Skipf("no symlinks here: %v", err)
+				}
+			}
 			q := c.q
 			if q.Title == "" {
 				q = folderYearQuery{Title: self.Title, Year: self.Year, SelfID: self.ID, SelfTMDB: self.TMDBID}
 			}
+			q.Yearless = c.yearless
 			if c.own != "" {
 				q.OwnFolder = filepath.Join(root, c.own)
 			}
-			if got, why := folderYearNeeded(ctx, q, c.library, []string{root}, c.search); got != c.want {
+			tracked := func(dir string) bool {
+				for _, n := range c.tracked {
+					if dir == filepath.Join(root, n) {
+						return true
+					}
+				}
+				return false
+			}
+			roots := []string{root}
+			if c.noRoot {
+				roots = append(roots, filepath.Join(root, "unmounted"))
+			}
+			if got, why := folderYearNeeded(ctx, q, c.library, roots, tracked, c.search); got != c.want {
 				t.Errorf("needed = %v (%s), want %v", got, why, c.want)
 			}
 		})
@@ -149,7 +179,7 @@ func (f *folderYearFixture) show(t *testing.T, tmdb int, title string, year int)
 func (f *folderYearFixture) importer(fy *FolderYears) *library.Importer {
 	im := library.NewImporter(f.root, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	im.SetSeriesNaming(yearNaming{})
-	im.SetSeriesYearNeededFunc(func(title string, year int) bool { return fy.Needed(f.ctx, title, year) })
+	im.SetSeriesYearNeededFunc(func(title string, year int, yearless string) bool { return fy.Needed(f.ctx, title, year, yearless) })
 	return im
 }
 
@@ -167,7 +197,11 @@ func (f *folderYearFixture) importEp(t *testing.T, im *library.Importer, sr Seri
 	if err := os.WriteFile(src, []byte(sr.Title), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ei, ok, err := im.ImportEpisodeInto(f.svc.ExistingFolderName(f.ctx, sr.ID), sr.Title, sr.Year, src)
+	folder := f.svc.ExistingFolderName(f.ctx, sr.ID)
+	if folder == "" {
+		folder = im.NewSeriesFolderName(sr.Title, sr.Year) // named once per placement
+	}
+	ei, ok, err := im.ImportEpisodeInto(folder, sr.Title, sr.Year, src)
 	if err != nil || !ok {
 		t.Fatalf("import %s E%d: ok=%v err=%v", sr.Title, episode, ok, err)
 	}
@@ -216,7 +250,7 @@ func TestFolderYearsDecidedOnce(t *testing.T) {
 		// A fresh check (nothing remembered): the "Breaking Bad" folder on disk is the
 		// show's own now, so it doesn't count as a duplicate.
 		fresh := NewFolderYears(f.svc)
-		if fresh.Needed(f.ctx, "Breaking Bad", 2008) {
+		if fresh.Needed(f.ctx, "Breaking Bad", 2008, "Breaking Bad") {
 			t.Error("the show's own folder was counted as another show's")
 		}
 		// And the import follows the existing folder anyway.
@@ -235,7 +269,7 @@ func TestFolderYearsDecidedOnce(t *testing.T) {
 		}
 		f.meta.err = nil
 		f.meta.results = []metadata.SeriesResult{{TMDBID: 300, Title: "Breaking Bad", Year: 2008}}
-		if !fy.Needed(f.ctx, "Breaking Bad", 2008) {
+		if !fy.Needed(f.ctx, "Breaking Bad", 2008, "Breaking Bad") {
 			t.Error("the answer changed while the show's first import was still in progress")
 		}
 		// A folder-less second import (as when a pack's folder was looked up before the
@@ -256,7 +290,7 @@ func TestFolderYearsCachesTMDB(t *testing.T) {
 	fy := NewFolderYears(f.svc)
 	fy.now = func() time.Time { return now }
 	for i := 0; i < 5; i++ {
-		if fy.Needed(f.ctx, "Breaking Bad", 2008) {
+		if fy.Needed(f.ctx, "Breaking Bad", 2008, "Breaking Bad") {
 			t.Fatal("needed with nothing sharing the title")
 		}
 	}
@@ -264,14 +298,14 @@ func TestFolderYearsCachesTMDB(t *testing.T) {
 		t.Errorf("TMDB asked %d times, want 1", f.meta.calls)
 	}
 	now = now.Add(folderYearMemoTTL + time.Minute) // the decision expires; TMDB's answer is still cached
-	fy.Needed(f.ctx, "Breaking Bad", 2008)
+	fy.Needed(f.ctx, "Breaking Bad", 2008, "Breaking Bad")
 	if f.meta.calls != 1 {
 		t.Errorf("TMDB asked %d times after the decision expired, want its cached answer used", f.meta.calls)
 	}
 	// A library change is seen once the remembered decision expires.
 	f.show(t, 301, "Breaking Bad", 1995)
 	now = now.Add(folderYearMemoTTL + time.Minute)
-	if !fy.Needed(f.ctx, "Breaking Bad", 2008) {
+	if !fy.Needed(f.ctx, "Breaking Bad", 2008, "Breaking Bad") {
 		t.Error("a second Breaking Bad in the library didn't make the year needed")
 	}
 	// A failed search isn't cached as an answer: the next check asks again.

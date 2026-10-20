@@ -3,8 +3,7 @@ package automation
 import (
 	"context"
 	"path/filepath"
-
-	"github.com/tristenlammi/arrmada/internal/series"
+	"strings"
 )
 
 // reasonOtherShowsFolder is a rename refused because it would carry a file into another
@@ -21,9 +20,15 @@ const reasonOtherShowsFolder = "another show's files are in that folder — two 
 // further — their season folders mix and any episode number they share collides. Which
 // show owns the folder is the user's call, so the move is refused, not "fixed".
 //
+// "Crossing" is read from the paths themselves, not from folder names: a move crosses when
+// the file's first folder under the TV folder (root) isn't the target's. Recognising season
+// folders by name ("Season 1") misread "S01", "Staffel 1" and "Saison 1" as show folders and
+// refused ordinary renames inside one show. Whether another series is in the target's show
+// folder is a path-prefix match on the recorded files (OtherShowsIn), never a LIKE pattern.
+//
 // It runs on the rows before planning, like holdUnpreviewed, so a held file counts as
 // staying put and nothing is planned onto it. A file's move is decided by its first row.
-func (c *Coordinator) holdOtherShowsFolders(ctx context.Context, seriesID int64, rows []renameRow) ([]renameRow, []RenameSkip) {
+func (c *Coordinator) holdOtherShowsFolders(ctx context.Context, seriesID int64, root string, rows []renameRow) ([]renameRow, []RenameSkip) {
 	skipped := []RenameSkip{}
 	if c.series == nil {
 		return rows, skipped
@@ -39,14 +44,19 @@ func (c *Coordinator) holdOtherShowsFolders(ctx context.Context, seriesID int64,
 			if r.Target == "" || r.Target == r.Path {
 				continue
 			}
-			to := series.ShowFolder(r.Target)
-			if filepath.Clean(to) == filepath.Clean(series.ShowFolder(r.Path)) {
+			to, toOK := firstFolderUnder(root, r.Target)
+			from, fromOK := firstFolderUnder(root, r.Path)
+			if toOK && fromOK && from == to {
 				continue // a rename inside the show's own folder
 			}
-			isForeign, seen := foreign[to]
-			if !seen {
-				isForeign = len(c.series.FolderSharedWith(ctx, seriesID, filepath.Base(to))) > 0
-				foreign[to] = isForeign
+			isForeign := true // a target outside the TV folder can't be vouched for
+			if toOK {
+				dir := filepath.Join(root, to)
+				seen := false
+				if isForeign, seen = foreign[dir]; !seen {
+					isForeign = len(c.series.OtherShowsIn(ctx, seriesID, dir, 1)) > 0
+					foreign[dir] = isForeign
+				}
 			}
 			if isForeign {
 				held[r.Path] = true
@@ -58,4 +68,22 @@ func (c *Coordinator) holdOtherShowsFolders(ctx context.Context, seriesID int64,
 		}
 	}
 	return out, skipped
+}
+
+// firstFolderUnder is the name of the folder directly under root that path is inside —
+// the show folder, whatever the season folders below it are called — and false when path
+// isn't inside a folder under root.
+func firstFolderUnder(root, path string) (string, bool) {
+	if strings.TrimSpace(root) == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if len(parts) < 2 || parts[0] == "" {
+		return "", false // a file sitting loose in the TV folder has no show folder
+	}
+	return parts[0], true
 }

@@ -676,8 +676,8 @@ func main() {
 	// "Add the year only when it's needed": a new show folder keeps {year} only when another
 	// show shares its title (series.FolderYears). Asked only with that setting on.
 	folderYears := series.NewFolderYears(seriesSvc)
-	bookImporter.SetSeriesYearNeededFunc(func(seriesTitle string, year int) bool {
-		return folderYears.Needed(context.Background(), seriesTitle, year)
+	bookImporter.SetSeriesYearNeededFunc(func(seriesTitle string, year int, yearless string) bool {
+		return folderYears.Needed(context.Background(), seriesTitle, year, yearless)
 	})
 	coordinator.SetSeries(seriesSvc, bookImporter)
 	// Books share the importer set above; ebooks land in their own category.
