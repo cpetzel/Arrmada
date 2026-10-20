@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -77,12 +76,6 @@ type Service struct {
 	// seasonFolder also counts the configured season folder template's names as season
 	// folders (nil = only the common names); see showfolder.go.
 	seasonFolder func(name string) bool
-	// fileGone reports a recorded file that's no longer on disk (nil = os.Stat says
-	// so). Tests that record paths without making files swap it.
-	fileGone func(path string) bool
-	// readDir lists a folder (nil = os.ReadDir). Tests that record paths without making
-	// files swap it.
-	readDir func(dir string) ([]fs.DirEntry, error)
 }
 
 // SetLibraryChanged installs who hears that a show folder's files changed through a
@@ -1755,7 +1748,17 @@ func (s *Service) ExistingFolderName(ctx context.Context, seriesID int64) string
 // FolderPath is the full path of the show's library folder (ShowFolderOf), "" when the
 // show has no files or none in a folder of its own.
 func (s *Service) FolderPath(ctx context.Context, seriesID int64) string {
-	return s.ShowFolderOf(ctx, seriesID).Path
+	info := s.ShowFolderOf(ctx, seriesID)
+	if info.Path != "" {
+		return info.Path
+	}
+	return info.FileDir // a #56-shaped show: the first file's own folder, never one above
+}
+
+// TVRootOf is the TV folder holding path ("" when none does).
+func (s *Service) TVRootOf(path string) string {
+	root, _ := rootOf(s.libRoots(), path)
+	return root
 }
 
 // Events returns a series' activity timeline, newest first.

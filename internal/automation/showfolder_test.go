@@ -169,29 +169,40 @@ func TestImportForAShowInsideACategoryFolder(t *testing.T) {
 	})
 }
 
-// Moving a misplaced file back by hand and rescanning is enough: the rescan finds it in
-// the show's folder, and the next import goes there.
-func TestRescanAfterMovingMisplacedFileBackByHand(t *testing.T) {
+// A #56-shaped show (S01-style season folders) is never rescanned: nothing about its
+// records changes, even after misplaced files were moved back by hand, until its season
+// folders are renamed to "Season N" — after which a rescan works as it always has.
+func TestRescanOfA56ShowChangesNothingUntilTheFoldersAreRenamed(t *testing.T) {
 	h := newLifecycleHarness(t)
 	tv := h.c.imp.TVRoot()
 	own := filepath.Join(tv, "Show")
 	setEpisodeFile(t, h.c, h.seriesID, 1, 1, libFile(t, filepath.Join(own, "S01", "Show - S01E01.mkv")), "Show.S01E01")
 	lost := libFile(t, filepath.Join(tv, "S01", "Season 1", "Show - S01E02.mkv"))
 	setEpisodeFile(t, h.c, h.seriesID, 1, 2, lost, "Show.S01E02")
-	back := filepath.Join(own, "S01", "Show - S01E02.mkv")
-	if err := os.Rename(lost, back); err != nil {
+	if err := os.Rename(lost, filepath.Join(own, "S01", "Show - S01E02.mkv")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.c.RescanSeries(h.ctx, h.seriesID); !errors.Is(err, series.ErrNoShowFolder) {
+		t.Fatalf("rescan = %v, want refused", err)
+	}
+	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); cur.Path != lost {
+		t.Errorf("S01E02 = %q after a refused rescan, want it unchanged", cur.Path)
+	}
+	// The way out: rename the season folder to "Season 01", then rescan.
+	if err := os.Rename(filepath.Join(own, "S01"), filepath.Join(own, "Season 01")); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.c.RescanSeries(h.ctx, h.seriesID); err != nil {
-		t.Fatalf("rescan: %v", err)
+		t.Fatalf("rescan after the rename: %v", err)
 	}
-	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); cur.Path != back {
-		t.Errorf("S01E02 = %q after the rescan, want %s", cur.Path, back)
+	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); cur.Path != filepath.Join(own, "Season 01", "Show - S01E02.mkv") {
+		t.Errorf("S01E02 = %q after the rescan", cur.Path)
 	}
 }
 
-// Files the bug misplaced, even outnumbering the show's own, don't pull the next import
-// out of the show's folder.
+// For a #56-shaped show a new episode goes into the folder its season's files are in —
+// "Stagione 1" — never a folder named after the show beside it, and never where misplaced
+// files of another season are.
 func TestImportFollowsTheShowsFolderPastMisplacedFiles(t *testing.T) {
 	h := newLifecycleHarness(t)
 	tv := h.c.imp.TVRoot()
@@ -209,9 +220,13 @@ func TestImportFollowsTheShowsFolderPastMisplacedFiles(t *testing.T) {
 		t.Fatalf("placed %v failed %d", placed, failed)
 	}
 	cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2)
-	if filepath.Dir(cur.Path) != filepath.Join(own, "Season 1") {
-		t.Errorf("S01E02 at %s, want in %s", cur.Path, filepath.Join(own, "Season 1")) // v0.3.1 joins only Season N / SNN / Season.NN folders
+	if filepath.Dir(cur.Path) != filepath.Join(own, "Stagione 1") {
+		t.Errorf("S01E02 at %s, want in %s", cur.Path, filepath.Join(own, "Stagione 1"))
 	}
 	noDir(t, filepath.Join(tv, "S02", "Season 1"), "the import followed the misplaced files")
-	noDir(t, filepath.Join(tv, "Stagione 1"), "the season folder was taken for the show")
+	noDir(t, filepath.Join(own, "Season 1"), "a season folder was made")
+	// Season 2's files are only in the #56 leftover folder: a season 2 episode waits.
+	if err := h.c.placementCheck(h.ctx, s, "Show.S02E04.1080p.WEB-DL-GRP"); !errors.Is(err, series.ErrNoShowFolder) {
+		t.Errorf("season 2 = %v, want refused", err)
+	}
 }

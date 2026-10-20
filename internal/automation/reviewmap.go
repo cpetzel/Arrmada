@@ -175,9 +175,12 @@ func (c *Coordinator) ApplyReviewMap(ctx context.Context, p ReviewMapPlan) (int,
 	}
 	// A copy across drives reports its bytes to ctx's ImportProgress.
 	ctx = withCopyAccounting(ctx, r)
-	imp, folder, ferr := c.seriesPlacement(ctx, s)
-	if ferr != nil {
-		return 0, fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
+	// A #56-shaped show takes a season's episodes only into that season's own folder.
+	place, _ := c.placementFor(ctx, s)
+	for _, f := range p.files {
+		if _, _, ferr := place(f.season); ferr != nil {
+			return 0, fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
+		}
 	}
 	releaseName := filepath.Base(r.ContentPath)
 	release := parser.Parse(releaseName)
@@ -191,6 +194,7 @@ func (c *Coordinator) ApplyReviewMap(ctx context.Context, p ReviewMapPlan) (int,
 		if parser.Parse(sourceName).Resolution == "" && release.Resolution != "" {
 			sourceName = releaseName // the pack names the quality once, on its folder
 		}
+		imp, folder, _ := place(f.season)
 		ei, ok, err := imp.ImportEpisodeAs(folder, s.Title, s.Year, f.season, f.episodes[0], f.path)
 		if err != nil || !ok {
 			if err == nil {

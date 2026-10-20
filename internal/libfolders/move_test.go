@@ -330,6 +330,27 @@ func TestMoveRefusesAFolderOfShows(t *testing.T) {
 	readFile(t, ep)
 }
 
+// A show whose folder can't be told (#56) is never moved: its folder could be anything.
+func TestMoveRefusesAShowWithAnUnclearFolder(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	anime := f.add(t, MediaSeries, "anime", RuleAnime)
+	ep := writeFile(t, filepath.Join(f.tv, "Show", "S01", "Show - S01E01.mkv"), "e1")
+	db := f.st.DB()
+	if _, err := db.Exec(`INSERT INTO series (id, tmdb_id, title) VALUES (1, 1, 'Show')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO episodes (series_id, season_number, episode_number, has_file, file_path) VALUES (1, 1, 1, 1, ?)`, ep); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := f.mover(t, filepath.Join(f.base, "bin"))
+	m.Unclear = func(context.Context, int64) string { return "its season folders are named like seasons" }
+	if _, err := m.Move(ctx, MediaSeries, 1, anime.ID, nil); !errors.Is(err, ErrBadPath) || !strings.Contains(err.Error(), "named like seasons") {
+		t.Fatalf("move = %v, want refused", err)
+	}
+	readFile(t, ep)
+}
+
 func TestMoveRefusals(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

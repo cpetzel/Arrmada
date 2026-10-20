@@ -135,3 +135,31 @@ func TestImportReviewMappedRefusesEscapes(t *testing.T) {
 		t.Error("a refused mapping settled the review")
 	}
 }
+
+// A hand mapping for a #56-shaped show (season folders named "S01") goes into the folder
+// that season's files are already in, never a folder Arrmada makes; one whose season
+// files sit in a season-named folder right in the TV folder is refused.
+func TestApplyReviewMapFor56ShapedShow(t *testing.T) {
+	t.Run("into the season's folder", func(t *testing.T) {
+		h, rid, _, root := mapHarness(t)
+		own := filepath.Join(root, "Mapped Show", "S01")
+		setEpisodeFile(t, h.c, h.seriesID, 1, 1, libFile(t, filepath.Join(own, "Mapped Show - S01E01.mkv")), "Mapped.Show.S01E01")
+		n, err := h.c.ImportReviewMapped(h.ctx, rid, 0, []FileMapping{{RelPath: "Second.mkv", Season: 1, Episodes: []int{2}}})
+		if err != nil || n != 1 {
+			t.Fatalf("mapped %d: %v", n, err)
+		}
+		if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); filepath.Dir(cur.Path) != own {
+			t.Errorf("S01E02 at %s, want in %s", cur.Path, own)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		h, rid, _, root := mapHarness(t)
+		setEpisodeFile(t, h.c, h.seriesID, 1, 1, libFile(t, filepath.Join(root, "S01", "Season 1", "Mapped Show - S01E01.mkv")), "Mapped.Show.S01E01")
+		if _, err := h.c.ImportReviewMapped(h.ctx, rid, 0, []FileMapping{{RelPath: "Second.mkv", Season: 1, Episodes: []int{2}}}); !errors.Is(err, series.ErrNoShowFolder) {
+			t.Fatalf("mapping = %v, want refused", err)
+		}
+		if entries, _ := os.ReadDir(filepath.Join(root, "S01", "Season 1")); len(entries) != 1 {
+			t.Errorf("the season-named folder holds %d entries, want only the old file", len(entries))
+		}
+	})
+}

@@ -524,8 +524,11 @@ type Importer struct {
 	// NewImporter's single-folder callers use it: SetRootFuncs clears it, because the
 	// fallback used to be ARRMADA_LIBRARY_DIR — the managed volume, not a share the user
 	// chose — and an import landing there looked like it had vanished.
-	root         string
-	roots        RootFuncs
+	root  string
+	roots RootFuncs
+	// seasonDir: every episode goes straight into this existing season folder
+	// (IntoSeasonDir); "" = the series and season folders the scheme names.
+	seasonDir    string
 	bin          Bin // when on, a replaced library file is recycled instead of overwritten
 	log          *slog.Logger
 	naming       NamingProvider       // nil → built-in defaults
@@ -640,6 +643,19 @@ func (im *Importer) InTV(root string) *Importer {
 	}
 	c := *im
 	c.roots.TV = func() string { return root }
+	return &c
+}
+
+// IntoSeasonDir is this importer placing every episode straight into dir, an existing
+// season folder, named by the scheme: for a show whose own folder can't be told (#56),
+// where a new episode joins the folder its season's files are already in. Never creates a
+// folder and never names one above dir.
+func (im *Importer) IntoSeasonDir(dir string) *Importer {
+	if im == nil {
+		return im
+	}
+	c := *im
+	c.seasonDir = filepath.Clean(dir)
 	return &c
 }
 
@@ -1437,6 +1453,9 @@ func (im *Importer) episodeTargetIn(seriesFolder, title string, year, season, ep
 		file = fmt.Sprintf("%s - %s", t, epPart)
 	}
 
+	if im.seasonDir != "" {
+		return filepath.Join(im.seasonDir, clean(file)+ext) // IntoSeasonDir
+	}
 	seriesDir := filepath.Join(im.tvDir(), folder)
 	// Import reuses an existing season folder (any padding) so it never duplicates one;
 	// rename forces the scheme's canonical name so "Season 04" becomes "Season 4".

@@ -726,7 +726,7 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		if err != nil {
 			return err
 		}
-		if _, _, ferr := c.seriesPlacement(ctx, s); ferr != nil {
+		if ferr := c.placementCheck(ctx, s, r.Name); ferr != nil {
 			return fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 		}
 		placed, matched, unresolved, failed := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
@@ -890,11 +890,13 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 	// "S01" folder importing into <TV folder>/S01, #56). That used to be a warning and the
 	// import went ahead; now nothing is placed. Callers check seriesPlacement first and
 	// hold the download for review with its reason; this is the backstop.
-	imp, folder, ferr := c.seriesPlacement(ctx, s)
-	if ferr != nil {
-		c.log.Warn("series import: not importing — no safe folder for the show",
-			"series", s.Title, "content_path", contentPath, "err", ferr)
-		return nil, 0, 0, len(videos)
+	place, shape56 := c.placementFor(ctx, s)
+	if !shape56 {
+		if _, _, ferr := place(0); ferr != nil {
+			c.log.Warn("series import: not importing — no safe folder for the show",
+				"series", s.Title, "content_path", contentPath, "err", ferr)
+			return nil, 0, 0, len(videos)
+		}
 	}
 	// Quality lives on the RELEASE, not always on each file. Packs routinely name files
 	// "Show - 1x01 - Title.mkv" and put "1080p BDRip x265" only on the folder, so every
@@ -1033,6 +1035,13 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 				"candidate_resolution", string(rel.Resolution))
 			continue
 		}
+		imp, folder, perr := place(wanted[0].Season)
+		if perr != nil {
+			failed++
+			c.log.Warn("series import: not placing file — no safe folder for its season",
+				"series", s.Title, "file", filepath.Base(v.Path), "err", perr)
+			continue
+		}
 		if c.refsAgreeWithFile(ctx, s.ID, rel, refs) {
 			// The filename's own numbering is correct — the standard path, which also
 			// handles multi-episode naming.
@@ -1046,7 +1055,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 			if !ok {
 				// No SxxExx — for anime this is an absolute-numbered file ("Show - 137"):
 				// resolve the absolute number and place it under that season/episode.
-				placed = append(placed, c.importAbsoluteEpisode(ctx, s, imp, folder, v.Path)...)
+				placed = append(placed, c.importAbsoluteEpisode(ctx, s, place, v.Path)...)
 				continue
 			}
 			if ei.Method == "already" {
@@ -1144,13 +1153,17 @@ func (c *Coordinator) refsAgreeWithFile(ctx context.Context, seriesID int64, rel
 // importAbsoluteEpisode places an anime file that carries only an absolute episode
 // number (no SxxExx). It resolves the number to a (season, episode) via the series'
 // metadata, then places + marks it. Returns how many episodes it imported.
-func (c *Coordinator) importAbsoluteEpisode(ctx context.Context, s series.Series, imp *library.Importer, folder, path string) []series.EpisodeRef {
+func (c *Coordinator) importAbsoluteEpisode(ctx context.Context, s series.Series, place func(int) (*library.Importer, string, error), path string) []series.EpisodeRef {
 	if !s.IsAnime() {
 		return nil
 	}
 	refs := c.series.ResolveEpisodes(ctx, s.ID, parser.Parse(filepath.Base(path)))
 	var placed []series.EpisodeRef
 	for _, ref := range refs {
+		imp, folder, perr := place(ref.Season)
+		if perr != nil {
+			continue
+		}
 		ei, ok, err := imp.ImportEpisodeAs(folder, s.Title, s.Year, ref.Season, ref.Episode, path)
 		if err != nil || !ok || ei.Method == "already" {
 			continue

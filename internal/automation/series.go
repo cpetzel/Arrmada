@@ -1252,7 +1252,7 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 		// No sound folder for the show — its files are all in a folder named like a season,
 		// or one other shows use — means nothing is placed, and a human sees it at once:
 		// retrying every sweep can't fix it (#56).
-		if _, _, ferr := c.seriesPlacement(ctx, s); ferr != nil {
+		if ferr := c.placementCheck(ctx, s, it.Name); ferr != nil {
 			c.log.Warn("series import: no safe folder for the show — holding for review",
 				"series", s.Title, "release", it.Name, "err", ferr)
 			c.addReview(ctx, Review{

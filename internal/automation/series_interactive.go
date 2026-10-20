@@ -524,6 +524,13 @@ func (c *Coordinator) RescanSeries(ctx context.Context, seriesID int64) error {
 	// Before anything reads as missing: a file an interrupted rename left under its
 	// temporary name would otherwise be cleared below and downloaded again.
 	c.restoreRenameTemps(s)
+	// The way out of a #56-shaped show: season folders renamed to "Season 01"… — follow
+	// each gone file into its renamed folder first, so the show reads normally again.
+	if c.series.FollowRenamedSeasonFolders(ctx, seriesID) > 0 {
+		if s, err = c.series.Get(ctx, seriesID); err != nil {
+			return err
+		}
+	}
 	// Never walk a folder other shows' files are in: every file there that parses to one
 	// of this show's episode numbers would be claimed as its own.
 	imp, folder, ferr := c.seriesPlacement(ctx, s) // folder "" → importer derives the name
@@ -720,7 +727,7 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 	// still has gaps, so when a fix changes what WOULD have imported, pointing manual
 	// import at the folder is what applies it.
 	if fi, statErr := os.Stat(path); statErr == nil && fi.IsDir() {
-		if _, _, ferr := c.seriesPlacement(ctx, s); ferr != nil {
+		if ferr := c.placementCheck(ctx, s, filepath.Base(path)); ferr != nil {
 			return ferr
 		}
 		placedRefs, matched, unresolved, importFailed := c.importSeriesInto(ctx, s, path, forceAll)
@@ -744,7 +751,8 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 		return nil
 	}
 
-	imp, folder, ferr := c.seriesPlacement(ctx, s)
+	place, _ := c.placementFor(ctx, s)
+	imp, folder, ferr := place(parser.Parse(filepath.Base(path)).Season)
 	if ferr != nil {
 		return ferr
 	}
@@ -754,7 +762,7 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 	}
 	if !ok {
 		// Anime file numbered absolutely (no SxxExx) — resolve + place by absolute number.
-		if s.IsAnime() && len(c.importAbsoluteEpisode(ctx, s, imp, folder, path)) > 0 {
+		if s.IsAnime() && len(c.importAbsoluteEpisode(ctx, s, place, path)) > 0 {
 			return nil
 		}
 		return fmt.Errorf("couldn't detect a season/episode from that filename")
