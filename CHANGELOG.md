@@ -23,8 +23,55 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   the bundled download clients and file handling. Some of them change behaviour, so read
   **Before you update**.
 - **The disk guard can measure a different drive**, for Unraid cache pools and ZFS.
+- **SABnzbd and Prowlarr on Unraid.** The Unraid container now has them built in, off until
+  you switch them on.
 
 ### Before you update
+
+- **What a show's rescan and duplicate check read is narrower** (#56). They no longer read a
+  folder inside the show's that holds another show (hidden, nested, or under Other or
+  Bonus), Plex extras folders, a file named as another show in your library, a video
+  loose in the folder of a show kept in season folders, or a file with no title in its name
+  outside the folders the show already has files in. A show with no files yet reads only
+  its own `Title (Year)` folder. If a rescan used to attach one of these, attach it with a
+  hand import instead.
+- **A show whose folder also holds another show's episode waits in Needs you** (#56). An
+  episode of another show loose in the show's folder (`Peppa Pig - S01E01.mkv` in
+  `Kids`), another show's folder, or a link inside it means the show's folder can't be
+  told: downloads wait in Needs you, and **Refresh & rescan**, **Rename**, the duplicate
+  check, **Move to folder** and **Map files…** are refused for it (Map files uses the same
+  check as the import). Move the other show out, then use **Refresh & rescan**.
+- **Move to folder refuses a show folder holding an episode the show doesn't have** (#56).
+  If anywhere in the show's folder there's an episode Arrmada hasn't recorded for it whose
+  name doesn't say it's this show's (`Other Show - S01E03.mkv` in its `S01` or `Season 1`),
+  or one naming another show in your library, the move is refused and the message names the
+  file: moving the folder would carry it along. Import it, or move it out, then move the
+  show. Themes, backdrops and trailers don't count; a small file or a sample named as an
+  episode does.
+- **The way out for a show whose files were moved** now needs a folder named with the
+  show's year (`Show (2019)`) or one already holding its files; see Fixed below.
+- **A Must audio language now has to be in the release name** (#58). A release is grabbed for
+  a Must language only when its name says it (ITA, iTALiAN, VFF, TRUEFRENCH…), or when the
+  language is the title's original and the release names no language or is MULTi/DL/Dual
+  Audio, which always carry the original. A MULTi or Dual Audio release that doesn't name the
+  language used to count as "might have it" and was grabbed; it's now skipped, and interactive
+  search says why ("Doesn't name Italian audio…"). If your trackers label releases MULTi when
+  they carry your language (French trackers often do), turn on **MULTi and Dual Audio
+  releases count as having a required language** under the profile's Audio language row.
+  It's off on every existing profile. A release that names no language, for a title whose
+  original language isn't known, is still not refused. This changes which releases are
+  grabbed only: files already in your library are judged by the same rules as before (the
+  newly read spellings below count for releases, not for library files).
+
+- **Hong Kong films get an original language.** TMDB codes Cantonese as `cn` (or `yue`),
+  which Arrmada didn't know, so those films had none and the Audio language rules skipped
+  them. They now read as Chinese: "Original language" rules apply to them, an untagged
+  release of one counts as Chinese (so a Must English refuses it, as for any foreign film),
+  a profile that requires the original marks such a film whose file has only a dub as not
+  fitting, and one that prefers it can upgrade that file, within the per-sweep upgrade
+  limit. A file whose audio is tagged or heard as Cantonese now reads as Chinese too, so an
+  English Must or Prefer can upgrade it (within the same limit). TMDB's `xx` (no spoken
+  language) is treated as no original language.
 
 - **Missing music files are flagged, not downloaded again.** When a track file is gone on two
   checks a day apart, the album says "N track files gone from disk" and isn't searched by
@@ -71,10 +118,11 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 - **Only an admin can connect Plex now.** Changing the Plex server or signing in with Plex
   for the connection is admin-only, like Jellyfin. Managers keep watch monitoring and Test,
   and see read-only Plex and Jellyfin cards.
-- **Changing a connection's address needs its key typed again.** For Plex, Prowlarr,
+- **Changing a connection's address needs its key typed again.** For Plex, Jellyfin, Prowlarr,
   indexers and download clients, a saved key, token or password is only sent back to the
   address it was saved for. Change the address and the form asks for the secret again.
-  Switching an indexer to another kind also asks for it.
+  Switching an indexer to another kind also asks for it. If you set `ARRMADA_JELLYFIN_API_KEY`
+  in `.env` and haven't connected Jellyfin yet, type the key with the address the first time.
 - **Scripts that use a session cookie must send `Content-Type: application/json`.** Writes
   (POST, PUT, PATCH, DELETE) made with a browser session are refused if they come from
   another site, and a request body must be JSON. Personal API keys (`X-Api-Key` or
@@ -126,9 +174,42 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 - **Alerts and webhooks name people without their email.** "New request", "Auto-approved
   request" and "Problem reported" now carry the person's Plex or Jellyfin name, or the part
   of their account name before the @. Check any n8n workflow that matched on that field.
+- **Deleting a movie with its files now empties its own folder** (#59). Its artwork,
+  `.nfo`, subtitles, theme music and similar files go to the recycle bin with the video, and
+  the empty folder is removed. This only happens when the folder is clearly the movie's own:
+  inside a Movies folder, named with the movie's title and year, not a link and not linked to
+  from beside it, holding no other
+  video, no file of a type Arrmada doesn't know and no file named for something else, and no
+  other film in your library has a file recorded there (even a missing one). Otherwise only
+  the movie's files and subtitles go, as before, and the delete dialog says why the folder
+  stays. Only the files the dialog listed can go: one that turns up after you opened it stays.
+  With the recycle bin off, the artwork and metadata are never deleted; they stay in the
+  folder. Deleting several movies at once, deleting through the API without the dialog's
+  list, and deleting one version or one file work as before.
 
 ### New
 
+- **Put misplaced files back** (#56). Episode files that v0.3.0 and v0.3.1 imported into a
+  folder named like a season right inside the TV folder (`<TV folder>/S13/Season 12/…`) are
+  listed on their show's page, with a preview of where each goes. Nothing is ever replaced:
+  where the show's folder already has the episode, the misplaced copy goes to the recycle
+  bin only when it's identical or lower quality, and otherwise both are left for you.
+  Emptied folders are removed, and the show's History records what moved. Settings →
+  Status lists every show affected.
+- **Built-in SABnzbd and Prowlarr in the Unraid container**, the same ones the Compose
+  install adds with `--with-sabnzbd` and `--with-prowlarr`. Both are off unless you set
+  **Built-in SABnzbd** or **Built-in Prowlarr** to `true` under Show more settings (a blank
+  field counts as off). SABnzbd is connected to Arrmada by itself, with Arrmada's categories,
+  and saves to `usenet/` in your Downloads folder so imports stay on the same drive; you add
+  your Usenet provider on its page (port 8085). Switch it off again and its client in
+  Settings → Connections is switched off with it. Prowlarr's page is on port 9697: add your
+  indexers there, then its API key in Arrmada; it gets the built-in FlareSolverr like the
+  Compose install's Prowlarr. Their settings live in Arrmada's appdata. The container image
+  is about 220 MB larger on disk (about 85 MB more to download) whether or not you use them.
+  Already installed from the template? Unraid keeps your old template, so add the switch and
+  port lines yourself: [Arrmada on Unraid](https://github.com/tristenlammi/Arrmada/blob/main/docs/unraid.md#updating) lists them. The docs no
+  longer suggest SABnzbd or Prowlarr were inside before. Thanks to @aleonenko-us, whose PR #66
+  started this.
 - **KEPUB for Kobo.** EPUBs can be downloaded as KEPUB from My shelf and the book page
   ("Download for Kobo (KEPUB)"), and the OPDS catalogue offers a KEPUB link beside each
   EPUB. The KEPUB is made on download from a copy (the library file is never changed) and
@@ -252,6 +333,11 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   vanished or changed outside Arrmada and shows them as gone from disk; it never deletes anything
   and never downloads them again by itself. Artists are found under their other names too
   ("Beyonce", "宇多田ヒカル").
+- **Actors on a library page open their Discover page** (#55). Click or tap someone in a
+  movie's or show's Cast row to see the other movies and shows they're in; Close or Back
+  returns to the library page. Titles added before this update link their actors after
+  their next metadata refresh (**Refresh & rescan** on the page; monitored shows also
+  refresh on their own schedule).
 - **Add the year to a show folder only when it's needed** (Settings → Naming → Series naming),
   the way Sonarr's TheTVDB names look: "Breaking Bad", but "Dark Matter (2024)" because another
   Dark Matter exists. The year is kept when another show in the library has the same title, a
@@ -290,6 +376,99 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Shows with `S01`-style season folders work fully again** (#56). A show stored as
+  `<TV folder>/Show/S12/` (an `S{season00}` season folder template, `Stagione 1`, `Saison 1`…)
+  is read as living in `Show`, as v0.3.2 and v0.3.3 couldn't: new episodes go into the
+  season folder the show already has for that season, whatever it's called (never a new
+  `Season 1` beside a `Stagione 1`; while that folder is unreachable, the download waits
+  instead), a new season gets its own folder inside `Show` named by your template, and
+  **Refresh & rescan**, **Rename**, the duplicate check and **Move to folder** work again.
+  Shows v0.3.2 and v0.3.3 refused for their season folders' names read normally after the
+  update, with nothing to do. One whose folder also holds another show — another show's
+  folder, a video loose in it that isn't the show's, a link — still waits in Needs you, and
+  **Move to folder** refuses it. If you started a show over as v0.3.2's notes describe,
+  nothing changes for it.
+- **Shows kept inside a category folder stay there** (#56). A show in
+  `<TV folder>/Anime/Show/` (or under a TV folder set one level too high) gets its new
+  episodes in its own folder, `S01`-style season folders included, where v0.3.1 put them in
+  a new `<TV folder>/Show/` beside the category. A show's folder is never a folder above the
+  one holding its files (other than the show's folder above its season folders), never a
+  folder named like a download or disc unless it's right inside the TV folder, and never a
+  folder that also holds another show, tracked or not; when it can't be told, the download
+  waits in Needs you.
+- **Refresh & rescan, the duplicate check and the library scan read only the show's own
+  files** (#56). They read exactly the same files: those right in the show's folder, in its
+  season folders (and disc or download folders inside them), or in its own download
+  folders. They never read a folder inside it that holds another show, whether hidden,
+  nested deep, or under a folder called Other or Bonus. In a show folder right in a TV
+  folder that's provably the show's own, an episode right in it or in a `Season N` folder is
+  the show's however it's named (`Shingeki no Kyojin`, `Frieren`,
+  `Top Gear 2023 S33E01`) unless its name says it's another show in your library
+  (`Bluey - S01E02.mkv`, or `The Office (2001) - …` beside the 2005 show) — that one is never
+  claimed, nor offered as a duplicate to delete. Elsewhere (`S01`-style season folders, a
+  show inside a category) a file's name must fit the show. The duplicate check offers for deletion
+  only files the show has recorded or whose name says they're the show's. A file whose
+  name has no title
+  (`S01E01.mkv`, `01.mkv`) counts only in a folder where the show already has files. A
+  video loose in the folder of a show kept in season folders isn't taken for an episode.
+  Featurettes in Plex extras folders (Extras, Featurettes, Behind The Scenes, Deleted Scenes,
+  Interviews, Scenes, Shorts, Trailers, Other) are never taken for episodes. Files the show
+  already has always count. A show with no files yet reads only its own `Title (Year)`
+  folder right in a TV folder, and only when that's provably its own — never a year-less
+  `Title`, which may be a namesake's. Adding a show with **Scan library** marks only the
+  files a rescan would read. A theme song, trailer or sample loose in a show's folder, and a
+  media server's `backdrops` or `theme-music` folder, are ignored.
+- **A link inside a show's folder keeps it from being taken for the show's alone** (#56). A
+  link to another folder or to a video means the download waits in Needs you, and Move to
+  folder won't move the folder.
+- **A show whose folder can't be told has a way out** (#56). Move its files by hand out of
+  the folder no show should own (one named like a season, one other shows are in, the TV
+  folder itself) into a folder named with the show's year (`Show (2019)`), then use
+  **Refresh & rescan**. Each such file is found by its name in that TV folder, as long as the
+  name has the show's title and an episode number, exactly one file has it, and no other
+  show has that file. A folder without the year may be a namesake's, so nothing is followed
+  into it (unless the show's other files are already there). Nothing is changed unless the
+  show then reads as living in one sound folder holding every file found; otherwise the
+  rescan is refused and the show's records stay exactly as they were. A file gone from the
+  show's own folder is never looked for elsewhere (it's deleted, or on a share that's
+  away), and nothing is followed while the TV folder looks unmounted. Deleting the show in
+  Arrmada keeping its files and using **Scan library** works too.
+- Movies: deleting a movie left its artwork and `.nfo` files behind, so its folder stayed
+  (#59). The delete dialog now lists every file that goes and whether the folder is removed.
+  If the recycle bin won't take one of those extra files, it stays and the delete still
+  finishes.
+- Movies: deleting a movie or its file no longer removes a folder that is a link to another
+  folder. Before, the link itself could be removed, however much was in the folder it
+  pointed to.
+- Movies: deleting a movie no longer takes a subtitle named for another film in the same
+  folder whose video is missing ("Movie.Directors.Cut.en.srt" beside "Movie.mkv").
+- Movies: deleting a movie on a large library over a network share no longer takes tens of
+  seconds, which could make the delete dialog time out behind a reverse proxy.
+- Movies: **Move to folder** could take a whole folder that wasn't the film's own. A film
+  sitting loose in a folder such as `Movies/Marvel` took everything in `Marvel` with it,
+  including films Arrmada doesn't track and the folder's artwork. Onto another drive, those
+  originals then went to the recycle bin. A film's folder now moves only when it's clearly
+  the film's own: named for the film, not reached through a link, with nothing in it but the
+  film's files, its subtitles, and artwork or `.nfo` files named for it. If the folder holds
+  anything else, the move is refused and the dialog says why. Use **Organize** to give the film
+  a folder of its own first. The Move dialog now lists every file that will move before you
+  press Move, and the move never takes more than that list. TV shows move as before.
+- Audio languages: a profile with Italian as Must no longer grabs MULTi or Dual Audio releases
+  that don't name Italian (#58). Release names that write FRA, DEU, NLD, ESP, JAP or VFB (in
+  capitals, outside an episode title) are read as French, German, Dutch, Spanish, Japanese
+  and French.
+- Movies: renaming a movie (Rename files or Organize) took the artwork from the folder it
+  sat in, even when that folder wasn't the movie's own. A film sitting loose in a franchise
+  or collection folder carried the collection's `folder.jpg` and `poster.jpg` off with it.
+  Now a movie takes its artwork and `.nfo` files only from a folder that is clearly its
+  own. That means a folder named for the movie, holding no other video, with no other
+  film's file recorded in it, no links, and only files Arrmada recognises. Files named for
+  the old file name get the new name. They go only into a new folder, or one that holds no
+  other film: with a naming scheme like "{title}", Heat (1995)'s poster no longer lands in
+  the "Heat" folder of Heat (1986). Anything else stays where it is, and the rename
+  preview lists every file that moves and says why the others stay. A subtitle that
+  belongs to another film's file is no longer taken along. A folder that is a link, or one
+  of your library or downloads folders, is never removed.
 - Library folders: a show, artist or album whose name is only dots can no longer reach
   outside its library folder. Names like "..." are still allowed.
 - Archive extraction: a refused archive no longer stops the rest of the download. Zips of RAR
@@ -314,6 +493,9 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   image cache fetches only public addresses and real raster images (no SVG), and serves
   them sandboxed. Before, a book request's cover could carry a script or reach into your
   network.
+- Jellyfin: saving a new server address with the API key left blank sent the saved key to
+  the new address. It's refused now, and the form asks for the key again, as the other
+  connections do.
 - Keys and tokens sent in headers never follow a redirect to another server.
 - The Plex token only goes to servers that say they belong to the account, and a manager can
   no longer repoint Plex sign-in at their own server.
@@ -321,6 +503,98 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 - `.env` is `0600` on new installs, and edits keep its mode.
 - The release workflow's third-party action is pinned to a commit, and CI's token is
   read-only.
+
+## [0.3.3] - 2026-10-20
+
+### Fixed
+
+- **A season pack whose name gives the season in another language now imports** (#56).
+  For a show whose season folders aren't named "Season N" (such as `S01`, `S02`), a pack
+  named like `Show.Stagione.2.ITA.1080p…` was refused with "Can't tell which folder…", even
+  with Import anyway, because Arrmada couldn't read the season from the name. Now it looks
+  at the episode files inside: when every one is named as an episode of the same season
+  (`S02E05`, `2x05`), they go into that season's existing folder, next to its other
+  episodes. Anything else is still refused, and the message says why, for example
+  "its files are from seasons 1 and 2". The automatic import does the same for a download
+  grabbed for such a show. Other shows import exactly as in v0.3.2.
+- **Map files… is offered when a show's folder can't be told.** If the files inside don't
+  say their episode either, the download's card in Activity → Needs you offers
+  **Map files…** once the import is refused, so you can say which episode each file is.
+  Each file still goes only into its season's existing folder.
+
+## [0.3.2] - 2026-10-20
+
+### Before you update
+
+- **Check your TV folders for episodes in the wrong place (#56).** v0.3.0 and v0.3.1 could
+  put new episodes and upgrades of a show whose season folders aren't named "Season N"
+  (`S01`, `Stagione 1`, `Saison 1`…) into a folder named like a season right inside the TV
+  folder, such as `<TV folder>/S13/Season 12/`, instead of the show's own folder. This
+  release stops that. To put files back by hand:
+  1. Look directly inside each TV folder for folders named like a season (`S01`, `S13`,
+     `Stagione 2`…). The files in them are named after their show.
+  2. Move each file into its show's own season folder. If that episode is already there,
+     keep the copy you want and delete the other. Delete the season-named folders in the
+     TV folder once they're empty.
+  3. Arrmada still has the moved files where they were. For each show you moved files
+     into, follow **Starting a show over** below, if it applies to that show.
+
+- **Shows whose season folders aren't named "Season N" are handled carefully now.** For a
+  show stored like `The Pitt/S01/`, `Gomorra/Stagione 1/` or `Taskmaster/Series 1/`
+  (or with your own season folder template's names), Arrmada no longer guesses the show's
+  folder:
+  - a new episode of a season you already have goes into that season's folder, next to
+    the season's other episodes — as long as all of them are in that one folder, it isn't
+    right inside the TV folder, and it holds nothing but the show's own files;
+  - a new season, or anything unclear, waits in Activity → Needs you;
+  - **Refresh & rescan**, **Rename**, the duplicate check and **Move to folder** are
+    refused for these shows, and change nothing. **Refresh all** lists them separately.
+
+  You can keep such a show as it is. To have it handled like any other show, start it
+  over (below) — but only when its season folders are inside the show's own folder right
+  in the TV folder (`<TV folder>/The Pitt/S01/`). When they sit directly inside a category
+  or franchise folder (`<TV folder>/Kids/S01/`, `<TV folder>/Star Trek/S01/` next to other
+  shows), or the show is inside one (`<TV folder>/Kids/The Pitt/S01/`), don't rename
+  anything: keep the show as it is.
+
+- **Shows whose own folder is named like a season** (`Special`, `Series 7 (2001)`,
+  `S1 (2020)`), and episodes loose in the TV folder, are refused too: all their new
+  episodes wait in Needs you, and the same actions are refused. Renaming their season
+  folders doesn't help. Rename the show's own folder so it doesn't read like a
+  season (or move loose episodes into a folder named after the show), then start the show
+  over (below) without the renaming step.
+
+- **Starting a show over.** For a show whose own folder is right inside a TV folder:
+  1. Delete the show in Arrmada, leaving **Also delete files from disk** unticked. Its
+     files stay where they are.
+  2. Rename its season folders to `Season 01`, `Season 02`… (and `Specials`).
+  3. On the Series page, use **Scan library**. The show is added back with its files.
+
+  It comes back with searching off and no quality profile: turn searching on and pick its
+  profile again. Its history in Arrmada starts over, and so do its other settings: an
+  Anime switch you set by hand, its numbering source, aliases, a display title you chose,
+  "monitor new seasons" and per-episode monitoring. New episodes then go into its
+  `Season 01`, `Season 02`… folders. The library scan only looks at the folders right
+  inside a TV folder, so this doesn't work for a show inside a category folder.
+
+### Fixed
+
+- **TV episodes no longer import into a folder named like a season** (#56). Arrmada never
+  takes a folder named like a season (`S01`, `Stagione 1`, `Saison 1`, `Staffel 1`,
+  `Temporada 1`, `Series 1`…) for a show's own folder, and never makes one in the TV folder.
+  A show stored as `Show/Season 1/` or `Show/` imports exactly where v0.3.1 put it, except
+  that an existing `Season.01`-style season folder (a dot, dash or underscore for the
+  space) is now joined rather than doubled by a new `Season 1`. Shows whose season folders
+  or own folder read like a season, and episodes loose in the TV folder, are handled as
+  described under Before you update.
+- **An upgrade no longer makes a second folder for a show** whose season folders are named
+  `S01` (for example by an `S{season00}` season folder template). This was the other half of
+  #56, seen with The Pitt.
+- **Arrmada never imports into a folder another show in the library has files in.** It used
+  to warn in the log and import anyway. Now the download waits in Activity → Needs you
+  saying "Can't tell which folder *the show* lives in".
+- **Deleting a show with its files never removes a symlinked folder**, such as a category
+  folder on another disk, or a folder above the show's own.
 
 ## [0.3.1] - 2026-10-18
 
@@ -529,7 +803,9 @@ The first tagged release (early development).
 - **Safety nets**: hardlinked imports, a recycle bin, nightly backups, a blocklist, and
   `update.sh` with automatic rollback.
 
-[Unreleased]: https://github.com/tristenlammi/Arrmada/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/tristenlammi/Arrmada/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/tristenlammi/Arrmada/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/tristenlammi/Arrmada/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tristenlammi/Arrmada/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tristenlammi/Arrmada/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tristenlammi/Arrmada/compare/v0.1.0...v0.2.0

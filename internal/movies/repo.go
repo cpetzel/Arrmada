@@ -581,6 +581,57 @@ func scanVersion(row interface{ Scan(...any) error }) (Version, int64, error) {
 	return v, movieID, err
 }
 
+// recordedPath is one file recorded for a movie (default track or extra version).
+type recordedPath struct {
+	movieID int64
+	path    string
+}
+
+// RecordedPaths lists every file path recorded for any movie, with its movie, in one
+// query: OtherRecordedPaths for a whole-library pass (Organize), filtered per movie.
+func (r *Repo) RecordedPaths(ctx context.Context) ([]recordedPath, error) {
+	rows, err := r.q().QueryContext(ctx, `
+		SELECT id, movie_file_path FROM movies WHERE movie_file_path != ''
+		UNION ALL
+		SELECT movie_id, file_path FROM movie_versions WHERE file_path != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []recordedPath
+	for rows.Next() {
+		var rp recordedPath
+		if err := rows.Scan(&rp.movieID, &rp.path); err != nil {
+			return nil, err
+		}
+		out = append(out, rp)
+	}
+	return out, rows.Err()
+}
+
+// OtherRecordedPaths lists every file path recorded for any movie but id — default tracks
+// and extra versions, whether the file is on disk or not. A movie delete reads it so a
+// folder another film's record points into is never emptied.
+func (r *Repo) OtherRecordedPaths(ctx context.Context, id int64) ([]string, error) {
+	rows, err := r.q().QueryContext(ctx, `
+		SELECT movie_file_path FROM movies WHERE id != ? AND movie_file_path != ''
+		UNION ALL
+		SELECT file_path FROM movie_versions WHERE movie_id != ? AND file_path != ''`, id, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // ListVersions returns the extra version tracks for a movie.
 func (r *Repo) ListVersions(ctx context.Context, movieID int64) ([]Version, error) {
 	rows, err := r.q().QueryContext(ctx, `SELECT `+versionCols+` FROM movie_versions WHERE movie_id = ? ORDER BY id`, movieID)

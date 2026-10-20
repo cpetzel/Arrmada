@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
+import { CastRow } from "../components/CastRow";
 import { shownTitle } from "../lib/displayTitle";
 import { NumberingBanner } from "./series/NumberingReviewModal";
+import { MisplacedBanner } from "./series/MisplacedFiles";
 import { usePoll } from "../lib/usePoll";
 import { useLiveConnected, useLiveEvent } from "../lib/live";
 import { QUEUE_CHANGED, QUEUE_PROGRESS, progressByHash, queueChangedFor } from "../lib/queueLive";
@@ -11,7 +13,7 @@ import { searchFinishedFor } from "../lib/searchOutcome";
 import { refreshSearches } from "../components/LastSearch";
 import { Button, StatusChip, useToast } from "../ui";
 import { TabPanel, Tabs } from "../ui/Tabs";
-import { api, type CastMember, type FitItem, type Series as SeriesT, type Episode } from "../lib/api";
+import { api, type FitItem, type Series as SeriesT, type Episode } from "../lib/api";
 import { seriesApi } from "../lib/seriesApi";
 import { qualityApi } from "../lib/qualityApi";
 import { Hero } from "./series/Hero";
@@ -165,6 +167,7 @@ export function SeriesDetail() {
       </Hero>
 
       <Page className="pb-10">
+        <MisplacedBanner seriesId={s.id} title={s.title} refreshKey={s.last_event_id} onChange={load} />
         <Tabs tabs={tabs} value={tab} onChange={setTab} idPrefix="series" label="Series sections" className="mb-4 mt-1 border-b" />
 
         {tab === "episodes" && (
@@ -197,26 +200,6 @@ export function SeriesDetail() {
         )}
       </Page>
     </>
-  );
-}
-
-function CastRow({ cast }: { cast?: CastMember[] }) {
-  if (!cast || cast.length === 0) return null;
-  return (
-    <div className="mt-8">
-      <h2 className="m-0 mb-3 text-md font-bold">Cast</h2>
-      <div className="thin-scroll flex gap-3 overflow-x-auto pb-2">
-        {cast.map((c, i) => (
-          <div key={i} className="w-[92px] flex-none text-center">
-            <div className="mb-1.5 overflow-hidden rounded-lg" style={{ aspectRatio: "2/3", background: "var(--panel-2)" }}>
-              {c.profile_url ? <img src={c.profile_url} alt={c.name} className="h-full w-full object-cover" loading="lazy" /> : null}
-            </div>
-            <div className="truncate text-xs font-semibold" title={c.name}>{c.name}</div>
-            {c.character && <div className="truncate text-xs text-ink-faint" title={c.character}>{c.character}</div>}
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 

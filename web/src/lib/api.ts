@@ -106,6 +106,8 @@ export interface ProwlarrInfo {
   ui_port?: string;
   /** A saved address for a Prowlarr on another machine; wins over ui_port. */
   ui_url?: string;
+  /** The Unraid all-in-one image's own Prowlarr, while it's switched on (e.g. http://127.0.0.1:9696). */
+  bundled_url?: string;
   last_sync?: ProwlarrLastSync;
 }
 
@@ -559,6 +561,9 @@ export interface StoredProfile {
   // server reads a missing one as "any".
   upgrade_trigger?: UpgradeTrigger;
   allow_prerelease?: boolean; // grab cams/telesyncs/screeners (movie & series; off = refused)
+  // A MULTi/Dual release naming no language counts as maybe having a Must audio language.
+  // Off (the default): a Must has to be named in the release, or be the original language.
+  multi_counts_language?: boolean;
   ideal?: IdealFile; // the target file: drives grabbing, ranking and the library fit check
   unwanted?: UnwantedSettings; // the Unwanted pack's choices (movie & series)
   group_tiers?: GroupTiers; // release-group tiers (movie & series); missing = the built-in suggestions
@@ -1601,6 +1606,10 @@ export interface MovieRenameItem {
   proposed: string;
   status: "ok" | "same" | "conflict" | "missing";
   reason?: string;
+  // Everything else that moves with the file (an ok item only): its subtitles and, when it
+  // leaves the movie's own folder, that folder's metadata and artwork. Nothing else moves.
+  extras?: { kind: "subtitle" | "folder"; from: string; to: string }[];
+  kept?: string; // why the old folder's other files stay where they are
 }
 // What applying one item did.
 export interface MovieRenameResult {
@@ -1659,6 +1668,11 @@ export interface OrganizeSummary {
 export interface MovieDeletePreview {
   versions: { id: number; label: string; file_name: string; size_bytes: number }[];
   sidecars: number;
+  // Artwork and metadata in the movie's own folder that go too (name is relative to it).
+  // The delete is sent back their paths: only the ones shown here can go.
+  extras?: { folder: string; name: string; path: string; size_bytes: number }[];
+  // Each folder holding its files: removed, or why its other files stay.
+  folders?: { name: string; path: string; removed: boolean; kept?: string }[];
   bytes: number;
   recycle: RecycleMode;
   // Downloads still in flight for it; progress 0..1 (0 when the client doesn't list it).
@@ -3286,12 +3300,16 @@ export const api = {
     req<{ status: string } & JobRef>("/api/v1/books/series-backfill", { method: "POST" }),
   grabBookTorrent: (id: number, torrent: string, filename: string, title: string, versionId?: number) =>
     req<{ status: string }>(`/api/v1/books/${id}/grabtorrent`, { method: "POST", body: JSON.stringify({ torrent, filename, title, version_id: versionId || 0 }) }),
-  deleteMovie: (id: number, deleteFiles?: boolean, cancelDownloads?: boolean) => {
+  /** leftovers: the artwork and metadata paths the delete preview listed; only those can go. */
+  deleteMovie: (id: number, deleteFiles?: boolean, cancelDownloads?: boolean, leftovers?: string[]) => {
     const q = new URLSearchParams();
     if (deleteFiles) q.set("delete_files", "true");
     if (cancelDownloads) q.set("cancel_downloads", "true");
     const qs = q.toString();
-    return req<void>(`/api/v1/movies/${id}${qs ? `?${qs}` : ""}`, { method: "DELETE" });
+    return req<void>(`/api/v1/movies/${id}${qs ? `?${qs}` : ""}`, {
+      method: "DELETE",
+      ...(deleteFiles && leftovers?.length ? { body: JSON.stringify({ leftovers }) } : {}),
+    });
   },
   movieDeletePreview: (id: number) => req<MovieDeletePreview>(`/api/v1/movies/${id}/delete-preview`),
   searchMovie: (id: number) =>

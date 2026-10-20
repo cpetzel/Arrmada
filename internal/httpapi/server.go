@@ -621,6 +621,7 @@ func (a *api) registerRoutes(mux *router) {
 	mux.HandleFunc("POST /api/v1/movies/bulk-add", a.requireRole(auth.RoleManager, a.handleBulkAddMovies))
 	mux.HandleFunc("POST /api/v1/movies/{id}/search", a.requireRole(auth.RoleManager, a.handleSearchMovie))
 	mux.HandleFunc("POST /api/v1/movies/{id}/move", a.requireRole(auth.RoleManager, a.handleMoveMovieFolder))
+	mux.HandleFunc("POST /api/v1/movies/{id}/move/preview", a.requireRole(auth.RoleManager, a.handlePreviewMovieMove))
 	mux.HandleFunc("GET /api/v1/movies/{id}/releases", a.requireRole(auth.RoleManager, a.handleMovieReleases))
 	mux.HandleFunc("GET /api/v1/movies/{id}/history", a.requireRole(auth.RoleManager, a.handleMovieHistory))
 	mux.HandleFunc("GET /api/v1/movies/{id}/collection", a.requireRole(auth.RoleManager, a.handleMovieCollection))
@@ -652,6 +653,10 @@ func (a *api) registerRoutes(mux *router) {
 	mux.HandleFunc("DELETE /api/v1/series/{id}/numbering/pending", a.requireRole(auth.RoleManager, a.handleDismissSeriesNumbering))
 	mux.HandleFunc("GET /api/v1/series/{id}/rename", a.requireRole(auth.RoleManager, a.handleSeriesRenamePreview))
 	mux.HandleFunc("POST /api/v1/series/{id}/rename", a.requireRole(auth.RoleManager, a.handleSeriesRename))
+	// Episode files outside the show's folder (#56): a preview, then putting back exactly
+	// the previewed files.
+	mux.HandleFunc("GET /api/v1/series/{id}/misplaced", a.requireRole(auth.RoleManager, a.handleSeriesMisplaced))
+	mux.HandleFunc("POST /api/v1/series/{id}/misplaced", a.requireRole(auth.RoleManager, a.handleSeriesMisplacedApply))
 	mux.HandleFunc("GET /api/v1/series/{id}", a.requireRole(auth.RoleManager, a.handleGetSeries))
 	mux.HandleFunc("GET /api/v1/series/{id}/watch-stats", a.requireRole(auth.RoleManager, a.handleSeriesWatchStats))
 	mux.HandleFunc("GET /api/v1/series/{id}/downloads", a.requireRole(auth.RoleManager, a.handleSeriesDownloads))

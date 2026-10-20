@@ -132,48 +132,44 @@ func TestSeriesRenameKeepsShowFoldersWithYearWhenNeeded(t *testing.T) {
 	}
 }
 
-// A rename never merges two shows: a show split over two folders is gathered into the one
-// it uses, but not when another show keeps files in that folder. The move is shown as a
-// conflict in the preview, refused on apply, and the file stays where it is.
-func TestSeriesRenameRefusesAnotherShowsFolder(t *testing.T) {
+// A rename never merges two shows. A show split over two folders is gathered into the one
+// that is its own — the show folder resolver picks "Teen Titans Go! (2013)", never the
+// folder Teen Titans' files are in — so the stray episode moves OUT of Teen Titans' folder,
+// and nothing moves into it. (The guard that refuses a move into another show's folder is
+// tested on its own in series_rename_guard_test.go.)
+func TestSeriesRenameNeverGathersIntoAnotherShowsFolder(t *testing.T) {
 	l := newFolderLib(t)
 	titans := l.show(t, 100, "Teen Titans", 2003, 1)
 	goShow := l.show(t, 200, "Teen Titans Go!", 2013, 2)
 	l.file(t, titans, 1, "Teen Titans/Season 1/Teen Titans - S01E01.mkv")
-	// Teen Titans Go! has one file in Teen Titans' folder (its first, so the rename uses
-	// that folder) and one in its own.
-	l.file(t, goShow, 1, "Teen Titans/Season 1/Teen Titans Go - S01E01.mkv") // already at its name
-	own := l.file(t, goShow, 2, "Teen Titans Go! (2013)/Season 1/ttg.s01e02.mkv")
-	if got := l.c.series.ExistingFolderName(l.ctx, goShow); got != "Teen Titans" {
-		t.Fatalf("setup: the rename folder is %q, want the shared one", got)
-	}
+	// Teen Titans Go! has one file in Teen Titans' folder and one in its own.
+	l.file(t, goShow, 1, "Teen Titans/Season 1/Teen Titans Go - S01E01.mkv")
+	l.file(t, goShow, 2, "Teen Titans Go! (2013)/Season 1/ttg.s01e02.mkv")
 
 	items, err := l.c.SeriesRenamePreview(l.ctx, goShow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var refused *SeriesRenameItem
-	for i := range items {
-		if items[i].From == own {
-			refused = &items[i]
+	titansDir := filepath.Join(l.root, "Teen Titans")
+	for _, it := range items {
+		if top, _ := firstFolderUnder(l.root, it.To); top == "Teen Titans" && it.Conflict == "" {
+			t.Errorf("preview moves %s into Teen Titans' folder", it.From)
 		}
 	}
-	if refused == nil || refused.Conflict != reasonOtherShowsFolder {
-		t.Fatalf("preview = %+v; want the move into Teen Titans' folder shown as refused", items)
-	}
-
 	res, err := l.c.SeriesRename(l.ctx, goShow, items)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Moved != 0 || len(res.Skipped) != 1 || res.Skipped[0].Reason != reasonOtherShowsFolder {
-		t.Fatalf("rename = %+v; want the one move refused, once", res)
+	for _, sk := range res.Skipped {
+		if top, _ := firstFolderUnder(l.root, sk.To); top != "Teen Titans" {
+			t.Errorf("a move inside or into the show's own folder was skipped: %+v", sk)
+		}
 	}
-	if _, err := os.Stat(own); err != nil {
-		t.Errorf("the refused file moved: %v", err)
+	if got := mustGlob(t, filepath.Join(titansDir, "Season 1", "*.mkv")); len(got) > 2 {
+		t.Errorf("Teen Titans' season folder gained files: %v", got)
 	}
-	if got := len(mustGlob(t, filepath.Join(l.root, "Teen Titans", "Season 1", "*.mkv"))); got != 2 {
-		t.Errorf("Teen Titans' season folder holds %d files, want the 2 it had", got)
+	if got := mustGlob(t, filepath.Join(titansDir, "Season 1", "Teen Titans - S01E01.mkv")); len(got) != 1 {
+		t.Errorf("Teen Titans' own episode is gone: %v", got)
 	}
 }
 

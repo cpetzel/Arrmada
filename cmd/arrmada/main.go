@@ -294,6 +294,7 @@ func main() {
 	// fallback), read on every use, so changing it needs no restart.
 	flare := flaresolverr.NewFunc(keyStore.Func("flaresolverr"))
 	indexers := indexer.NewService(st.DB(), modLog(log, "indexer"), flare)
+	indexers.SetBundledProwlarr(cfg.AIOProwlarrURL) // the all-in-one image's, while it runs
 	downloads := download.NewService(st.DB(), modLog(log, "download"))
 	// How each indexer and download client has been answering, kept across restarts: a
 	// failing indexer backs off for background searches, and the Indexers page and the
@@ -473,6 +474,18 @@ func main() {
 	movieSvc.SetBin(bins)                 // deletes and replaced files go to the bins
 	seriesSvc.SetBin(bins)                // per-episode file deletes go to the recycle bin, like movies
 	seriesSvc.SetBus(bus)                 // deletes announce file.removed so imports forget them
+	// A movie delete never removes or empties another library's folder or a downloads folder.
+	movieSvc.SetProtectedDirs(func() []string {
+		ctx := context.Background()
+		out := []string{cfg.LibraryDir, roots.Downloads(ctx)}
+		for _, r := range roots.Libraries(ctx) {
+			out = append(out, r.Path)
+		}
+		for _, d := range roots.PerFolderDownloads(ctx) {
+			out = append(out, d.Path)
+		}
+		return out
+	})
 	prefs := libPrefs{s: settingsSvc}
 	movieSvc.SetNaming(prefs)
 	movieSvc.SetPrefs(prefs)
@@ -499,6 +512,12 @@ func main() {
 	if cfg.AIOQbittorrentURL != "" {
 		if err := downloads.SyncBundledSwitch(context.Background(), cfg.AIOQbittorrentURL, cfg.QbittorrentURL == cfg.AIOQbittorrentURL); err != nil {
 			log.Warn("could not match the built-in qBittorrent's client to its on/off setting", "err", err)
+		}
+	}
+	// Its optional SABnzbd likewise (it ships switched off, so this is usually nothing).
+	if cfg.AIOSABnzbdURL != "" {
+		if err := downloads.SyncBundledSwitchOf(context.Background(), download.KindSABnzbd, cfg.AIOSABnzbdURL, cfg.SABnzbdURL == cfg.AIOSABnzbdURL); err != nil {
+			log.Warn("could not match the built-in SABnzbd's client to its on/off setting", "err", err)
 		}
 	}
 	if cfg.QbittorrentURL != "" {
@@ -666,7 +685,10 @@ func main() {
 		return seriesSvc.EpisodeTitleByName(context.Background(), seriesTitle, year, season, episode)
 	})
 	bookImporter.SetSeriesNaming(prefs) // user-configurable series folder / season / episode formats
-	bookImporter.SetBookNaming(prefs)   // user-configurable audiobook and ebook folder / file names
+	// Folders that season template names are season folders, never a show's own folder,
+	// when working out which folder a show lives in (#56).
+	seriesSvc.SetSeasonFolderMatcher(bookImporter.IsSeasonFolderName)
+	bookImporter.SetBookNaming(prefs) // user-configurable audiobook and ebook folder / file names
 	// A new series folder can carry the show's ids ("Show (2022) {tvdb-12345}", the Plex
 	// recommended scheme); existing folders are reused as they are.
 	bookImporter.SetSeriesIDsFunc(func(seriesTitle string, year int) library.SeriesIDs {
@@ -1490,9 +1512,11 @@ func main() {
 	// download on its way in would land in the old folder half-way, so a title with one
 	// in flight waits (fail closed: an unreadable check refuses too).
 	folderMover := &libfolders.Mover{
-		DB: st.DB(), Folders: libFolders, Bin: bins, Scan: media.Request, ShowFolder: series.ShowFolder,
+		DB: st.DB(), Folders: libFolders, Bin: bins, Scan: media.Request, ShowFolders: seriesSvc.ShowFoldersOf, Unclear: seriesSvc.MoveBlocked,
 		Hold: coordinator.HoldSearches, // no search grabs into the old folder half-way
-		Log:  modLog(log, "import"),
+		// A film's folder moves whole only when it is provably the film's own.
+		OwnFolder: movieSvc.MoveFolderCheck,
+		Log:       modLog(log, "import"),
 		Busy: func(ctx context.Context, lib string, id int64) string {
 			acqs, err := coordinator.Active(ctx, lib, id)
 			if err != nil {
