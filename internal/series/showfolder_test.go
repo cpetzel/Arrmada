@@ -103,6 +103,7 @@ func TestShowFolderOf56Shapes(t *testing.T) {
 		{"Stagione", "/tv/Gomorra/Stagione 1/Gomorra - S01E01.mkv", "/tv/Gomorra/Stagione 1", true},
 		{"Series", "/tv/Taskmaster/Series 1/Taskmaster - S01E01.mkv", "/tv/Taskmaster/Series 1", true},
 		{"in a category", "/tv/Kids/S01/Show - S01E01.mkv", "/tv/Kids/S01", true},
+		{"deep in a category", "/tv/Kids/The Pitt/S01/Show - S01E01.mkv", "/tv/Kids/The Pitt/S01", true},
 		{"a #56 leftover", "/tv/S13/Season 12/Show - S12E01.mkv", "/tv/S13/Season 12", false},
 		{"a show named like a season", "/tv/Season 1/Season 01/Season 1 - S01E01.mkv", "/tv/Season 1/Season 01", false},
 		{"loose in the TV folder", "/tv/Show - S01E01.mkv", "", false},
@@ -114,8 +115,27 @@ func TestShowFolderOf56Shapes(t *testing.T) {
 			if !info.Unknown || !info.Shape56 || info.Path != "" {
 				t.Fatalf("ShowFolderOf = %+v, want #56-shaped", info)
 			}
-			if !strings.Contains(info.Why, "Season 01") {
-				t.Errorf("why = %q, want it to say how to rename the folders", info.Why)
+			// The way out the message gives fits the layout.
+			wantWhy := map[string][]string{
+				"S12":                        {`rename its season folders to "Season 01"`, "Scan library", "keep the show as it is"},
+				"Stagione":                   {`rename its season folders to "Season 01"`, "Scan library"},
+				"Series":                     {`rename its season folders to "Season 01"`, "Scan library"},
+				"in a category":              {`rename its season folders to "Season 01"`, "category or franchise folder holding other shows, keep the show as it is"},
+				"deep in a category":         {"keep it as it is"},
+				"a #56 leftover":             {"misplaced", "rename that folder so its name doesn't read like a season"},
+				"a show named like a season": {"rename that folder so its name doesn't read like a season", "Scan library"},
+				"loose in the TV folder":     {"folder named after the show", `"Season 01"`, "Scan library"},
+			}[c.name]
+			for _, w := range wantWhy {
+				if !strings.Contains(info.Why, w) {
+					t.Errorf("why = %q, want it to say %q", info.Why, w)
+				}
+			}
+			if c.name == "deep in a category" && strings.Contains(info.Why, "rename") {
+				t.Errorf("why = %q tells a show inside a category to rename its folders", info.Why)
+			}
+			if strings.HasPrefix(c.name, "a show named") && strings.Contains(info.Why, "rename its season folders") {
+				t.Errorf("why = %q tells a show whose own folder reads like a season to rename its season folders", info.Why)
 			}
 			want := ""
 			if c.fileDir != "" {

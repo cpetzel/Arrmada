@@ -136,11 +136,31 @@ type ShowFolderInfo struct {
 	ownDir bool
 }
 
-// msg56 is what a refused #56-shaped show says.
-func msg56(f string) string {
-	return fmt.Sprintf("its season folders are named like seasons (%s), so Arrmada won't guess its folder; "+
-		"new episodes of a season it already has still import, and the rest wait in Needs you. "+
-		"Rename the season folders to \"Season 01\", \"Season 02\"… and rescan the show", filepath.Base(f))
+// msg56 is what a refused #56-shaped show says: why, what still works, and the way out
+// that fits where its first recorded file (first) is — v0.3.1 read the show's folder f
+// from it.
+func msg56(roots []string, first, f string) string {
+	const still = "new episodes of a season it already has still import next to the others, and the rest wait in Needs you"
+	const startOver = "delete the show in Arrmada keeping its files (leave \"Also delete files from disk\" unticked), %s, then use Scan library on the Series page to add it back"
+	root, ok := rootOf(roots, first)
+	switch {
+	case !ok || !libfolders.StrictlyUnder(f, root):
+		return fmt.Sprintf("its files aren't in a folder of its own inside the TV folder (%s), so Arrmada won't guess its folder; %s. "+
+			"To change that, "+startOver, filepath.Dir(first), still,
+			"move its files into a folder named after the show, in season folders named \"Season 01\", \"Season 02\"…")
+	case filepath.Dir(f) == root:
+		return fmt.Sprintf("its folder %s, right inside the TV folder, is named like a season, so Arrmada won't guess its folder; %s. "+
+			"If it holds files #56 misplaced, move them into their show's own folder. If it is the show's own folder, "+startOver,
+			f, still, "rename that folder so its name doesn't read like a season")
+	case filepath.Dir(filepath.Dir(f)) == root:
+		return fmt.Sprintf("its season folders are named like seasons (%s), so Arrmada won't guess its folder; %s. "+
+			"To change that, if %s is the show's own folder: "+startOver+". If %[3]s is a category or franchise folder holding other shows, keep the show as it is",
+			filepath.Base(f), still, filepath.Dir(f), "rename its season folders to \"Season 01\", \"Season 02\"…")
+	default:
+		return fmt.Sprintf("its season folders are named like seasons (%s), so Arrmada won't guess its folder; %s. "+
+			"It's inside a category or franchise folder (%s), so keep it as it is: the library scan only finds shows right inside a TV folder",
+			filepath.Base(f), still, filepath.Dir(filepath.Dir(f)))
+	}
 }
 
 // ShowFolderOf is the folder a show lives in: v0.3.1's answer from its first recorded
@@ -158,24 +178,7 @@ func (s *Service) ShowFolderOf(ctx context.Context, seriesID int64) ShowFolderIn
 	if !s.shape56(roots, first, f) {
 		return ShowFolderInfo{Path: f}
 	}
-	// The first recorded file gives the #56 mistake. When it's gone — moved back by hand,
-	// its season folders renamed to "Season N" — v0.3.1 would keep reading the stale
-	// record; the first recorded file still on disk speaks instead, so renaming the
-	// folders and rescanning (FollowRenamedSeasonFolders) is a way out.
-	if _, err := os.Lstat(first); errors.Is(err, fs.ErrNotExist) {
-		if paths, err := s.repo.EpisodeFilePaths(ctx, seriesID); err == nil {
-			for _, p := range paths {
-				if _, err := os.Lstat(p); err != nil {
-					continue
-				}
-				if pf := v031Folder(p); !s.shape56(roots, p, pf) {
-					return ShowFolderInfo{Path: pf}
-				}
-				break // the first file still there is the #56 mistake too
-			}
-		}
-	}
-	info := ShowFolderInfo{Unknown: true, Shape56: true, Why: msg56(f)}
+	info := ShowFolderInfo{Unknown: true, Shape56: true, Why: msg56(roots, first, f)}
 	dir := filepath.Dir(filepath.Clean(first))
 	if root, ok := rootOf(roots, first); ok && libfolders.StrictlyUnder(dir, root) {
 		info.FileDir = dir
@@ -217,6 +220,13 @@ func (s *Service) SeasonDir(ctx context.Context, seriesID int64, season int) (st
 	root, inRoot := rootOf(s.libRoots(), dir+string(filepath.Separator)+"x")
 	if !inRoot || !libfolders.StrictlyUnder(dir, root) {
 		return "", fmt.Sprintf("its season %d files aren't in a folder of their own inside a TV folder", season)
+	}
+	// Right inside a TV folder, the season's folder is where #56 put misplaced files
+	// (<TV>/Season 1/…), or a show's own folder named like a season: never taken.
+	for _, r := range s.libRoots() {
+		if strings.TrimSpace(r) != "" && filepath.Clean(r) == filepath.Dir(dir) {
+			return "", fmt.Sprintf("its season %d files are in %s, right inside the TV folder", season, dir)
+		}
 	}
 	if s.seasonLike(filepath.Base(filepath.Dir(dir))) {
 		return "", fmt.Sprintf("its season %d files are in %s, inside a folder named like a season", season, dir)
@@ -274,69 +284,6 @@ func videoOrLinkIn(dir string) bool {
 		return nil
 	})
 	return found || err != nil
-}
-
-// FollowRenamedSeasonFolders is the way out for a #56-shaped show: once its season folders
-// are renamed to "Season 01", "Season 02"… (or "Specials"), each recorded file that's gone
-// from its old season-named folder is re-pointed at the same file name in the renamed
-// folder beside it — only that exact file, only in a folder v0.3.1 itself reads as that
-// season's, only when there's exactly one. It returns how many episodes it re-pointed.
-// Nothing else changes; a rescan then works on the show as it always has.
-func (s *Service) FollowRenamedSeasonFolders(ctx context.Context, seriesID int64) int {
-	seasons, err := s.repo.SeasonsFor(ctx, seriesID)
-	if err != nil {
-		return 0
-	}
-	roots := s.libRoots()
-	moved := 0
-	for _, sn := range seasons {
-		for _, e := range sn.Episodes {
-			if !e.HasFile || e.FilePath == "" {
-				continue
-			}
-			p := filepath.Clean(e.FilePath)
-			if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
-				continue // still there (or can't tell): nothing to follow
-			}
-			old := filepath.Dir(p)
-			if !s.seasonLike(filepath.Base(old)) {
-				continue
-			}
-			show := filepath.Dir(old)
-			if root, ok := rootOf(roots, p); !ok || !libfolders.StrictlyUnder(show, root) {
-				continue
-			}
-			entries, err := os.ReadDir(show)
-			if err != nil {
-				continue
-			}
-			var found []string
-			for _, d := range entries {
-				if !d.IsDir() || !reV031Season.MatchString(d.Name()) {
-					continue
-				}
-				if n, ok := library.SeasonFolderNumber(d.Name()); !ok || n != e.SeasonNumber {
-					continue
-				}
-				cand := filepath.Join(show, d.Name(), filepath.Base(p))
-				if fi, err := os.Lstat(cand); err == nil && fi.Mode().IsRegular() {
-					found = append(found, cand)
-				}
-			}
-			if len(found) != 1 {
-				continue
-			}
-			fi, _ := os.Stat(found[0])
-			if err := s.repo.SetEpisodeFile(ctx, seriesID, e.SeasonNumber, e.EpisodeNumber, found[0], fi.Size()); err != nil {
-				continue
-			}
-			moved++
-		}
-	}
-	if moved > 0 {
-		s.repo.AddEvent(ctx, seriesID, "files.followed", fmt.Sprintf("Followed %d episode file%s into renamed season folders", moved, map[bool]string{true: "", false: "s"}[moved == 1]))
-	}
-	return moved
 }
 
 // Why a folder can't take a show's episodes.

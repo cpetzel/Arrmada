@@ -170,34 +170,37 @@ func TestImportForAShowInsideACategoryFolder(t *testing.T) {
 }
 
 // A #56-shaped show (S01-style season folders) is never rescanned: nothing about its
-// records changes, even after misplaced files were moved back by hand, until its season
-// folders are renamed to "Season N" — after which a rescan works as it always has.
-func TestRescanOfA56ShowChangesNothingUntilTheFoldersAreRenamed(t *testing.T) {
+// records changes — after misplaced files were moved back by hand, nor after its season
+// folders were renamed to "Season 01". No record is ever re-pointed by the hotfix.
+func TestRescanOfA56ShowNeverChangesItsRecords(t *testing.T) {
 	h := newLifecycleHarness(t)
 	tv := h.c.imp.TVRoot()
 	own := filepath.Join(tv, "Show")
-	setEpisodeFile(t, h.c, h.seriesID, 1, 1, libFile(t, filepath.Join(own, "S01", "Show - S01E01.mkv")), "Show.S01E01")
+	first := libFile(t, filepath.Join(own, "S01", "Show - S01E01.mkv"))
+	setEpisodeFile(t, h.c, h.seriesID, 1, 1, first, "Show.S01E01")
 	lost := libFile(t, filepath.Join(tv, "S01", "Season 1", "Show - S01E02.mkv"))
 	setEpisodeFile(t, h.c, h.seriesID, 1, 2, lost, "Show.S01E02")
+	unchanged := func(when string) {
+		t.Helper()
+		if err := h.c.RescanSeries(h.ctx, h.seriesID); !errors.Is(err, series.ErrNoShowFolder) {
+			t.Fatalf("rescan %s = %v, want refused", when, err)
+		}
+		if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 1); cur.Path != first {
+			t.Errorf("S01E01 = %q %s, want it unchanged", cur.Path, when)
+		}
+		if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); cur.Path != lost {
+			t.Errorf("S01E02 = %q %s, want it unchanged", cur.Path, when)
+		}
+	}
+	unchanged("as it is")
 	if err := os.Rename(lost, filepath.Join(own, "S01", "Show - S01E02.mkv")); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.c.RescanSeries(h.ctx, h.seriesID); !errors.Is(err, series.ErrNoShowFolder) {
-		t.Fatalf("rescan = %v, want refused", err)
-	}
-	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); cur.Path != lost {
-		t.Errorf("S01E02 = %q after a refused rescan, want it unchanged", cur.Path)
-	}
-	// The way out: rename the season folder to "Season 01", then rescan.
+	unchanged("after moving the file back")
 	if err := os.Rename(filepath.Join(own, "S01"), filepath.Join(own, "Season 01")); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.c.RescanSeries(h.ctx, h.seriesID); err != nil {
-		t.Fatalf("rescan after the rename: %v", err)
-	}
-	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); cur.Path != filepath.Join(own, "Season 01", "Show - S01E02.mkv") {
-		t.Errorf("S01E02 = %q after the rescan", cur.Path)
-	}
+	unchanged("after renaming the season folder")
 }
 
 // For a #56-shaped show a new episode goes into the folder its season's files are in —
