@@ -1457,6 +1457,19 @@ func (r *Repo) EpisodeFilePath(ctx context.Context, seriesID int64, season, epis
 	return path, err
 }
 
+// AnyEpisodeFilePath is the first on-disk file recorded for the series ("" if none), the
+// one v0.3.1 read the show's folder off.
+func (r *Repo) AnyEpisodeFilePath(ctx context.Context, seriesID int64) (string, error) {
+	var path string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT file_path FROM episodes WHERE series_id = ? AND has_file = 1 AND file_path <> '' LIMIT 1`,
+		seriesID).Scan(&path)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return path, err
+}
+
 // EpisodeFilePaths is every distinct on-disk file the series' episodes point at, for
 // working out which folder the show lives in (ShowFolderOf).
 func (r *Repo) EpisodeFilePaths(ctx context.Context, seriesID int64) ([]string, error) {

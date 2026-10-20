@@ -280,6 +280,8 @@ type folderJudge struct {
 	// disk: folders may be looked at on disk (onlyThisShow); without it the folder above a
 	// season-named folder is never vouched for.
 	disk bool
+	// first is the show's first recorded file, the one v0.3.1 read its folder off.
+	first string
 }
 
 // folderVerdict is a folder judged: why it can't be a show's own ("" when it can) and the
@@ -407,6 +409,13 @@ func (s *Service) showFolderFrom(paths []string, j *folderJudge) ShowFolderInfo 
 		}
 		info.Files += n
 	}
+	// The folders all import to the same place; the one named is the one v0.3.1 named,
+	// read off the first recorded file, so Plex scans and links point where they did.
+	if j.first != "" {
+		if v := s.fileFolder(j.roots, j.first, vouch); v.ok && dirs[v.dir] > 0 {
+			best = v.dir
+		}
+	}
 	if v := j.judge(best); v.why != "" {
 		info.Unknown, info.Why, info.Files = true, v.why, 0
 		return info
@@ -428,7 +437,9 @@ func (s *Service) ShowFolderOf(ctx context.Context, seriesID int64) ShowFolderIn
 		// or on a share that's down. Where the show lives isn't known; it isn't a new show.
 		return ShowFolderInfo{Total: len(paths), Unknown: true, Why: "the files it had are no longer where they were recorded; rescan it once they're back in its folder"}
 	}
-	return s.showFolderFrom(kept, s.dbJudge(ctx, seriesID))
+	j := s.dbJudge(ctx, seriesID)
+	j.first, _ = s.repo.AnyEpisodeFilePath(ctx, seriesID)
+	return s.showFolderFrom(kept, j)
 }
 
 // dropGoneMisplaced leaves out leftovers of #56 that are no longer there — moved back by
