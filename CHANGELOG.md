@@ -19,49 +19,42 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   folder, such as `<TV folder>/S13/Season 12/`, instead of the show's own folder. This
   release stops that. To put files back by hand:
   1. Look directly inside each TV folder for folders named like a season (`S01`, `S13`,
-     `Stagione 2`…). The files in them are named after their show. Also check for any
-     other folder there that doesn't belong to a show: season folders with less common
-     names (`Book 1`, `Part 2`) could be misread the same way.
+     `Stagione 2`…). The files in them are named after their show.
   2. Move each file into its show's own season folder. If that episode is already there,
      keep the copy you want and delete the other.
-  3. On the show's page, use **Refresh & rescan**. Delete the season-named folders once
-     they're empty.
+  3. Rename that show's season folders to `Season 01`, `Season 02`… (see below), then use
+     **Refresh & rescan** on the show's page. Delete the season-named folders in the TV
+     folder once they're empty.
   4. If every file of a show was moved, delete the show in Arrmada **keeping its files**,
      put the files back, and add it again with a library scan.
+- **Shows whose season folders aren't named "Season N" are handled carefully now.** For a
+  show stored like `The Pitt/S01/`, `Gomorra/Stagione 1/` or `Taskmaster/Series 1/`
+  (or with your own season folder template's names), Arrmada no longer guesses the show's
+  folder:
+  - a new episode of a season you already have goes into that season's folder, next to
+    the season's other episodes — as long as all of them are in that one folder and it
+    holds nothing but the show's own files;
+  - a new season, or anything unclear, waits in Activity → Needs you;
+  - **Refresh & rescan**, **Rename**, the duplicate check and **Move to folder** are
+    refused for these shows. **Refresh all** lists them separately.
 
-  The next release adds **Put misplaced files back** to the show's page, which does this for
-  you with a preview, and a health check listing the shows affected.
-- **Some shows now wait in Needs you instead of importing**, where Arrmada can't tell
-  which folder they live in. Sort out the show's folder, then rescan the show:
-  - a show whose own folder is named like a season (`Specials`, `S1`, `Series 7`, with or
-    without a year in brackets): rename the folder so there are words after the number,
-    for example `Series 7 The Contenders`;
-  - a show with season folders like `S01` inside a folder that also holds other shows, or
-    anything other than that show's season and extras folders (`<TV folder>/Kids/S01`
-    beside `<TV folder>/Kids/Bluey`): give the show a folder of its own;
-  - a show whose episode files are spread over folders with different names;
-  - a show whose only recorded files are no longer where they were (moved back by hand,
-    deleted, or on a share that's down): put them back in the show's folder and rescan.
-  A **Refresh all** reports these shows separately from ones whose folders looked
-  unmounted.
+  To lift all that, rename the show's season folders to `Season 01`, `Season 02`… (and
+  `Specials`), then use **Refresh & rescan** on the show's page.
 
 ### Fixed
 
-- **TV episodes no longer import into a folder named like a season** (#56). When a show's
-  season folders aren't named "Season N" (`S01`, `Stagione 1`, `Saison 1`, `Staffel 1`,
-  `Temporada 1`, `Series 1`, or your own season folder template), Arrmada now uses the
-  show's folder above them, when that folder is right inside the TV folder and holds only
-  that show. Shows named like a number ("1992", "24") stay themselves. Everything else
-  imports where v0.3.1 put it, into the season folder v0.3.1 would choose, except that an
-  existing `Season.01`-style folder (a dot, dash or underscore for the space) is now joined
+- **TV episodes no longer import into a folder named like a season** (#56). Arrmada never
+  takes a folder named like a season (`S01`, `Stagione 1`, `Saison 1`, `Staffel 1`,
+  `Temporada 1`, `Series 1`…) for a show's own folder, and never makes one in the TV folder.
+  Every other show imports exactly where v0.3.1 put it, except that an existing
+  `Season.01`-style season folder (a dot, dash or underscore for the space) is now joined
   rather than doubled by a new `Season 1`.
 - **An upgrade no longer makes a second folder for a show** whose season folders are named
   `S01` (for example by an `S{season00}` season folder template). This was the other half of
   #56, seen with The Pitt.
-- **Arrmada never imports into a folder another show in the library has files in, or one
-  named like a season.** It used to warn in the log and import anyway. Now the download
-  waits in Activity → Needs you saying "Can't tell which folder *the show* lives in".
-  Rescan, Rename and the duplicate check refuse such a folder too.
+- **Arrmada never imports into a folder another show in the library has files in.** It used
+  to warn in the log and import anyway. Now the download waits in Activity → Needs you
+  saying "Can't tell which folder *the show* lives in".
 - **Deleting a show with its files never removes a symlinked folder**, such as a category
   folder on another disk, or a folder above the show's own.
 
