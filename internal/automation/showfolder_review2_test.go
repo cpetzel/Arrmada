@@ -149,8 +149,8 @@ func TestRevS01InsideAFolderOfShows(t *testing.T) {
 				t.Errorf("a new season landed at %s, want Review", got)
 			}
 			rbFolderActionsRefused(t, h)
-			if p := h.c.series.FolderPath(h.ctx, h.seriesID); p != filepath.Join(tv, s01) {
-				t.Errorf("FolderPath = %q, want the file's own folder", p)
+			if p := h.c.series.FolderPath(h.ctx, h.seriesID); p != "" {
+				t.Errorf("FolderPath = %q, want none (never the folder above)", p)
 			}
 			if _, err := h.c.series.Delete(h.ctx, h.seriesID, true); err != nil {
 				t.Logf("delete: %v", err)

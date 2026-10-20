@@ -186,7 +186,12 @@ func (s *Service) RootFor(ctx context.Context, sr Series) string {
 	if s.folders == nil {
 		return ""
 	}
-	if p := s.FolderPath(ctx, sr.ID); p != "" {
+	info := s.ShowFolderOf(ctx, sr.ID)
+	p := info.Path
+	if p == "" {
+		p = info.FileDir // a #56-shaped show: its first file's own folder tells the TV folder
+	}
+	if p != "" {
 		if f, ok := s.folders.Owner(ctx, libfolders.MediaSeries, p); ok {
 			return f.Path
 		}
@@ -1745,14 +1750,12 @@ func (s *Service) ExistingFolderName(ctx context.Context, seriesID int64) string
 	return ""
 }
 
-// FolderPath is the full path of the show's library folder (ShowFolderOf), "" when the
-// show has no files or none in a folder of its own.
+// FolderPath is the full path of the show's library folder (ShowFolderOf), for finding
+// the show on the media server by its folder. "" when the show has no files, or is
+// #56-shaped: its folder can't be told, so the server is asked by id only — never by the
+// folder above its files, which may be a category or another show's.
 func (s *Service) FolderPath(ctx context.Context, seriesID int64) string {
-	info := s.ShowFolderOf(ctx, seriesID)
-	if info.Path != "" {
-		return info.Path
-	}
-	return info.FileDir // a #56-shaped show: the first file's own folder, never one above
+	return s.ShowFolderOf(ctx, seriesID).Path
 }
 
 // TVRootOf is the TV folder holding path ("" when none does).

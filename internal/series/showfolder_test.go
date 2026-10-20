@@ -90,8 +90,8 @@ func TestShowFolderOfIsV031sAnswer(t *testing.T) {
 
 // When v0.3.1's answer is the #56 mistake — a folder named like a season (S01, Stagione 1,
 // Series 1, a season template's name), or the TV folder itself — the show's folder is
-// unknown: no folder is guessed, above the files least of all. FolderPath names the first
-// file's own folder, for Plex, never one above it.
+// unknown: no folder is guessed, above the files least of all. FolderPath is empty (the
+// media server is asked by id); FileDir, the first file's own folder, tells the TV folder.
 func TestShowFolderOf56Shapes(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct{ name, file, fileDir string }{
@@ -116,8 +116,11 @@ func TestShowFolderOf56Shapes(t *testing.T) {
 			if c.fileDir != "" {
 				want = filepath.FromSlash(c.fileDir)
 			}
-			if got := f.svc.FolderPath(ctx, id); got != want {
-				t.Errorf("FolderPath = %q, want %q", got, want)
+			if info.FileDir != want {
+				t.Errorf("FileDir = %q, want %q", info.FileDir, want)
+			}
+			if got := f.svc.FolderPath(ctx, id); got != "" {
+				t.Errorf("FolderPath = %q, want none", got)
 			}
 			if got := f.svc.ExistingFolderName(ctx, id); got != "" {
 				t.Errorf("ExistingFolderName = %q", got)
