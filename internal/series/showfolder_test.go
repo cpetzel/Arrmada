@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,12 +22,14 @@ import (
 // folderFixture is a series service over one TV folder (/tv unless changed), with shows
 // whose episode rows point wherever a test says. Nothing needs to exist on disk: which
 // folder a show lives in is read from its recorded files (and every recorded file counts
-// as there, unless a test says otherwise).
+// as there, unless a test says otherwise), and folders are listed from the files the test
+// recorded or put on its pretend disk (onDisk).
 type folderFixture struct {
-	t   *testing.T
-	db  *sql.DB
-	svc *Service
-	n   int
+	t     *testing.T
+	db    *sql.DB
+	svc   *Service
+	n     int
+	files map[string]bool // the pretend disk
 }
 
 func newFolderFixture(t *testing.T, root string) *folderFixture {
@@ -39,10 +42,58 @@ func newFolderFixture(t *testing.T, root string) *folderFixture {
 	svc := NewService(st.DB(), nil, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	svc.SetRootFunc(func() string { return root })
 	svc.fileGone = func(string) bool { return false }
-	return &folderFixture{t: t, db: st.DB(), svc: svc}
+	f := &folderFixture{t: t, db: st.DB(), svc: svc, files: map[string]bool{}}
+	svc.readDir = f.readDir
+	return f
 }
 
-// show adds a series with one episode row per file (season 1, episodes 1..n).
+// onDisk puts files on the pretend disk without recording them for any show.
+func (f *folderFixture) onDisk(paths ...string) {
+	for _, p := range paths {
+		f.files[filepath.Clean(filepath.FromSlash(p))] = true
+	}
+}
+
+// readDir lists a folder of the pretend disk.
+func (f *folderFixture) readDir(dir string) ([]fs.DirEntry, error) {
+	dir = filepath.Clean(dir)
+	seen := map[string]bool{}
+	var out []fs.DirEntry
+	for p := range f.files {
+		rel, err := filepath.Rel(dir, p)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		parts := strings.SplitN(rel, string(filepath.Separator), 2)
+		if seen[parts[0]] {
+			continue
+		}
+		seen[parts[0]] = true
+		out = append(out, fakeEntry{name: parts[0], dir: len(parts) > 1})
+	}
+	if len(out) == 0 {
+		return nil, fs.ErrNotExist
+	}
+	return out, nil
+}
+
+type fakeEntry struct {
+	name string
+	dir  bool
+}
+
+func (e fakeEntry) Name() string { return e.name }
+func (e fakeEntry) IsDir() bool  { return e.dir }
+func (e fakeEntry) Type() fs.FileMode {
+	if e.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (e fakeEntry) Info() (fs.FileInfo, error) { return nil, fs.ErrNotExist }
+
+// show adds a series with one episode row per file (season 1, episodes 1..n), the files on
+// the pretend disk.
 func (f *folderFixture) show(title string, files ...string) int64 {
 	f.t.Helper()
 	f.n++
@@ -57,6 +108,7 @@ func (f *folderFixture) show(title string, files ...string) int64 {
 			f.t.Fatal(err)
 		}
 	}
+	f.onDisk(files...)
 	return id
 }
 
@@ -146,9 +198,10 @@ func TestShowFolderOfIgnoresMisplacedFiles(t *testing.T) {
 		t.Errorf("ExistingFolderName = %q, want none", got)
 	}
 	// Once the misplaced files have been moved away by hand they no longer count against
-	// the show; files in its own folder are never checked on disk.
+	// the show; files in its own folder are never checked on disk. A show whose every file
+	// was such a leftover isn't a new show, though: refused until a rescan finds them.
 	f.svc.fileGone = func(p string) bool { return strings.Contains(p, filepath.FromSlash("/tv/S")) }
-	if info := f.svc.ShowFolderOf(ctx, lost); info.Unknown || info.Path != "" {
+	if info := f.svc.ShowFolderOf(ctx, lost); !info.Unknown || info.Path != "" {
 		t.Errorf("misplaced files gone: ShowFolderOf = %+v", info)
 	}
 	if info := f.svc.ShowFolderOf(ctx, id); info.Path != filepath.FromSlash("/tv/Pechino Express") || info.Total != 2 {
@@ -195,6 +248,38 @@ func TestShowFolderBelowAFolderInsideTheTVFolder(t *testing.T) {
 	}
 	if got := f.svc.ExistingFolderName(ctx, fargo); got != "Fargo" {
 		t.Errorf("ExistingFolderName = %q", got)
+	}
+}
+
+// The folder above a season-named folder is the show's only when it holds this show and
+// nothing else on disk: another show's folder (tracked or not), a season folder without
+// any of the show's files, or loose videos that aren't the show's mean it isn't.
+func TestShowFolderCorrectionNeedsTheFolderToHoldOnlyTheShow(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name   string
+		files  []string
+		disk   []string
+		wantOK bool
+	}{
+		{"just the show", []string{"/tv/Pechino Express/S12/a - S12E01.mkv", "/tv/Pechino Express/S13/a - S13E01.mkv"}, nil, true},
+		{"with its extras", []string{"/tv/Pechino Express/S12/a - S12E01.mkv"}, []string{"/tv/Pechino Express/Extras/making of.mkv"}, true},
+		{"category with an untracked show", []string{"/tv/Kids/S01/a - S01E01.mkv"}, []string{"/tv/Kids/Bluey/Season 1/Bluey - S01E01.mkv"}, false},
+		{"franchise with an untracked show", []string{"/tv/Star Trek/S01/a - S01E01.mkv"},
+			[]string{"/tv/Star Trek/Star Trek The Next Generation/Season 1/TNG - S01E01.mkv"}, false},
+		{"category with an untracked flat show", []string{"/tv/Kids/S01/a - S01E01.mkv"}, []string{"/tv/Kids/Bluey/Bluey - S01E01.mkv"}, false},
+		{"a season folder none of its files are in", []string{"/tv/Pechino Express/S12/a - S12E01.mkv"}, []string{"/tv/Pechino Express/S11/a - S11E01.mkv"}, false},
+		{"a loose video that isn't its", []string{"/tv/Pechino Express/S12/a - S12E01.mkv"}, []string{"/tv/Pechino Express/other.mkv"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFolderFixture(t, "/tv")
+			f.onDisk(c.disk...)
+			id := f.show("Show", c.files...)
+			info := f.svc.ShowFolderOf(ctx, id)
+			if info.Unknown == c.wantOK {
+				t.Errorf("ShowFolderOf = %+v, want ok=%v", info, c.wantOK)
+			}
+		})
 	}
 }
 
@@ -251,7 +336,8 @@ func TestShowFolderOfSeveralTVFolders(t *testing.T) {
 	svc := NewService(st.DB(), nil, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	svc.SetRootFunc(func() string { return tv })
 	svc.SetFolders(folders)
-	f := &folderFixture{t: t, db: st.DB(), svc: svc}
+	f := &folderFixture{t: t, db: st.DB(), svc: svc, files: map[string]bool{}}
+	svc.readDir = f.readDir
 	id := f.show("Frieren", filepath.ToSlash(filepath.Join(animeDir, "Frieren", "S01", "Frieren - S01E01.mkv")))
 	info := svc.ShowFolderOf(ctx, id)
 	if info.Unknown || info.Path != filepath.Join(animeDir, "Frieren") {

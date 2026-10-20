@@ -1443,7 +1443,7 @@ func (im *Importer) episodeTargetIn(seriesFolder, title string, year, season, ep
 	canonical := im.seasonFolderName(sn.SeasonFolder, season, t, year)
 	seasonSub := canonical
 	if !canonicalSeason {
-		seasonSub = seasonDirNameBy(seriesDir, season, canonical, im.seasonNumberOf)
+		seasonSub = seasonDirNameBy(seriesDir, season, canonical, parseSeasonDir)
 	}
 	return filepath.Join(seriesDir, seasonSub, clean(file)+ext)
 }
@@ -1545,10 +1545,32 @@ func (im *Importer) SeasonDirIn(showDir, title string, year, season int) string 
 	return seasonDirNameBy(showDir, season, canonical, im.seasonNumberOf)
 }
 
-// parseSeasonDir extracts a season number from a directory name ("Specials" → 0); see
-// SeasonFolderNumber for the names it knows.
+// reSeasonDir matches "Season 1", "Season 01", "S1", "S01" (any zero-padding): the season
+// folders an import joins, as v0.3.1 had them.
+var reSeasonDir = regexp.MustCompile(`(?i)^s(?:eason)?\s*0*(\d+)$`)
+
+// reSeasonDirPunct is "Season.01", "Season_01", "Season-01": the same, spelt with
+// punctuation, which an import also joins rather than making a "Season 1" beside it.
+var reSeasonDirPunct = regexp.MustCompile(`(?i)^season[._-]0*(\d+)$`)
+
+// parseSeasonDir extracts a season number from a directory name ("Specials" → 0), for
+// choosing the existing season folder an import joins. Deliberately narrow: a folder with a
+// tail ("Season 1 (Extras)", "Series 1 (Behind the scenes)") or in another language is
+// left alone — the wider SeasonFolderNumber only recognises season folders when working
+// out a show's folder.
 func parseSeasonDir(name string) (int, bool) {
-	return SeasonFolderNumber(name)
+	name = strings.TrimSpace(name)
+	if strings.EqualFold(name, "specials") {
+		return 0, true
+	}
+	for _, re := range []*regexp.Regexp{reSeasonDir, reSeasonDirPunct} {
+		if m := re.FindStringSubmatch(name); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				return n, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // MovieTarget builds the library path for a movie file using the configured

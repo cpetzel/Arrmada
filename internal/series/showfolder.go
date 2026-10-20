@@ -96,36 +96,134 @@ func rootOf(roots []string, path string) (string, bool) {
 	return best, best != ""
 }
 
-// fileFolder is the show folder one episode file gives (see the top of this file): ok is
-// false for a leftover of #56 — a file whose folder is named like a season, or is the TV
-// folder, with no sound folder one season folder up — and why says what was found.
-func (s *Service) fileFolder(roots []string, path string) (dir string, ok bool, why string) {
+// fileVerdict is what one episode file says about its show's folder.
+type fileVerdict struct {
+	dir string // the show's folder (ok)
+	ok  bool
+	// leftover: a #56 leftover — the file's folder is named like a season (or is the TV
+	// folder) and there's no folder one season folder up that could be the show's.
+	leftover bool
+	why      string
+}
+
+// fileFolder is the show folder one episode file gives (see the top of this file). The
+// folder above a season-named folder is used only when vouch says so: it must hold this
+// show and nothing else (onlyThisShow), or a category like <TV>/Kids/S01 next to an
+// untracked <TV>/Kids/Bluey would become the show's folder. nil vouch never corrects.
+func (s *Service) fileFolder(roots []string, path string, vouch func(up string) bool) fileVerdict {
 	path = filepath.Clean(path)
 	f := v031Folder(path)
 	root, inRoot := rootOf(roots, path)
 	atRoot := inRoot && !libfolders.StrictlyUnder(f, root)
 	if !s.seasonLike(filepath.Base(f)) && !atRoot {
-		return f, true, "" // v0.3.1's own answer
+		return fileVerdict{dir: f, ok: true} // v0.3.1's own answer
 	}
 	parent := filepath.Dir(path)
 	if s.seasonLike(filepath.Base(parent)) {
 		up := filepath.Dir(parent)
 		if inRoot && filepath.Clean(filepath.Dir(up)) == root && !s.seasonLike(filepath.Base(up)) {
-			return up, true, ""
+			if vouch != nil && vouch(up) {
+				return fileVerdict{dir: up, ok: true}
+			}
+			return fileVerdict{why: fmt.Sprintf("%s holds more than this show's season folders", up)}
 		}
 	}
 	if atRoot {
-		return "", false, fmt.Sprintf("%s sits loose in the TV folder %s", path, root)
+		return fileVerdict{leftover: true, why: fmt.Sprintf("%s sits loose in the TV folder %s", path, root)}
 	}
-	return "", false, fmt.Sprintf("%s is named like a season folder", f)
+	return fileVerdict{leftover: true, why: fmt.Sprintf("%s is named like a season folder", f)}
 }
 
-// ShowFolderFor is the show folder the episode file at path is in: the folder fileFolder
-// gives it, else the one v0.3.1 read. For Plex scans, deletes and Move to folder.
-func (s *Service) ShowFolderFor(path string) string {
-	if dir, ok, _ := s.fileFolder(s.libRoots(), path); ok {
-		return dir
+// onlyThisShow reports whether dir, on disk, holds this show and nothing else: every
+// folder in it holding videos (at any depth) is a season folder holding some of the show's
+// recorded files (tracked) or an extras folder, and every video right in it is one of the
+// show's. Another show's folder — tracked or not — or a folder Arrmada can't place means
+// no. A folder that can't be read means no.
+func (s *Service) onlyThisShow(dir string, tracked map[string]bool) bool {
+	entries, err := s.readDirFn()(dir)
+	if err != nil {
+		return false
 	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || library.SkipScanDir(name) {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if !e.IsDir() {
+			if library.IsVideoFile(name) && !tracked[p] {
+				return false
+			}
+			continue
+		}
+		if !s.holdsVideo(p, 8) {
+			continue
+		}
+		if s.seasonLike(name) {
+			if holdsTracked(p, tracked) {
+				continue
+			}
+			return false
+		}
+		if library.LooksLikeSeasonFolder(name) {
+			continue // Extras, Featurettes…
+		}
+		return false
+	}
+	return true
+}
+
+// holdsTracked reports whether any of the paths in tracked is inside dir.
+func holdsTracked(dir string, tracked map[string]bool) bool {
+	for p := range tracked {
+		if libfolders.StrictlyUnder(p, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// readDirFn is how folders are listed: os.ReadDir, or a test's stand-in.
+func (s *Service) readDirFn() func(string) ([]fs.DirEntry, error) {
+	if s.readDir != nil {
+		return s.readDir
+	}
+	return os.ReadDir
+}
+
+// holdsVideo reports whether dir holds a video file within depth folders.
+func (s *Service) holdsVideo(dir string, depth int) bool {
+	entries, err := s.readDirFn()(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			if library.IsVideoFile(e.Name()) {
+				return true
+			}
+			continue
+		}
+		if depth > 1 && !library.SkipScanDir(e.Name()) && s.holdsVideo(filepath.Join(dir, e.Name()), depth-1) {
+			return true
+		}
+	}
+	return false
+}
+
+// trackedSet is a show's recorded files, cleaned.
+func trackedSet(paths []string) map[string]bool {
+	out := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		out[filepath.Clean(p)] = true
+	}
+	return out
+}
+
+// ShowFolderFor is the folder v0.3.1 read as the show's from the episode file at path
+// ("" for a file loose in a TV folder). For Plex scans and deletes, which have no show to
+// check a corrected folder against.
+func (s *Service) ShowFolderFor(path string) string {
 	f := v031Folder(path)
 	if root, inRoot := rootOf(s.libRoots(), path); inRoot && !libfolders.StrictlyUnder(f, root) {
 		return "" // loose in a TV folder
@@ -133,10 +231,21 @@ func (s *Service) ShowFolderFor(path string) string {
 	return f
 }
 
-// ShowFoldersOf answers, for each episode file of show seriesID, the show folder it is in
-// (ShowFolderFor). For Move to folder, which moves a show's folders whole.
-func (s *Service) ShowFoldersOf(context.Context, int64) func(path string) string {
-	return s.ShowFolderFor
+// ShowFoldersOf answers, for each episode file of show seriesID, the show folder it is in:
+// its folder as ShowFolderOf reads it (the folder above a season-named folder only when
+// that holds this show alone), else v0.3.1's (ShowFolderFor). For Move to folder, which
+// moves a show's folders whole.
+func (s *Service) ShowFoldersOf(ctx context.Context, seriesID int64) func(path string) string {
+	paths, _ := s.repo.EpisodeFilePaths(ctx, seriesID)
+	tracked := trackedSet(paths)
+	roots := s.libRoots()
+	vouch := func(up string) bool { return s.onlyThisShow(up, tracked) }
+	return func(path string) string {
+		if v := s.fileFolder(roots, path, vouch); v.ok {
+			return v.dir
+		}
+		return s.ShowFolderFor(path)
+	}
 }
 
 // ShowFolderInfo is where a show lives on disk, as far as its episode files tell.
@@ -168,6 +277,9 @@ type folderJudge struct {
 	roots  []string
 	others func(dir string) []int64
 	names  func(ids []int64) string
+	// disk: folders may be looked at on disk (onlyThisShow); without it the folder above a
+	// season-named folder is never vouched for.
+	disk bool
 }
 
 // folderVerdict is a folder judged: why it can't be a show's own ("" when it can) and the
@@ -208,6 +320,7 @@ func (s *Service) dbJudge(ctx context.Context, seriesID int64) *folderJudge {
 		roots:  s.libRoots(),
 		others: func(dir string) []int64 { return s.repo.OtherSeriesUnder(ctx, seriesID, dir, 3) },
 		names:  func(ids []int64) string { return s.describeSeries(ctx, ids) },
+		disk:   true,
 	}
 }
 
@@ -242,18 +355,29 @@ func (s *Service) showFolderFrom(paths []string, j *folderJudge) ShowFolderInfo 
 		return info
 	}
 	byKey := map[string]map[string]int{} // import key → folder → files
-	var whys []string
+	var whys, unsure []string
+	tracked := trackedSet(paths)
+	vouch := func(up string) bool { return j.disk && s.onlyThisShow(up, tracked) }
 	for _, p := range paths {
-		dir, ok, why := s.fileFolder(j.roots, p)
-		if !ok {
-			whys = append(whys, why)
+		v := s.fileFolder(j.roots, p, vouch)
+		if !v.ok {
+			whys = append(whys, v.why)
+			if !v.leftover {
+				unsure = append(unsure, v.why)
+			}
 			continue
 		}
-		k := importKey(j.roots, dir)
+		k := importKey(j.roots, v.dir)
 		if byKey[k] == nil {
 			byKey[k] = map[string]int{}
 		}
-		byKey[k][dir]++
+		byKey[k][v.dir]++
+	}
+	// A season-named folder whose folder above can't be vouched for: nothing is guessed,
+	// whatever the other files say.
+	if len(unsure) > 0 {
+		info.Unknown, info.Why = true, firstDistinct(unsure)
+		return info
 	}
 	switch len(byKey) {
 	case 0:
@@ -298,7 +422,13 @@ func (s *Service) ShowFolderOf(ctx context.Context, seriesID int64) ShowFolderIn
 	if err != nil {
 		return ShowFolderInfo{Unknown: true, Why: "the show's files couldn't be read: " + err.Error()}
 	}
-	return s.showFolderFrom(s.dropGoneMisplaced(paths, s.libRoots()), s.dbJudge(ctx, seriesID))
+	kept := s.dropGoneMisplaced(paths, s.libRoots())
+	if len(paths) > 0 && len(kept) == 0 {
+		// Every file it had was a #56 leftover that's gone now — moved back by hand, deleted,
+		// or on a share that's down. Where the show lives isn't known; it isn't a new show.
+		return ShowFolderInfo{Total: len(paths), Unknown: true, Why: "the files it had are no longer where they were recorded; rescan it once they're back in its folder"}
+	}
+	return s.showFolderFrom(kept, s.dbJudge(ctx, seriesID))
 }
 
 // dropGoneMisplaced leaves out leftovers of #56 that are no longer there — moved back by
@@ -315,7 +445,7 @@ func (s *Service) dropGoneMisplaced(paths []string, roots []string) []string {
 	}
 	out := paths[:0:0]
 	for _, p := range paths {
-		if _, ok, _ := s.fileFolder(roots, p); !ok && gone(p) {
+		if v := s.fileFolder(roots, p, nil); v.leftover && gone(p) {
 			continue
 		}
 		out = append(out, p)
@@ -334,8 +464,8 @@ type MisplacedFile struct {
 func (s *Service) misplacedFrom(paths, roots []string) []MisplacedFile {
 	var out []MisplacedFile
 	for _, p := range paths {
-		if _, ok, why := s.fileFolder(roots, p); !ok {
-			out = append(out, MisplacedFile{Path: p, Why: why})
+		if v := s.fileFolder(roots, p, nil); v.leftover {
+			out = append(out, MisplacedFile{Path: p, Why: v.why})
 		}
 	}
 	return out
@@ -383,7 +513,7 @@ func (s *Service) MisplacedShows(ctx context.Context) ([]MisplacedShow, error) {
 		}
 		noFolder := true
 		for _, p := range paths {
-			if _, ok, _ := s.fileFolder(roots, p); ok {
+			if v := s.fileFolder(roots, p, nil); !v.leftover {
 				noFolder = false
 				break
 			}

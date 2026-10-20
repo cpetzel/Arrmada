@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -79,6 +80,9 @@ type Service struct {
 	// fileGone reports a recorded file that's no longer on disk (nil = os.Stat says
 	// so). Tests that record paths without making files swap it.
 	fileGone func(path string) bool
+	// readDir lists a folder (nil = os.ReadDir). Tests that record paths without making
+	// files swap it.
+	readDir func(dir string) ([]fs.DirEntry, error)
 }
 
 // SetLibraryChanged installs who hears that a show folder's files changed through a
