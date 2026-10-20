@@ -131,6 +131,9 @@ type ShowFolderInfo struct {
 	// FileDir is the first recorded file's own folder, for a #56-shaped show: what Plex is
 	// pointed at instead of a folder above it.
 	FileDir string `json:"file_dir,omitempty"`
+	// ownDir: FileDir is also the folder v0.3.1 read for the show — the file sits right in
+	// it (not in a "Season N" folder below it).
+	ownDir bool
 }
 
 // msg56 is what a refused #56-shaped show says.
@@ -176,6 +179,7 @@ func (s *Service) ShowFolderOf(ctx context.Context, seriesID int64) ShowFolderIn
 	dir := filepath.Dir(filepath.Clean(first))
 	if root, ok := rootOf(roots, first); ok && libfolders.StrictlyUnder(dir, root) {
 		info.FileDir = dir
+		info.ownDir = filepath.Clean(f) == dir
 	}
 	return info
 }

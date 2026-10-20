@@ -1751,11 +1751,16 @@ func (s *Service) ExistingFolderName(ctx context.Context, seriesID int64) string
 }
 
 // FolderPath is the full path of the show's library folder (ShowFolderOf), for finding
-// the show on the media server by its folder. "" when the show has no files, or is
-// #56-shaped: its folder can't be told, so the server is asked by id only — never by the
-// folder above its files, which may be a category or another show's.
+// the show on the media server by its folder. For a #56-shaped show it is the first
+// file's own folder when that is the folder v0.3.1 read too (the file sits right in it),
+// and "" otherwise: the server is then asked by id only — never by a folder above the
+// files, which may be a category or another show's. "" when the show has no files.
 func (s *Service) FolderPath(ctx context.Context, seriesID int64) string {
-	return s.ShowFolderOf(ctx, seriesID).Path
+	info := s.ShowFolderOf(ctx, seriesID)
+	if info.Path == "" && info.ownDir {
+		return info.FileDir
+	}
+	return info.Path
 }
 
 // TVRootOf is the TV folder holding path ("" when none does).

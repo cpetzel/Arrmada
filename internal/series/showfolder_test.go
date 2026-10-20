@@ -90,17 +90,22 @@ func TestShowFolderOfIsV031sAnswer(t *testing.T) {
 
 // When v0.3.1's answer is the #56 mistake — a folder named like a season (S01, Stagione 1,
 // Series 1, a season template's name), or the TV folder itself — the show's folder is
-// unknown: no folder is guessed, above the files least of all. FolderPath is empty (the
-// media server is asked by id); FileDir, the first file's own folder, tells the TV folder.
+// unknown: no folder is guessed, above the files least of all. FileDir is the first file's
+// own folder; FolderPath (for the media server) is that folder only when v0.3.1 read it
+// too, and empty otherwise — never a folder above the files.
 func TestShowFolderOf56Shapes(t *testing.T) {
 	ctx := context.Background()
-	for _, c := range []struct{ name, file, fileDir string }{
-		{"S12", "/tv/Pechino Express/S12/Pechino Express - S12E01.mkv", "/tv/Pechino Express/S12"},
-		{"Stagione", "/tv/Gomorra/Stagione 1/Gomorra - S01E01.mkv", "/tv/Gomorra/Stagione 1"},
-		{"Series", "/tv/Taskmaster/Series 1/Taskmaster - S01E01.mkv", "/tv/Taskmaster/Series 1"},
-		{"in a category", "/tv/Kids/S01/Show - S01E01.mkv", "/tv/Kids/S01"},
-		{"a #56 leftover", "/tv/S13/Season 12/Show - S12E01.mkv", "/tv/S13/Season 12"},
-		{"loose in the TV folder", "/tv/Show - S01E01.mkv", ""},
+	for _, c := range []struct {
+		name, file, fileDir string
+		folderPath          bool // FolderPath is FileDir: v0.3.1 read that folder too
+	}{
+		{"S12", "/tv/Pechino Express/S12/Pechino Express - S12E01.mkv", "/tv/Pechino Express/S12", true},
+		{"Stagione", "/tv/Gomorra/Stagione 1/Gomorra - S01E01.mkv", "/tv/Gomorra/Stagione 1", true},
+		{"Series", "/tv/Taskmaster/Series 1/Taskmaster - S01E01.mkv", "/tv/Taskmaster/Series 1", true},
+		{"in a category", "/tv/Kids/S01/Show - S01E01.mkv", "/tv/Kids/S01", true},
+		{"a #56 leftover", "/tv/S13/Season 12/Show - S12E01.mkv", "/tv/S13/Season 12", false},
+		{"a show named like a season", "/tv/Season 1/Season 01/Season 1 - S01E01.mkv", "/tv/Season 1/Season 01", false},
+		{"loose in the TV folder", "/tv/Show - S01E01.mkv", "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFolderFixture(t, "/tv")
@@ -119,8 +124,12 @@ func TestShowFolderOf56Shapes(t *testing.T) {
 			if info.FileDir != want {
 				t.Errorf("FileDir = %q, want %q", info.FileDir, want)
 			}
-			if got := f.svc.FolderPath(ctx, id); got != "" {
-				t.Errorf("FolderPath = %q, want none", got)
+			wantFP := ""
+			if c.folderPath {
+				wantFP = want
+			}
+			if got := f.svc.FolderPath(ctx, id); got != wantFP {
+				t.Errorf("FolderPath = %q, want %q", got, wantFP)
 			}
 			if got := f.svc.ExistingFolderName(ctx, id); got != "" {
 				t.Errorf("ExistingFolderName = %q", got)
