@@ -376,6 +376,10 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Episode thumbnails from TVDB load again** (#76). TVDB can give an episode image as a path
+  rather than a full address, and the browser then asked Arrmada for it ("Page not found").
+  New and refreshed episodes get TVDB's artwork address, and the update fixes the ones
+  already stored.
 - **Shows with `S01`-style season folders work fully again** (#56). A show stored as
   `<TV folder>/Show/S12/` (an `S{season00}` season folder template, `Stagione 1`, `Saison 1`…)
   is read as living in `Show`, as v0.3.2 and v0.3.3 couldn't: new episodes go into the

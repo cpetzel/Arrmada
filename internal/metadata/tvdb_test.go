@@ -236,3 +236,26 @@ func itoaN(n int) string {
 	}
 	return string(b)
 }
+
+// TVDB can give an episode image as a path; it must reach the browser as a full address on
+// TVDB's artwork host, not resolve against Arrmada's own (#76).
+func TestTVDBEpisodeImagesAreFullAddresses(t *testing.T) {
+	for in, want := range map[string]string{
+		"/banners/v4/episode/9431113/screencap/6acb1abcc060d.jpg": "https://artworks.thetvdb.com/banners/v4/episode/9431113/screencap/6acb1abcc060d.jpg",
+		"banners/episodes/1/2.jpg":                                "https://artworks.thetvdb.com/banners/episodes/1/2.jpg",
+		"//artworks.thetvdb.com/banners/a.jpg":                    "https://artworks.thetvdb.com/banners/a.jpg",
+		"https://artworks.thetvdb.com/banners/a.jpg":              "https://artworks.thetvdb.com/banners/a.jpg",
+		"http://example.com/a.jpg":                                "http://example.com/a.jpg",
+		"img1":                                                    "img1",
+		"":                                                        "",
+		"  ":                                                      "",
+	} {
+		if got := tvdbArtworkURL(in); got != want {
+			t.Errorf("tvdbArtworkURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+	got := groupTVDB([]tvdbEpisode{{SeasonNumber: 1, Number: 1, Image: "/banners/v4/episode/1/a.jpg"}})
+	if s := got[0].Episodes[0].StillURL; s != "https://artworks.thetvdb.com/banners/v4/episode/1/a.jpg" {
+		t.Fatalf("StillURL = %q", s)
+	}
+}

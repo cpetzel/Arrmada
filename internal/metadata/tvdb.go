@@ -24,7 +24,10 @@ import (
 // simply unavailable and numbering falls back to TVmaze, then TMDB.
 
 const (
-	tvdbBase        = "https://api4.thetvdb.com/v4"
+	tvdbBase = "https://api4.thetvdb.com/v4"
+	// tvdbArtworkBase is where TVDB's artwork lives. Episode images can come back as a
+	// path ("/banners/v4/episode/…") rather than a full address (#76).
+	tvdbArtworkBase = "https://artworks.thetvdb.com"
 	tvdbMinInterval = 200 * time.Millisecond
 	tvdbTimeout     = 20 * time.Second
 	tvdbMaxPages    = 20 // a very long anime tops out well under this at 500/page
@@ -136,6 +139,22 @@ func (t *TVDB) allEpisodes(ctx context.Context, tvdbID int) ([]tvdbEpisode, erro
 	return out, nil
 }
 
+// tvdbArtworkURL makes an image TVDB gave as an artwork path ("/banners/…" or
+// "banners/…") a full address on TVDB's artwork host. Left as a path, the browser asks
+// Arrmada for it (#76). Anything else is kept as it is.
+func tvdbArtworkURL(img string) string {
+	img = strings.TrimSpace(img)
+	switch {
+	case strings.HasPrefix(img, "//"):
+		return "https:" + img
+	case strings.HasPrefix(img, "/banners/"):
+		return tvdbArtworkBase + img
+	case strings.HasPrefix(img, "banners/"):
+		return tvdbArtworkBase + "/" + img
+	}
+	return img
+}
+
 // groupTVDB turns a flat episode list into seasons, carrying the absolute number and
 // keeping specials (season 0), matching what TMDB and TVmaze return.
 func groupTVDB(eps []tvdbEpisode) []SeasonDetails {
@@ -152,7 +171,7 @@ func groupTVDB(eps []tvdbEpisode) []SeasonDetails {
 			Overview:       e.Overview,
 			AirDate:        e.Aired,
 			Runtime:        e.Runtime,
-			StillURL:       e.Image,
+			StillURL:       tvdbArtworkURL(e.Image),
 			AbsoluteNumber: e.AbsoluteNumber,
 		})
 	}
