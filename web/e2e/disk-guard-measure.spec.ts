@@ -166,4 +166,22 @@ test.describe("admin", () => {
     await expect(card.getByText("Saved ✓")).toBeVisible();
     expect(api.callsTo("PUT", "/api/v1/settings").map((c) => c.body)).toEqual([{ downloads_disk_guard_pause_free_gb: "150" }]);
   });
+
+  // GitHub #70: with two download clients on two volumes, each volume names the client
+  // saving onto it, so it's plain which client's downloads a full drive holds.
+  test("names the download client saving onto each watched volume", async ({ page, api }) => {
+    await answer(page, api, [
+      { method: "GET", path: "/api/v1/downloads/disk-guard", respond: () => ({
+        ...onArray, path: "/download", measured_path: "/download", used_pct: 90, holding: 1, shared_with: [], shared_with_library: false,
+        volumes: [
+          { path: "/download", measurable: true, used_pct: 90, measured_path: "/download", override: false, total_bytes: 8 * TB, free_bytes: TB, clients: ["qBittorrent"] },
+          { path: "/downloads", measurable: true, used_pct: 40, measured_path: "/downloads", override: false, total_bytes: 8 * TB, free_bytes: 5 * TB, clients: ["Second qBittorrent", "SABnzbd"] },
+        ],
+      }) },
+    ]);
+    await page.goto("/settings/downloads#disk-guard");
+    const card = page.locator("#disk-guard");
+    await expect(card.getByText("(qBittorrent) — 90.0% full")).toBeVisible();
+    await expect(card.getByText("(Second qBittorrent, SABnzbd) — 40.0% full")).toBeVisible();
+  });
 });

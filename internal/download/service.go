@@ -32,6 +32,8 @@ type Service struct {
 	snap snapshotCache
 	// transports caches which transports have a client to send to (HasTransport).
 	transports transportCache
+	// clientFolders caches what each client says about where it saves (clientfolders.go).
+	clientFolders clientFoldersCache
 	// ownNets is the networks Arrmada's container is on (qbitauth.go); nil reads its
 	// interfaces. lookupHost resolves qBittorrent's host; nil uses DNS. Tests set them.
 	ownNets    func() []*net.IPNet

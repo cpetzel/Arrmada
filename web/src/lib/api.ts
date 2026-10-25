@@ -1108,6 +1108,8 @@ export interface DiskGuardVolume {
   total_bytes: number;
   free_bytes: number;
   zfs?: boolean;
+  /** The download clients saving onto this folder, with more than one client (GitHub #70). */
+  clients?: string[];
 }
 
 export interface DiskGuardStatus {
@@ -1136,7 +1138,7 @@ export interface DiskGuardStatus {
   /** The free-space limit in bytes (0 = off), and the free space needed to resume. */
   pause_free_bytes?: number;
   resume_free_bytes?: number;
-  /** Each downloads folder, when there's more than one. */
+  /** Each downloads folder (and, with several clients, each client's own), when there's more than one. */
   volumes?: DiskGuardVolume[];
   // The library folders (the ones picked in Settings → Library) on the same drive as
   // the one the guard reads. shared_with_library is just shared_with.length > 0.

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/tristenlammi/arrmada/internal/config"
 	"github.com/tristenlammi/arrmada/internal/libroots"
 	"github.com/tristenlammi/arrmada/internal/pathguard"
 )
@@ -81,8 +83,70 @@ func (a *api) checkImportPath(ctx context.Context, p string) (string, error) {
 	if libroots.InDataDir(clean, a.deps.Config.DataDir) {
 		return "", errImportPathDataDir
 	}
-	if !pathguard.Within(clean, a.importRoots(ctx)...) {
+	if !pathguard.Within(clean, a.importRoots(ctx)...) && !pathguard.Within(clean, a.clientImportRoots(ctx)...) {
 		return "", errImportPathOutside
 	}
 	return clean, nil
+}
+
+// clientImportRoots is each folder a configured download client saves into, as Arrmada
+// sees it (GitHub #70). A second client on a volume of its own saves outside every
+// downloads folder Arrmada was given — its own downloads folder, mapped into the
+// container as, say, /downloads beside the first client's /download — and its finished
+// downloads must still be importable from there. Only where an import may read from
+// widens: where the files go in the library is decided exactly as before.
+//
+// Each folder must pass usableClientRoot, since it's the client's word rather than a
+// folder someone picked in Arrmada. Asked only for a path that isn't inside the other
+// roots, so the clients are asked nothing for the usual import from the Downloads folder.
+func (a *api) clientImportRoots(ctx context.Context) []string {
+	if a.deps.Downloads == nil {
+		return nil
+	}
+	var folders []string
+	for _, r := range a.roots().DownloadFolders(ctx) {
+		folders = append(folders, r.Path)
+	}
+	var out []string
+	for _, f := range a.deps.Downloads.ClientFolders(ctx, folders) {
+		if usableClientRoot(f.Path, a.deps.Config) {
+			out = append(out, f.Path)
+		}
+	}
+	return out
+}
+
+// systemDirs are the container's own folders: no download client's folder is one of them
+// or inside one, whatever it reports.
+var systemDirs = []string{"/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/proc", "/root", "/run", "/sbin", "/sys", "/usr", "/var"}
+
+// usableClientRoot reports whether a folder a download client says it saves into may be
+// read by manual import: a full path to a folder that's there (symlinks followed), not a
+// whole filesystem, not Arrmada's data folder, inside it or holding it, not the managed
+// library volume or a folder holding it (that isn't an import root either), and not one
+// of the container's system folders.
+func usableClientRoot(p string, cfg config.Config) bool {
+	if strings.TrimSpace(p) == "" || !filepath.IsAbs(p) {
+		return false
+	}
+	rp, err := pathguard.Resolve(p)
+	if err != nil {
+		return false
+	}
+	if st, err := os.Stat(rp); err != nil || !st.IsDir() {
+		return false
+	}
+	if libroots.UnderDataDir(rp, cfg.DataDir) {
+		return false
+	}
+	if lib := strings.TrimSpace(cfg.LibraryDir); lib != "" && pathguard.Under(lib, rp) {
+		return false
+	}
+	slashed := filepath.ToSlash(rp)
+	for _, d := range systemDirs {
+		if slashed == d || strings.HasPrefix(slashed, d+"/") {
+			return false
+		}
+	}
+	return true
 }
