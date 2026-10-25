@@ -74,8 +74,8 @@ func (h *lifecycleHarness) seedTorrent(hash, name string, uploadedGB int64, seed
 	})
 }
 
-// seedGrab is the seed rule a test grab is recorded with.
-type seedGrab struct {
+// grabRule is the seed rule a test grab is recorded with.
+type grabRule struct {
 	source  string
 	enabled bool
 	ratio   float64
@@ -83,7 +83,7 @@ type seedGrab struct {
 }
 
 // grabWith records a series grab with the given seed rule and status.
-func (h *lifecycleHarness) grabWith(t *testing.T, title, hash, status string, r seedGrab) int64 {
+func (h *lifecycleHarness) grabWith(t *testing.T, title, hash, status string, r grabRule) int64 {
 	t.Helper()
 	res, err := h.c.db.Exec(`INSERT INTO grabs (movie_id, title, indexer, stall_minutes, media_type, info_hash, seed_enabled, seed_ratio, seed_hours, seed_source, status)
 		VALUES (?, ?, 'Fake', 60, 'series', ?, ?, ?, ?, ?, ?)`, h.seriesID, title, hash, boolToInt(r.enabled), r.ratio, r.hours, r.source, status)
@@ -99,8 +99,8 @@ func (h *lifecycleHarness) setGlobal(d SeedDefault) {
 }
 
 var (
-	onGlobal = seedGrab{source: seedRecGlobal, enabled: true}
-	forever  = seedGrab{source: seedRecNone, enabled: true}
+	onGlobal = grabRule{source: seedRecGlobal, enabled: true}
+	forever  = grabRule{source: seedRecNone, enabled: true}
 )
 
 // Setting a global goal never reaches what was set to seed forever, or a grab from before
@@ -113,7 +113,7 @@ func TestGlobalSeedGoalIsNeverRetroactive(t *testing.T) {
 	h.grabWith(t, chosen, hashFor(chosen), grabStatusImported, forever)
 	h.seedTorrent(hashFor(chosen), chosen, 5, 1000)
 	legacy := "Show.S01.1080p.WEB-DL-BBB"
-	h.grabWith(t, legacy, hashFor(legacy), grabStatusImported, seedGrab{enabled: true}) // seed_source ''
+	h.grabWith(t, legacy, hashFor(legacy), grabStatusImported, grabRule{enabled: true}) // seed_source ''
 	h.seedTorrent(hashFor(legacy), legacy, 5, 1000)
 
 	h.c.ManageSeeding(h.ctx)
@@ -162,7 +162,7 @@ func TestGlobalSeedGoalEndsAGrabRecordedOnIt(t *testing.T) {
 func TestSeedCleanupNeverMatchesAnotherHashByName(t *testing.T) {
 	h := newLifecycleHarness(t)
 	name := "Show.S01.1080p.WEB-DL-GRP"
-	h.grabWith(t, name, hashFor(name), grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+	h.grabWith(t, name, hashFor(name), grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
 	other := hashFor("someone else's copy")
 	h.seedTorrent(other, name, 5, 1000)
 
@@ -185,7 +185,7 @@ func TestSeedCleanupNeverMatchesAnotherHashByName(t *testing.T) {
 func TestSeedCleanupRemovesOneTorrentPerGrab(t *testing.T) {
 	h := newLifecycleHarness(t)
 	name := "Show.S01.1080p.WEB-DL-GRP"
-	h.grabWith(t, name, "", grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+	h.grabWith(t, name, "", grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
 	h.seedTorrent(hashFor("copy one"), name, 5, 1000)
 	h.seedTorrent(hashFor("copy two"), name+".mkv", 5, 1000) // the same name once normalized
 
@@ -200,7 +200,7 @@ func TestSeedCleanupIsCappedPerPass(t *testing.T) {
 	h := newLifecycleHarness(t)
 	for i := 0; i < maxSeedRemovalsPerPass+3; i++ {
 		name := fmt.Sprintf("Show.S01E%02d.1080p.WEB-DL-GRP", i+1)
-		h.grabWith(t, name, hashFor(name), grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+		h.grabWith(t, name, hashFor(name), grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
 		h.seedTorrent(hashFor(name), name, 5, 1000)
 	}
 	rows, err := h.c.SeedCheckQueue(h.ctx, nil)
@@ -232,7 +232,7 @@ func TestSeedCleanupKeepsATorrentWithUnmatchedFiles(t *testing.T) {
 	h := newLifecycleHarness(t)
 	name := "Show.S01.1080p.WEB-DL-GRP"
 	hash := hashFor(name)
-	h.grabWith(t, name, hash, grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+	h.grabWith(t, name, hash, grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
 	h.c.noteImportUnmatched(h.ctx, h.seriesID, hash, 2)
 	h.seedTorrent(hash, name, 5, 1000)
 
@@ -294,10 +294,10 @@ func TestSeedCheckReportsWhatWouldHappen(t *testing.T) {
 	h.grabWith(t, met, hashFor(met), grabStatusImported, onGlobal)
 	h.seedTorrent(hashFor(met), met, 3, 10)
 	short := "Show.S01.1080p.WEB-DL-BBB"
-	h.grabWith(t, short, hashFor(short), grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 5})
+	h.grabWith(t, short, hashFor(short), grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 5})
 	h.seedTorrent(hashFor(short), short, 3, 10)
 	off := "Show.S01.1080p.WEB-DL-CCC"
-	h.grabWith(t, off, hashFor(off), grabStatusImported, seedGrab{source: seedRecOwn})
+	h.grabWith(t, off, hashFor(off), grabStatusImported, grabRule{source: seedRecOwn})
 	h.seedTorrent(hashFor(off), off, 0, 1)
 
 	byName := func(rows []SeedCheckRow) map[string]SeedCheckRow {
