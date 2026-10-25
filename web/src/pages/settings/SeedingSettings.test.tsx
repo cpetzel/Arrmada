@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { seedingApi, type SeedCheckRow } from "../../lib/seedingApi";
 import { SeedingSection } from "./SeedingSettings";
 
 // The global seed goal sits on Settings → Downloads with a read-only check of what's
-// seeding: the check runs with the values in the fields and offers nothing to apply.
+// seeding. The fields are drafts: nothing is saved until Save, so the check previews a goal
+// before it can remove anything, and with an invalid field the check won't run at all.
 
-const commit = vi.fn(async () => ({}));
+const commit = vi.fn(async (p: Record<string, unknown>) => p);
 vi.mock("../../lib/useSettings", () => ({
-  useLoadedSettings: () => ({ s: { downloads_seed_ratio: 2, downloads_seed_hours: 0 }, commit }),
+  useLoadedSettings: () => ({ s: { downloads_seed_ratio: 0, downloads_seed_hours: 0 }, commit }),
 }));
 
 const rows: SeedCheckRow[] = [
@@ -21,29 +22,49 @@ const rows: SeedCheckRow[] = [
 
 afterEach(() => {
   cleanup();
+  commit.mockClear();
   vi.restoreAllMocks();
 });
 
+// clickAway is what a real click on a button does to a focused field: the mouse goes down
+// on the button, focus (and blur) moves to it, then the click lands.
+function clickAway(field: HTMLElement, button: HTMLElement) {
+  fireEvent.pointerDown(button);
+  fireEvent.mouseDown(button);
+  act(() => { button.focus(); });
+  fireEvent.blur(field);
+  fireEvent.focusOut(field);
+  fireEvent.pointerUp(button);
+  fireEvent.mouseUp(button);
+  fireEvent.click(button);
+}
+
 describe("SeedingSection", () => {
-  it("shows the saved global goal and checks what's seeding against it, read-only", async () => {
+  it("previews a typed goal without saving it, even though leaving the field is part of the click", async () => {
     const check = vi.spyOn(seedingApi, "check").mockResolvedValue(rows);
     render(<MemoryRouter><SeedingSection /></MemoryRouter>);
-    expect((screen.getByLabelText("Seed ratio") as HTMLInputElement).value).toBe("2");
-    expect((screen.getByLabelText("Seeding time (hours)") as HTMLInputElement).value).toBe("0");
+    const ratio = screen.getByLabelText("Seed ratio") as HTMLInputElement;
+    act(() => { ratio.focus(); });
+    fireEvent.change(ratio, { target: { value: "2" } });
+    clickAway(ratio, screen.getByRole("button", { name: "Check finished torrents" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Check finished torrents" }));
     await waitFor(() => expect(screen.getAllByTestId("seed-check-row")).toHaveLength(3));
     expect(check).toHaveBeenCalledWith({ ratio: 2, hours: 0 });
-    expect(screen.getByText(/3 finished torrents · 1 would be removed/)).toBeTruthy();
-    expect(screen.getByText(/Global default · goal ratio 2/)).toBeTruthy();
-    expect(screen.getByText(/Indexer \(TL\) · goal ratio 5/)).toBeTruthy();
+    expect(commit).not.toHaveBeenCalled();
+    expect(screen.getByText(/1 would be removed on the next check — with a global goal of ratio 2 \(not saved\)/)).toBeTruthy();
+    expect(screen.getByText(/Not saved yet/)).toBeTruthy();
+    expect(screen.getByText(/Global default \(live\) · goal ratio 2/)).toBeTruthy();
+    expect(screen.getByText(/TL's goal \(recorded when grabbed\) · goal ratio 5/)).toBeTruthy();
     expect(screen.getByText(/Not grabbed by Arrmada — never touched/)).toBeTruthy();
     // Nothing on the check acts on a torrent.
     expect(screen.queryByRole("button", { name: /apply|remove/i })).toBeNull();
-    expect(commit).not.toHaveBeenCalled();
+
+    // Only Save saves, both values together.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(commit).toHaveBeenCalledWith({ downloads_seed_ratio: 2, downloads_seed_hours: 0 }));
   });
 
-  it("keeps a ratio that isn't a number from being saved, and checks with the saved goal meanwhile", async () => {
+  it("won't check or save a goal that isn't valid, and says why", async () => {
     const check = vi.spyOn(seedingApi, "check").mockResolvedValue([]);
     render(<MemoryRouter><SeedingSection /></MemoryRouter>);
     const ratio = screen.getByLabelText("Seed ratio") as HTMLInputElement;
@@ -51,11 +72,12 @@ describe("SeedingSection", () => {
     fireEvent.change(ratio, { target: { value: "-3" } });
     expect(ratio.value).toBe("3");
     fireEvent.change(ratio, { target: { value: "1.2.3" } });
-    fireEvent.blur(ratio);
-    await waitFor(() => expect(screen.getByText(/must be a number/)).toBeTruthy());
+    const button = screen.getByRole("button", { name: "Check finished torrents" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText(/Fix the goal above to check it: .*must be a number/)).toBeTruthy();
+    clickAway(ratio, button);
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(check).not.toHaveBeenCalled();
     expect(commit).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Check finished torrents" }));
-    await waitFor(() => expect(check).toHaveBeenCalledWith(undefined));
-    expect(await screen.findByText("No finished torrents in the client.")).toBeTruthy();
   });
 });

@@ -54,6 +54,8 @@ export interface Indexer {
   seed_enabled?: boolean;
   seed_ratio?: number;
   seed_hours?: number;
+  /** Seeds to the global seed goal (Settings → Downloads) instead of seed_ratio/seed_hours. */
+  seed_use_global?: boolean;
   enabled: boolean;
   /** The Prowlarr indexer this row mirrors; its name, URL and key come from Prowlarr. */
   prowlarr_id?: number;
@@ -143,6 +145,8 @@ export interface NewIndexer {
   seed_enabled?: boolean;
   seed_ratio?: number;
   seed_hours?: number;
+  /** Seed to the global seed goal; left out on an edit, the indexer keeps its choice. */
+  seed_use_global?: boolean;
   enabled?: boolean;
 }
 
@@ -337,7 +341,7 @@ export interface MoviesMissing {
 }
 
 /** Where a torrent's seed goal comes from (internal/automation/seedgoal.go). */
-export type SeedSource = "indexer" | "global" | "none" | "off";
+export type SeedSource = "indexer" | "default" | "global" | "none" | "off";
 
 export interface ActivityDownload {
   hash: string;

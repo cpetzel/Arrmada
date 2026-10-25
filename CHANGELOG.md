@@ -189,21 +189,39 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
-- **A global seed goal** (#78). Settings → Downloads → **Seeding** sets the ratio and
-  seeding time every torrent seeds to when its indexer doesn't set a goal of its own, so you
-  no longer have to set the same limits on each indexer. An indexer with its own ratio or
-  time keeps it (the whole goal: a ratio-only indexer never gets the global time added);
-  one with both at 0 uses the global goal, and the indexer form says so. A torrent is
-  removed at whichever limit it reaches first, exactly as an indexer's goal already worked:
-  only once Arrmada has imported it, with its data (the library keeps its copy), and never
-  a torrent Arrmada didn't grab or one you took over by dismissing it in Review. Both are 0
-  until you set them, which is how things worked before: nothing changes on update. A
-  **Check finished torrents** button under the fields lists each finished torrent's ratio
-  and seeding time against the goal that applies, where that goal comes from, and what the
-  next check will do — with the values in the fields, before you save them. It only reads;
-  nothing on it removes anything. The Seeding tab marks a torrent seeding to the global
-  goal, and a title's History says which goal ended a seed. Indexers synced from Prowlarr
-  are still added with the standard 14 days: set theirs to 0 to use the global goal.
+- **A global seed goal** (#78). Settings → Downloads → **Seeding** sets a ratio and a
+  seeding time for indexers set to **Use the global default**, so you don't have to type the
+  same limits on each indexer. It only ever applies going forward, and only where you choose
+  it. Every indexer you already have keeps its own goal, and one set to seed forever (both
+  at 0) still does: switch an indexer in its Seed rules (**Global default**, **Own goal** or
+  **Seed forever**) to use the global goal. An indexer added while a goal is set, by hand or
+  from Prowlarr, starts on it; with none set, a new one still gets 14 days. Prowlarr rows
+  you already have aren't changed.
+  - Torrents grabbed from an indexer on the global default follow it as it is now, so
+    raising, lowering or clearing it reaches them. With it cleared, they seed for the
+    standard 14 days. Torrents grabbed before this release keep the goal they were grabbed
+    with. A torrent you add by hand follows the global goal while one is set, and gets the
+    standard 14 days otherwise.
+  - A torrent is removed at whichever limit it reaches first, so a ratio can end a seed
+    before its time is up. For a private tracker's minimum seeding time, set a time goal
+    alone. Removal works as an indexer's goal always has: only once Arrmada has imported the
+    torrent, with its data, since the library keeps its copy.
+  - The fields save only when you press **Save**. **Check finished torrents** shows what the
+    typed goal would do before you save it. For each finished torrent it lists the ratio and
+    seeding time against the goal that applies, whether that goal is the live global default
+    or one recorded when it was grabbed, and what the next check will do. It only reads;
+    nothing on it removes anything.
+- **Seed cleanup removes less** (#78).
+  - At most 10 torrents go per check (every 10 minutes); the rest wait for the next one,
+    and the log says so.
+  - A torrent is matched to its grab by its hash only, so a cross-seed or a copy you added
+    with the same name is no longer removed with its data. A download grabbed before hashes
+    were kept is matched by name only when no other download in the client has that name,
+    and one grab never removes two torrents.
+  - A season pack whose import left files it couldn't match to an episode keeps seeding
+    instead of being removed with those files.
+  - An indexer edit checks its seed values only when they change, so an old goal over the
+    new five-year limit doesn't block other edits.
 - **Put misplaced files back** (#56). Episode files that v0.3.0 and v0.3.1 imported into a
   folder named like a season right inside the TV folder (`<TV folder>/S13/Season 12/…`) are
   listed on their show's page, with a preview of where each goes. Nothing is ever replaced:

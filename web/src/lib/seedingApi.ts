@@ -4,9 +4,10 @@ import { req, type SeedSource } from "./api";
 // module, like plexApi.ts, so none of it lands in a requester's first download.
 
 /** What the next seed check will do with a finished torrent (internal/automation/seedgoal.go). */
-export type SeedOutcome = "remove" | "remove_keep_files" | "seeding" | "seeds_forever" | "not_imported" | "held_for_review" | "not_ours";
+export type SeedOutcome = "remove" | "remove_keep_files" | "seeding" | "seeds_forever" | "kept_unmatched" | "not_imported" | "held_for_review" | "not_ours";
 
-export interface SeedGoal { enabled: boolean; ratio: number; hours: number; source: SeedSource }
+/** global_unset: on the global goal while none is set, so it seeds for the standard window. */
+export interface SeedGoal { enabled: boolean; ratio: number; hours: number; source: SeedSource; global_unset?: boolean }
 
 export interface SeedCheckRow {
   hash: string;
@@ -20,6 +21,8 @@ export interface SeedCheckRow {
   outcome: SeedOutcome;
   /** Why the goal counts as met, when it is. */
   reason?: string;
+  /** A removal past the per-check limit: it goes on a later check. */
+  later?: boolean;
 }
 
 // The same bounds the server holds the global goal and an indexer's to.
@@ -55,6 +58,13 @@ export function seedHoursProblem(v: string): string | null {
   return null;
 }
 
+/** checkBlockedBy says why the check can't run with these field values, or null. It never
+ *  falls back to the saved goal: a check of something other than what's typed would mislead. */
+export function checkBlockedBy(ratio: string, hours: string): string | null {
+  const problem = seedRatioProblem(ratio) ?? seedHoursProblem(hours);
+  return problem ? `Fix the goal above to check it: ${problem}` : null;
+}
+
 /** fmtSeedHours reads a goal in hours as days where it divides evenly ("14 days", "36 hours"). */
 export function fmtSeedHours(h: number): string {
   if (h > 0 && h % 24 === 0) return `${h / 24} day${h === 24 ? "" : "s"}`;
@@ -69,13 +79,15 @@ export function describeGoal(ratio: number, hours: number): string {
   return parts.length ? parts.join(" or ") : "none";
 }
 
-/** goalSourceLabel says where a torrent's goal comes from. */
+/** goalSourceLabel says where a torrent's goal comes from: the global default, read live
+ *  (so a change to it reaches the torrent), or a goal recorded when it was grabbed. */
 export function goalSourceLabel(row: Pick<SeedCheckRow, "goal" | "indexer">): string {
   switch (row.goal.source) {
-    case "global": return "Global default";
+    case "global": return row.goal.global_unset ? "Global default (live) — none set, so the standard 14 days" : "Global default (live)";
     case "off": return row.indexer ? `${row.indexer}: seeding off` : "Seeding off";
-    case "none": return "No goal";
-    default: return row.indexer && row.indexer !== "manual" ? `Indexer (${row.indexer})` : "Recorded when grabbed";
+    case "none": return "Seeds forever (recorded when grabbed)";
+    case "default": return "Standard window (recorded when grabbed)";
+    default: return row.indexer && row.indexer !== "manual" ? `${row.indexer}'s goal (recorded when grabbed)` : "Recorded when grabbed";
   }
 }
 
@@ -86,6 +98,7 @@ export function outcomeLabel(o: SeedOutcome): string {
     case "remove_keep_files": return "Removed from the client on the next check; its files stay in the downloads folder";
     case "seeding": return "Keeps seeding";
     case "seeds_forever": return "Seeds until you remove it";
+    case "kept_unmatched": return "Goal met, but its import left files it couldn't match — keeps seeding so they aren't deleted with it";
     case "not_imported": return "Not imported yet — never removed before it is";
     case "held_for_review": return "Waiting on a decision in Review — left alone until then";
     case "not_ours": return "Not grabbed by Arrmada — never touched";
@@ -109,9 +122,14 @@ function fmtSeconds(sec: number): string {
   return `${h}h`;
 }
 
-// seedCheckSummary is the line beside the button once the check has run.
-export function seedCheckSummary(total: number, removing: number): string {
-  if (total === 0) return "No finished torrents in the client.";
+// seedCheckSummary is the line beside the button once the check has run. later is how many
+// of the removals wait for a later check (10 go per check).
+export function seedCheckSummary(total: number, removing: number, later = 0): string {
+  if (total === 0) return "No finished torrents in the client";
   const t = `${total} finished torrent${total === 1 ? "" : "s"}`;
-  return removing > 0 ? `${t} · ${removing} would be removed on the next check` : `${t} · none would be removed now`;
+  if (removing === 0) return `${t} · none would be removed now`;
+  const now = removing - later;
+  return later > 0
+    ? `${t} · ${removing} would be removed: ${now} on the next check, the rest on later ones`
+    : `${t} · ${removing} would be removed on the next check`;
 }
