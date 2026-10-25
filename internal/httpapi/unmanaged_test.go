@@ -174,6 +174,21 @@ func TestUnmanagedIgnoreRoundTripsAndPrunes(t *testing.T) {
 	}
 }
 
+// A qBittorrent registered twice lists each torrent once per client; Needs you still
+// shows it once, since its card's actions go by hash (#71).
+func TestUnmanagedListsATorrentOnce(t *testing.T) {
+	e := newUnmanagedEnv(t)
+	dl := e.a.deps.Config.DownloadsDir
+	e.set(
+		doneTorrent(strangerA, "Linux.Distro.ISO", "linux", filepath.Join(dl, "a")),
+		doneTorrent(strangerA, "Linux.Distro.ISO", "linux", filepath.Join(dl, "a")),
+		doneTorrent(strangerB, "Some.Film.2001.1080p", "", filepath.Join(dl, "b")),
+	)
+	if got, _ := e.list(t); fmt.Sprint(got) != fmt.Sprint([]string{strangerA, strangerB}) {
+		t.Fatalf("unmanaged = %v, want each torrent once", got)
+	}
+}
+
 // Import into… reads only the download and library folders: a torrent whose files are
 // anywhere else on the host is refused before anything touches them.
 func TestImportUnmanagedOutsideTheRootsIsRefused(t *testing.T) {

@@ -81,8 +81,15 @@ func (a *api) readUnmanaged(ctx context.Context) (unmanagedState, error) {
 		misfiled[strings.ToLower(it.Hash)] = true
 	}
 	var st unmanagedState
+	// One card per torrent: a qBittorrent registered twice lists each torrent once per
+	// client, and the card's actions go by hash anyway (#71).
+	seen := map[string]bool{}
 	for _, it := range snap.Items {
 		h := strings.ToLower(it.Hash)
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
 		// Its own categories are the import sweeps' to handle, and a misfiled TV download
 		// has Needs you's "Move to TV" instead.
 		if h == "" || !it.Complete() || grabbed[h] || imported[it.Hash] || imported[h] || own[it.Category] || misfiled[h] {
