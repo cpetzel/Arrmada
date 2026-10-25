@@ -2519,7 +2519,7 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 
 // maxSeedRemovalsPerPass caps how many torrents one seed-cleanup pass removes. A goal
 // changed in Settings, or a client whose counters jump, can make hundreds reach their goal
-// at once; spreading them out (a pass every few minutes) leaves time to notice a mistake.
+// at once; spreading them out (a pass every ten minutes) leaves time to notice a mistake.
 const maxSeedRemovalsPerPass = 10
 
 // seedMatcher pairs the queue's downloads with the grabs seed cleanup may act on, more

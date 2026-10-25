@@ -195,10 +195,11 @@ func TestSeedCleanupRemovesOneTorrentPerGrab(t *testing.T) {
 	}
 }
 
-// No more than maxSeedRemovalsPerPass torrents go in one pass; the rest go on the next.
+// No more than ten torrents go in one pass; the rest go on the next.
 func TestSeedCleanupIsCappedPerPass(t *testing.T) {
+	const limit, total = 10, 13
 	h := newLifecycleHarness(t)
-	for i := 0; i < maxSeedRemovalsPerPass+3; i++ {
+	for i := 0; i < total; i++ {
 		name := fmt.Sprintf("Show.S01E%02d.1080p.WEB-DL-GRP", i+1)
 		h.grabWith(t, name, hashFor(name), grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
 		h.seedTorrent(hashFor(name), name, 5, 1000)
@@ -213,16 +214,16 @@ func TestSeedCleanupIsCappedPerPass(t *testing.T) {
 			later++
 		}
 	}
-	if later != 3 {
-		t.Errorf("seed check marks %d removals for a later pass, want 3", later)
+	if later != total-limit {
+		t.Errorf("seed check marks %d removals for a later pass, want %d", later, total-limit)
 	}
 	h.c.ManageSeeding(h.ctx)
-	if len(*h.removed) != maxSeedRemovalsPerPass {
-		t.Fatalf("one pass removed %d, want %d", len(*h.removed), maxSeedRemovalsPerPass)
+	if len(*h.removed) != limit {
+		t.Fatalf("one pass removed %d, want %d", len(*h.removed), limit)
 	}
 	h.c.ManageSeeding(h.ctx)
-	if len(*h.removed) != maxSeedRemovalsPerPass+3 {
-		t.Fatalf("after the next pass %d removed, want all %d", len(*h.removed), maxSeedRemovalsPerPass+3)
+	if len(*h.removed) != total {
+		t.Fatalf("after the next pass %d removed, want all %d", len(*h.removed), total)
 	}
 }
 
