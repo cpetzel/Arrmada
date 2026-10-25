@@ -272,7 +272,6 @@ func TestGuardHoldsOnlyTheFullClientsDownloads(t *testing.T) {
 	}
 }
 
-
 // The common case — one download client — is exactly as before: every download still
 // pulling data is held while the Downloads folder's volume is full, whatever path it
 // reports, and the client is never asked where it saves.
