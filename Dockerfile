@@ -39,7 +39,7 @@ RUN --mount=type=cache,id=arrmada-build-lock,target=/run/build-lock,sharing=lock
 # only fetched when the build machine doesn't have it yet, so a machine with an older copy
 # keeps building with standard-library security holes a later patch fixed. Move it to
 # each new patch (CI's govulncheck flags one); keep the aio-supervisor stage below on the same version.
-FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS build
 WORKDIR /src
 COPY --chmod=755 docker/build-heavy /usr/local/bin/build-heavy
 COPY go.mod go.sum ./
@@ -537,7 +537,7 @@ RUN set -eux; \
 
 # The supervisor: standard library only, so it builds from its own two folders, on the
 # build machine's platform (Go cross-compiles it, like arrmada), without the web UI.
-FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine AS aio-supervisor
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS aio-supervisor
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY internal/aio ./internal/aio

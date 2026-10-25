@@ -189,6 +189,8 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
+- **A Missing episodes filter on Series** (#82): shows with aired, monitored episodes that
+  have no file, whether searching is on or off.
 - **Put misplaced files back** (#56). Episode files that v0.3.0 and v0.3.1 imported into a
   folder named like a season right inside the TV folder (`<TV folder>/S13/Season 12/…`) are
   listed on their show's page, with a preview of where each goes. Nothing is ever replaced:
@@ -357,7 +359,7 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   show has exactly its title ("Dark Matter": 2015 and 2024). The folder goes to review with the
   candidates, so you pick. A folder with a year, or a title only one show has, matches as
   before.
-- **Built with Go 1.26.9**, because Go 1.25 is out of support. The Docker build pins Go to
+- **Built with Go 1.26.10**, because Go 1.25 is out of support. The Docker build pins Go to
   the patch release. Building from source outside Docker needs Go 1.26.
 - **Vulnerability scanning in CI.** Every change runs govulncheck (it fails when our code
   can reach a known-vulnerable function) and `npm audit` (high or critical, in the UI's
@@ -376,6 +378,15 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **The Activity search shows only what matches** (#71). With the same qBittorrent added
+  twice, every torrent was listed once per client under one hash, and a search left
+  unrelated cards on screen and added copies each time you retyped. Cards are now told
+  apart by client, and Needs you lists such a torrent once.
+- **A download never reads 100% before it's finished** (#73). Below 100% the queue, a
+  film's page, posters and episode chips show one decimal (99.6%), and request cards round
+  down.
+- **Built with Go 1.26.10**, which fixes a Go security advisory in certificate checking
+  (GO-2026-6809).
 - **With two download clients, the disk guard only pauses the full drive's downloads**
   (#70). A download placed on a drive of its own client's (its folder as Arrmada sees it,
   through the client's path mappings, or SABnzbd's incomplete folder for a job still
