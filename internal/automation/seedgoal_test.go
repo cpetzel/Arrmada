@@ -238,7 +238,7 @@ func TestSeedCleanupKeepsATorrentWithUnmatchedFiles(t *testing.T) {
 	name := "Show.S01.1080p.WEB-DL-GRP"
 	hash := hashFor(name)
 	h.grabWith(t, name, hash, grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
-	h.c.noteImportUnmatched(h.ctx, h.seriesID, hash, 2)
+	h.c.noteImportUnmatched(h.ctx, hash, name, 2)
 	h.seedTorrent(hash, name, 5, 1000)
 
 	h.c.ManageSeeding(h.ctx)
@@ -250,7 +250,7 @@ func TestSeedCleanupKeepsATorrentWithUnmatchedFiles(t *testing.T) {
 		t.Errorf("seed check = %+v, want kept_unmatched", rows)
 	}
 	// A later import that matched everything clears it.
-	h.c.noteImportUnmatched(h.ctx, h.seriesID, hash, 0)
+	h.c.noteImportUnmatched(h.ctx, hash, name, 0)
 	h.c.ManageSeeding(h.ctx)
 	if len(*h.removed) != 1 {
 		t.Fatalf("removals after every file matched = %+v, want one", *h.removed)
