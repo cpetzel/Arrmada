@@ -695,8 +695,10 @@ func (c *Coordinator) markSeriesGrabImported(ctx context.Context, seriesID int64
 }
 
 // noteImportUnmatched records on a series download's grab how many of its files the
-// import couldn't match to an episode (0 once a later import matched them all), so seed
-// cleanup keeps it seeding rather than delete those files with it. Every series import
+// import couldn't match to an episode, so seed cleanup keeps it seeding rather than
+// delete those files with it. The count only ever rises: a later import of part of the
+// pack (one file by hand) matching everything it looked at says nothing about the files
+// it didn't, and clearing the mark would delete them. Every series import
 // path calls it: the sweep, a review's Import anyway or reassign, a manual folder import.
 //
 // Any live grab of the download counts, whatever its status and whichever show it was
@@ -724,7 +726,7 @@ func (c *Coordinator) noteImportUnmatched(ctx context.Context, infoHash, release
 	}
 	defer c.grabsChanged()
 	for _, id := range ids {
-		if _, err := c.db.ExecContext(ctx, `UPDATE grabs SET import_unmatched = ? WHERE id = ?`, unmatched, id); err != nil {
+		if _, err := c.db.ExecContext(ctx, `UPDATE grabs SET import_unmatched = MAX(import_unmatched, ?) WHERE id = ?`, unmatched, id); err != nil {
 			c.log.Warn("series import: couldn't note the unmatched files", "grab", id, "err", err)
 		}
 	}

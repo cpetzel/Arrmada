@@ -249,11 +249,12 @@ func TestSeedCleanupKeepsATorrentWithUnmatchedFiles(t *testing.T) {
 	if len(rows) != 1 || rows[0].Outcome != SeedOutcomeUnmatched {
 		t.Errorf("seed check = %+v, want kept_unmatched", rows)
 	}
-	// A later import that matched everything clears it.
+	// A later import that matched everything it looked at (one file imported by hand)
+	// doesn't clear it: the files it didn't look at are still only in the download.
 	h.c.noteImportUnmatched(h.ctx, hash, name, 0)
 	h.c.ManageSeeding(h.ctx)
-	if len(*h.removed) != 1 {
-		t.Fatalf("removals after every file matched = %+v, want one", *h.removed)
+	if len(*h.removed) != 0 {
+		t.Fatalf("a later import cleared the unmatched mark and the torrent was removed: %+v", *h.removed)
 	}
 }
 
