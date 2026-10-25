@@ -376,6 +376,14 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **With two download clients, the disk guard only pauses the full drive's downloads**
+  (#70). A download placed on a drive of its own client's (its folder as Arrmada sees it,
+  through the client's path mappings, or SABnzbd's incomplete folder for a job still
+  downloading) is judged by that drive, so a second client on a volume of its own keeps
+  downloading while the first one's drive is full, and the other way round. Anything the
+  guard can't place is judged by the Downloads folder's drive, as before, and named once in
+  the log. Settings → Downloads lists each client's drive with the guard's reading. With one
+  download client switched on, nothing changes.
 - **Episode thumbnails from TVDB load again** (#76). TVDB can give an episode image as a path
   rather than a full address, and the browser then asked Arrmada for it ("Page not found").
   New and refreshed episodes get TVDB's artwork address, and the update fixes the ones
