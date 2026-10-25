@@ -234,6 +234,29 @@ describe("an indexer's card", () => {
   });
 });
 
+describe("an indexer's seed rules", () => {
+  // Opening an indexer and saving it untouched sends back exactly the seed rules it had,
+  // in each of the three modes: the global default, its own goal, or seed forever.
+  const modes = [
+    { mode: "global default", seed: { seed_enabled: true, seed_use_global: true, seed_ratio: 0, seed_hours: 0 } },
+    { mode: "own goal", seed: { seed_enabled: true, seed_use_global: false, seed_ratio: 2, seed_hours: 336 } },
+    { mode: "seed forever", seed: { seed_enabled: true, seed_use_global: false, seed_ratio: 0, seed_hours: 0 } },
+  ];
+  for (const { mode, seed } of modes) {
+    it(`saves an untouched ${mode} indexer as it was`, async () => {
+      serve({ indexers: [idx({ kind: "torznab", url: "http://t/api", ...seed })] });
+      const upd = vi.spyOn(indexerApi, "updateIndexer").mockResolvedValue(undefined);
+      page();
+      const card = await cardOf("indexer-1");
+      fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
+      await act(async () => { fireEvent.click(within(card).getByText("Save changes")); });
+      expect(upd).toHaveBeenCalledTimes(1);
+      const body = upd.mock.calls[0][1];
+      expect({ seed_enabled: body.seed_enabled, seed_use_global: body.seed_use_global, seed_ratio: body.seed_ratio, seed_hours: body.seed_hours }).toEqual(seed);
+    });
+  }
+});
+
 describe("a download client's card", () => {
   it("asks before removing, naming what it leaves alone; a bundled one says it stays removed", async () => {
     serve({ clients: [client({ bundled: true })] });

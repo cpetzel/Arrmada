@@ -78,10 +78,12 @@ function PresetForm({ preset, onBack, onAdded, onSaving }: {
   const [minSeeders, setMinSeeders] = useState(0);
   const [seedEnabled, setSeedEnabled] = useState(true);
   const [seedRatio, setSeedRatio] = useState(0);
-  // With a global seed goal set (Settings → Downloads), a new indexer starts on it; without
-  // one it starts on its own goal of the standard window, as before.
+  // With a global seed goal that has a time (Settings → Downloads), a new indexer starts on
+  // it; otherwise on its own goal of the standard window, as before. A ratio-only goal
+  // could end a new private tracker's torrents before its minimum seeding time, so it is
+  // only ever chosen, never the default.
   const shared = useOptionalSettings();
-  const globalGoal = Boolean(shared && ((shared.downloads_seed_ratio ?? 0) > 0 || (shared.downloads_seed_hours ?? 0) > 0));
+  const globalGoal = (shared?.downloads_seed_hours ?? 0) > 0;
   const [seedMode, setSeedMode] = useState<SeedMode>(globalGoal ? "global" : "own");
   const [seedTime, setSeedTime] = useState(DEFAULT_SEED_DAYS);
   const [seedUnit, setSeedUnit] = useState<"hours" | "days">("days");

@@ -194,32 +194,38 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   same limits on each indexer. It only ever applies going forward, and only where you choose
   it. Every indexer you already have keeps its own goal, and one set to seed forever (both
   at 0) still does: switch an indexer in its Seed rules (**Global default**, **Own goal** or
-  **Seed forever**) to use the global goal. An indexer added while a goal is set, by hand or
-  from Prowlarr, starts on it; with none set, a new one still gets 14 days. Prowlarr rows
-  you already have aren't changed.
+  **Seed forever**) to use the global goal. An indexer added while the goal includes a
+  time, by hand or from Prowlarr, starts on it; otherwise a new one still gets 14 days. A
+  ratio-only goal is never given to anything automatically, because it could end a private
+  tracker's torrent before its minimum seeding time; choose it for an indexer and it
+  applies. Prowlarr rows you already have aren't changed.
   - Torrents grabbed from an indexer on the global default follow it as it is now, so
     raising, lowering or clearing it reaches them. With it cleared, they seed for the
     standard 14 days. Torrents grabbed before this release keep the goal they were grabbed
-    with. A torrent you add by hand follows the global goal while one is set, and gets the
-    standard 14 days otherwise.
+    with. A torrent you add by hand or upload follows the global goal while it includes a
+    time, and gets the standard 14 days otherwise.
   - A torrent is removed at whichever limit it reaches first, so a ratio can end a seed
     before its time is up. For a private tracker's minimum seeding time, set a time goal
     alone. Removal works as an indexer's goal always has: only once Arrmada has imported the
-    torrent, with its data, since the library keeps its copy.
+    torrent, with its data, since the library keeps its copy; a torrent you dismissed in
+    Review is removed with its files kept.
   - The fields save only when you press **Save**. **Check finished torrents** shows what the
     typed goal would do before you save it. For each finished torrent it lists the ratio and
     seeding time against the goal that applies, whether that goal is the live global default
     or one recorded when it was grabbed, and what the next check will do. It only reads;
-    nothing on it removes anything.
+    nothing on it removes anything. It pairs older downloads with their grabs the same way
+    the next check will, without saving the pairing.
 - **Seed cleanup removes less** (#78).
-  - At most 10 torrents go per check (every 10 minutes); the rest wait for the next one,
+  - At most 10 torrents go per check (every 10 minutes), whatever ends them — a goal, the
+    global goal, or seeding switched off for the indexer. The rest wait for the next check,
     and the log says so.
   - A torrent is matched to its grab by its hash only, so a cross-seed or a copy you added
     with the same name is no longer removed with its data. A download grabbed before hashes
     were kept is matched by name only when no other download in the client has that name,
     and one grab never removes two torrents.
   - A season pack whose import left files it couldn't match to an episode keeps seeding
-    instead of being removed with those files.
+    instead of being removed with those files, whether it was imported automatically, from
+    Review or by a manual folder import.
   - An indexer edit checks its seed values only when they change, so an old goal over the
     new five-year limit doesn't block other edits.
 - **Put misplaced files back** (#56). Episode files that v0.3.0 and v0.3.1 imported into a

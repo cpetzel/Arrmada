@@ -42,7 +42,7 @@ export function SeedingSection() {
     <Section
       id="seeding"
       title="Seeding"
-      subtitle="The goal torrents seed to when their indexer is set to use the global default. Indexers added while a goal is set start on it; indexers you already have keep their own goal, or seed forever, until you switch them on Settings → Connections. A torrent is removed at whichever limit it reaches first, and only once Arrmada has imported it — with its data, since the library keeps its own copy. At most 10 go per check, and checks run every 10 minutes. Torrents Arrmada didn't grab are never touched."
+      subtitle="The goal torrents seed to when their indexer is set to use the global default. Indexers you already have keep their own goal, or seed forever, until you switch them on Settings → Connections. A torrent is removed at whichever limit it reaches first, and only once Arrmada has imported it — with its data, since the library keeps its own copy. One you dismissed in Review is removed with its files kept. At most 10 go per check, and checks run every 10 minutes. Torrents Arrmada didn't grab are never touched."
     >
       <div className="grid gap-4 sm:grid-cols-2">
         <DraftField label="Seed ratio" value={ratio} onChange={(v) => { setRatio(v.replace(/[^0-9.]/g, "").slice(0, 6)); setSavedNote(false); }} problem={ratioProblem} inputMode="decimal">
@@ -59,7 +59,7 @@ export function SeedingSection() {
         </span>
       </div>
       <Note tone="info">
-        Whichever limit comes first ends the seed, so a ratio goal can remove a torrent before its seeding time is up. If a private tracker requires a minimum seeding time, set a time goal alone: then nothing goes before it. Both 0 means no global goal: torrents on it seed for the standard 14 days. Each indexer's choice is on{" "}
+        Whichever limit comes first ends the seed, so a ratio goal can remove a torrent before its seeding time is up. If a private tracker requires a minimum seeding time, set a time goal alone: then nothing goes before it. Indexers added from now on, and torrents you add by hand or upload, follow the global goal only when it includes a time — a ratio alone could end a private tracker's torrent within hours, so without a time they keep the standard 14 days. Both 0 means no global goal: torrents on it seed for the standard 14 days. Each indexer's choice is on{" "}
         <Link to={LINKS.indexers} style={{ color: "var(--accent-text)" }}>Settings → Connections → Indexers</Link>.
       </Note>
       <SeedCheck ratio={ratio} hours={hours} dirty={dirty} />
