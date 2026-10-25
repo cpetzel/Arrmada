@@ -4,7 +4,8 @@ import type { MockRoute } from "./fixtures/routes";
 
 // CFG-14: every setting saves itself — toggles on change, text on blur — with an inline
 // "Saved ✓" or the reason it didn't save, and no Save bars. Folders save per row, only
-// when one is picked or confirmed.
+// when one is picked or confirmed. The global seed goal is the exception: it has its own
+// Save, so its check can preview a goal before it's live (#78).
 
 const putSettings: MockRoute = { method: "PUT", path: "/api/v1/settings", respond: ({ body }) => ({ ...settings, ...(body as object) }) };
 
@@ -30,7 +31,10 @@ test.describe("admin", () => {
     expect(api.callsTo("PUT", "/api/v1/settings").map((c) => c.body)).toEqual([
       { downloads_disk_guard_pause_pct: "85", downloads_disk_guard_resume_pct: "80" },
     ]);
-    await expect(page.getByRole("button", { name: /^Save/ })).toHaveCount(0);
+    // The one Save on the page is the global seed goal's (#78): leaving a field is what
+    // clicking its Check does, so saving on blur would make a goal live before its preview.
+    await expect(page.getByRole("button", { name: /^Save/ })).toHaveCount(1);
+    await expect(page.locator("#seeding").getByRole("button", { name: "Save" })).toHaveCount(1);
   });
 
   test("a server refusal shows under the field and nothing else is lost", async ({ page, api }) => {
