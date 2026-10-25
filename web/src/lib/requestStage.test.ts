@@ -33,6 +33,13 @@ describe("requestStage", () => {
     expect([moving.badge, moving.tone]).toEqual(["Downloading", "accent"]);
   });
 
+  it("never reads 100% before the download is done (#73)", () => {
+    const dl = (progress: number) => requestStage(rq({ media_type: "movie", tracking: { stage: "downloading", progress } })).detail;
+    expect(dl(0.996)).toBe("99%");
+    expect(dl(0.29)).toBe("29%");
+    expect(requestStage(rq({ media_type: "movie", tracking: { stage: "paused", progress: 0.999 } })).detail).toBe("Paused at 99%");
+  });
+
   it("says a title waiting for Plex is almost ready, and sorts it with what's moving", () => {
     const s = requestStage(rq({ media_type: "movie", available: true, tracking: { stage: "adding" } }));
     expect([s.badge, s.detail]).toEqual(["Almost ready", "Adding to Plex…"]);

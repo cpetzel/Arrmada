@@ -117,6 +117,9 @@ export function seriesLibraryConfig({ fits, actions, rowAction }: SeriesConfigDe
       { key: "continuing", label: "Continuing", match: (s) => /return|continu/i.test(s.status ?? "") },
       { key: "ended", label: "Ended", match: (s) => ENDED.test(s.status ?? "") },
       { key: "wanted", label: "Wanted", match: (s) => isWanted(statusInput(s)) },
+      // Unfinished shows whatever their searching switch says (Wanted leaves out the ones
+      // with it off), by the count the Missing episodes sort uses: aired, monitored, no file.
+      { key: "missing", label: "Missing episodes", match: (s) => statsOf(s).missing > 0, title: "Shows with aired, monitored episodes that have no file, whether their searching is on or off — episodes not aired yet or not monitored don't count" },
     ],
     // The shown title and the English one both find a show shown under another name; the
     // order follows the shown title.

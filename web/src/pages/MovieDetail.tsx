@@ -37,6 +37,7 @@ import { qualityApi } from "../lib/qualityApi";
 import { convertApi } from "../lib/convertApi";
 import { useLiveEvent } from "../lib/live";
 import { QUEUE_CHANGED, QUEUE_PROGRESS, progressByHash, queueChangedFor } from "../lib/queueLive";
+import { downloadPercent } from "../lib/percent";
 import { jobFailed, useJob } from "../lib/useJob";
 import { attemptLine, searchJobLine } from "../lib/searchOutcome";
 import { queuedNote } from "../lib/movieQueue";
@@ -258,7 +259,7 @@ function DownloadBar({ dl }: { dl: MovieDownload }) {
     <div className="mt-6 rounded-xl p-3.5" style={{ border: "1px solid var(--accent)", background: "var(--accent-soft)" }}>
       <div className="mb-2 flex items-center justify-between text-sm">
         <span className="font-semibold" style={{ color: "var(--accent-text)" }}>{what} — {dl.state}</span>
-        <span className="font-mono text-ink-dim">{pct}%</span>
+        <span className="font-mono text-ink-dim">{downloadPercent(dl.progress)}</span>
       </div>
       <div className="h-2 overflow-hidden rounded-full" style={{ background: "var(--line)" }}>
         <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: "var(--accent)" }} />
@@ -352,7 +353,7 @@ function ClearedNotice({ movie, flash, onDismiss }: { movie: Movie; flash: (m: s
 // wanted (the movie's last search), or that it's left alone.
 function trackLine(movie: Movie, version: MovieVersion): string {
   const dl = movie.download;
-  if (dl && (dl.version_id ?? 0) === version.id) return `Downloading — ${Math.round(dl.progress * 100)}%`;
+  if (dl && (dl.version_id ?? 0) === version.id) return `Downloading — ${downloadPercent(dl.progress)}`;
   if (version.has_file) return "";
   if (!version.monitored) return "Not monitored — Arrmada won't look for it.";
   // The movie's searches cover every track at once, so its last one speaks for this too.
@@ -996,9 +997,8 @@ function AcquisitionStatus({ movie, onChange, flash, searchInfo }: {
     );
   } else if (acq.downloading) {
     tone = "var(--accent-text)";
-    const pct = Math.round((acq.download_progress ?? 0) * 100);
     const what = acq.download_title ? <span className="break-all font-mono text-sm">{acq.download_title}</span> : "a release";
-    msg = <>{movie.has_file ? "Downloading an upgrade: " : "Downloading "}{what} — {pct}%.</>;
+    msg = <>{movie.has_file ? "Downloading an upgrade: " : "Downloading "}{what} — {downloadPercent(acq.download_progress)}.</>;
   } else if (movie.has_file && !acq.monitored) {
     tone = "var(--good-text)";
     msg = acq.scanned_in

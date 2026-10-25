@@ -47,6 +47,17 @@ export function queueClients(list: readonly Pick<ActivityDownload, "client_id" |
   return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
 }
 
+/**
+ * A queue row's identity in a list: its client and its hash. The hash alone isn't one —
+ * the same qBittorrent registered as two clients (an owner's own card beside the bundled
+ * one, or a movies and a TV card on one client) lists each torrent once per client, and
+ * React keys that collide reuse the wrong cards: a search left other titles showing and
+ * every clear-and-retype added copies until a reload (#71).
+ */
+export function transferKey(d: Pick<ActivityDownload, "hash" | "client_id">): string {
+  return `${d.client_id ?? 0}:${d.hash}`;
+}
+
 /** The downloads in one client, by its id as the address holds it ("" or nonsense: every download). */
 export function inClient<T extends Pick<ActivityDownload, "client_id">>(list: T[], client: string): T[] {
   const id = Number(client);
