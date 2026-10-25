@@ -157,7 +157,11 @@ var untouched = []string{
 	        last_search_at, search_misses FROM albums ORDER BY id`,
 	`SELECT * FROM tracks ORDER BY id`,
 	`SELECT * FROM artist_events ORDER BY id`,
-	`SELECT * FROM grabs ORDER BY id`,
+	// Named columns: later migrations add their own (0349's seed_source, import_unmatched).
+	`SELECT id, movie_id, version_id, title, indexer, quality_profile, stall_minutes, status, grabbed_at, seed_enabled,
+	        seed_ratio, seed_hours, media_type, info_hash, manual, scope, phase, progress, progress_at, acq_scope,
+	        client_id, last_seen_at, completed_at, updated_at, last_error, still_waiting_at, replaces_path,
+	        decided_by, decided_mode, vanished_at, transport FROM grabs ORDER BY id`,
 	`SELECT * FROM blocklist ORDER BY id`,
 	`SELECT * FROM search_attempts ORDER BY id`,
 	// Named columns: later migrations add their own (0340's match_json).

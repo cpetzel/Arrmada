@@ -54,6 +54,8 @@ export interface Indexer {
   seed_enabled?: boolean;
   seed_ratio?: number;
   seed_hours?: number;
+  /** Seeds to the global seed goal (Settings → Downloads) instead of seed_ratio/seed_hours. */
+  seed_use_global?: boolean;
   enabled: boolean;
   /** The Prowlarr indexer this row mirrors; its name, URL and key come from Prowlarr. */
   prowlarr_id?: number;
@@ -143,6 +145,8 @@ export interface NewIndexer {
   seed_enabled?: boolean;
   seed_ratio?: number;
   seed_hours?: number;
+  /** Seed to the global seed goal; left out on an edit, the indexer keeps its choice. */
+  seed_use_global?: boolean;
   enabled?: boolean;
 }
 
@@ -336,6 +340,9 @@ export interface MoviesMissing {
   queue_known: boolean;
 }
 
+/** Where a torrent's seed goal comes from (internal/automation/seedgoal.go). */
+export type SeedSource = "indexer" | "default" | "global" | "none" | "off";
+
 export interface ActivityDownload {
   hash: string;
   name: string;
@@ -360,6 +367,8 @@ export interface ActivityDownload {
   seed_enabled?: boolean; // false = remove as soon as imported (no seeding)
   seed_ratio?: number; // target ratio (0 = no ratio target)
   seed_hours?: number; // target seed time in hours (0 = no time target)
+  /** Where the goal comes from: the indexer's own, the global default (its indexer set none), none at all, or off. */
+  seed_source?: SeedSource;
   imported?: boolean; // Arrmada has imported this download into the library
   /** Where it has got to (lib/stages), and for staff why it is there ("Import failed 3× …"). */
   stage?: PipelineStage;
@@ -1256,6 +1265,9 @@ export interface AppSettings {
   downloads_stall_minutes: number;
   /** How many upgrades one upgrade sweep may grab; 0 = no limit. Default 10. */
   upgrade_max_grabs_per_sweep: number;
+  /** The global seed goal a torrent seeds to when its indexer sets none: a ratio and hours, 0 = none. Admin only. */
+  downloads_seed_ratio: number;
+  downloads_seed_hours: number;
   /** Languages automatic book grabs accept (canonical codes); [] = any. Default ["en"]. */
   books_languages: string[];
   /** Extra languages whose translated titles scans and imports match (canonical codes); [] = English and original titles only. */

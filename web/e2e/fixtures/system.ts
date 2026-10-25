@@ -256,6 +256,8 @@ export const settings: AppSettings = {
   downloads_disk_guard_pause_free_gb: "0",
   downloads_stall_minutes: 60,
   upgrade_max_grabs_per_sweep: 10,
+  downloads_seed_ratio: 0,
+  downloads_seed_hours: 0,
   app_public_url: "",
   books_languages: ["en"],
   match_title_languages: [],

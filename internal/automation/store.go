@@ -39,9 +39,15 @@ type grab struct {
 	SeedEnabled  bool
 	SeedRatio    float64
 	SeedHours    int
-	MediaType    string // "movie" | "series" | "book" | "music"
-	InfoHash     string // the torrent's real identity; "" for rows predating migration 0062
-	Status       string // one of the grabStatus* words (grabstatus.go)
+	// SeedSource is where the seed goal came from when it was grabbed (seedRecOwn, …);
+	// "" for rows predating migration 0349.
+	SeedSource string
+	// ImportUnmatched counts the files its series import couldn't match to an episode
+	// (migration 0349). Seed cleanup never removes such a torrent with its data.
+	ImportUnmatched int
+	MediaType       string // "movie" | "series" | "book" | "music"
+	InfoHash        string // the torrent's real identity; "" for rows predating migration 0062
+	Status          string // one of the grabStatus* words (grabstatus.go)
 	// ReplacesPath is the file the grab's movie track held when it was grabbed (an
 	// upgrade, a re-grab, a manual grab over a file); "" for a grab for a missing file and
 	// for rows predating migration 0155. See movieHasFileFor.
@@ -97,7 +103,7 @@ func sameDownload(a, b grab) bool {
 }
 
 // grabCols is the column list scanGrab reads, in its order.
-const grabCols = `id, movie_id, version_id, title, indexer, quality_profile, stall_minutes, grabbed_at, seed_enabled, seed_ratio, seed_hours, media_type, info_hash, status, replaces_path, transport`
+const grabCols = `id, movie_id, version_id, title, indexer, quality_profile, stall_minutes, grabbed_at, seed_enabled, seed_ratio, seed_hours, media_type, info_hash, status, replaces_path, transport, seed_source, import_unmatched`
 
 // addBlock blocklists a release for a movie.
 func (c *Coordinator) addBlock(ctx context.Context, movieID int64, title, indexer, downloadURL, reason string) error {
@@ -279,12 +285,12 @@ func (c *Coordinator) recordGrabReplacing(ctx context.Context, movieID, versionI
 	defer c.grabsChanged()
 	notesFrom(ctx).grabbed(title) // the search attempt this grab came from, if any
 	c.noteHashless("movie", title, infoHash)
-	transport, seedEnabled, seedRatio, seedHours := c.grabPolicy(ctx, indexer, infoHash)
+	transport, seedEnabled, seedRatio, seedHours, seedSource := c.grabPolicy(ctx, indexer, infoHash)
 	decidedBy, decidedMode := pickOf(ctx, title) // what decided the pick (pickkey.go)
 	_, err := c.db.ExecContext(ctx,
-		`INSERT INTO grabs (movie_id, version_id, title, indexer, quality_profile, stall_minutes, seed_enabled, seed_ratio, seed_hours, info_hash, replaces_path, decided_by, decided_mode, transport)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		movieID, versionID, title, indexer, profile, stallMinutes, boolToInt(seedEnabled), seedRatio, seedHours, infoHash, replacesPath, decidedBy, decidedMode, transport)
+		`INSERT INTO grabs (movie_id, version_id, title, indexer, quality_profile, stall_minutes, seed_enabled, seed_ratio, seed_hours, info_hash, replaces_path, decided_by, decided_mode, transport, seed_source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		movieID, versionID, title, indexer, profile, stallMinutes, boolToInt(seedEnabled), seedRatio, seedHours, infoHash, replacesPath, decidedBy, decidedMode, transport, seedSource)
 	if err != nil {
 		c.log.Warn("automation: record grab failed", "err", err)
 		return
@@ -300,7 +306,10 @@ func (c *Coordinator) recordGrabReplacing(ctx context.Context, movieID, versionI
 // hash a torrent — and, for a grab recorded without a key, from the indexer it came from.
 // A usenet download never seeds, so it gets no seed goal whatever the indexer says; that
 // includes the manual paths, which would otherwise default to seeding (seedRules).
-func (c *Coordinator) grabPolicy(ctx context.Context, indexerName, key string) (transport download.Transport, seedEnabled bool, seedRatio float64, seedHours int) {
+//
+// seedSource says where the seed goal came from (seedRecOwn, …), recorded on the grab so a
+// grab on the global goal follows it live and no other grab ever picks it up.
+func (c *Coordinator) grabPolicy(ctx context.Context, indexerName, key string) (transport download.Transport, seedEnabled bool, seedRatio float64, seedHours int, seedSource string) {
 	transport = download.KeyTransport(key)
 	if transport == "" {
 		// An upload whose client didn't say the job's key: what was uploaded says what it
@@ -312,10 +321,10 @@ func (c *Coordinator) grabPolicy(ctx context.Context, indexerName, key string) (
 		transport = c.indexerTransport(ctx, indexerName)
 	}
 	if transport == download.TransportUsenet {
-		return transport, false, 0, 0
+		return transport, false, 0, 0, ""
 	}
-	seedEnabled, seedRatio, seedHours = c.seedRules(ctx, indexerName)
-	return transport, seedEnabled, seedRatio, seedHours
+	seedEnabled, seedRatio, seedHours, seedSource = c.seedRules(ctx, indexerName)
+	return transport, seedEnabled, seedRatio, seedHours, seedSource
 }
 
 // seedRules returns the seed policy of the named indexer.
@@ -324,19 +333,39 @@ func (c *Coordinator) grabPolicy(ctx context.Context, indexerName, key string) (
 // with indexer "manual", and an indexer can be renamed or removed after a grab — in
 // both cases the lookup misses. Returning seed-disabled made cleanup delete the torrent
 // AND its data the moment it imported, which is a hit-and-run on whatever private
-// tracker the file actually came from. Default to seeding for the standard window; the
-// user can still stop or delete it from the Downloads page.
-func (c *Coordinator) seedRules(ctx context.Context, name string) (enabled bool, ratio float64, hours int) {
+// tracker the file actually came from. Default to seeding: on the global seed goal when
+// it has a time (Settings → Downloads), otherwise for the standard window. The user can
+// still stop or delete it from the Downloads page.
+//
+// A known indexer's own values are recorded as they are. Only an indexer switched to
+// "use the global default" (SeedUseGlobal) is recorded on the global goal; 0/0 stays
+// "seed forever".
+func (c *Coordinator) seedRules(ctx context.Context, name string) (enabled bool, ratio float64, hours int, source string) {
 	idxs, err := c.indexers.List(ctx)
 	if err != nil {
-		return true, 0, indexer.DefaultSeedHours
+		// The indexer may well exist with a longer goal than the global one: unread, it
+		// gets the standard window, as before there was a global goal.
+		return true, 0, indexer.DefaultSeedHours, seedRecDefault
 	}
 	for _, ix := range idxs {
-		if ix.Name == name {
-			return ix.SeedEnabled, ix.SeedRatio, ix.SeedHours
+		if ix.Name != name {
+			continue
 		}
+		switch {
+		case !ix.SeedEnabled:
+			return false, ix.SeedRatio, ix.SeedHours, seedRecOwn
+		case ix.SeedUseGlobal:
+			return true, 0, 0, seedRecGlobal
+		case ix.SeedRatio > 0 || ix.SeedHours > 0:
+			return true, ix.SeedRatio, ix.SeedHours, seedRecOwn
+		}
+		return true, 0, 0, seedRecNone
 	}
-	return true, 0, indexer.DefaultSeedHours
+	// Only a global goal with a time takes the standard window's place (SafeForNew).
+	if c.seedDefault(ctx).SafeForNew() {
+		return true, 0, 0, seedRecGlobal
+	}
+	return true, 0, indexer.DefaultSeedHours, seedRecDefault
 }
 
 func boolToInt(b bool) int {
@@ -530,7 +559,7 @@ func scanGrab(row interface{ Scan(...any) error }) (grab, error) {
 	var g grab
 	var seedEnabled int
 	err := row.Scan(&g.ID, &g.MovieID, &g.VersionID, &g.Title, &g.Indexer, &g.Profile,
-		&g.StallMinutes, &g.GrabbedAt, &seedEnabled, &g.SeedRatio, &g.SeedHours, &g.MediaType, &g.InfoHash, &g.Status, &g.ReplacesPath, &g.Transport)
+		&g.StallMinutes, &g.GrabbedAt, &seedEnabled, &g.SeedRatio, &g.SeedHours, &g.MediaType, &g.InfoHash, &g.Status, &g.ReplacesPath, &g.Transport, &g.SeedSource, &g.ImportUnmatched)
 	g.SeedEnabled = seedEnabled != 0
 	return g, err
 }
@@ -663,6 +692,44 @@ func (c *Coordinator) markSeriesGrabFailed(ctx context.Context, seriesID int64, 
 
 func (c *Coordinator) markSeriesGrabImported(ctx context.Context, seriesID int64, infoHash, releaseName string) {
 	c.setSeriesGrabStatus(ctx, seriesID, infoHash, releaseName, grabStatusImported)
+}
+
+// noteImportUnmatched records on a series download's grab how many of its files the
+// import couldn't match to an episode, so seed cleanup keeps it seeding rather than
+// delete those files with it. The count only ever rises: a later import of part of the
+// pack (one file by hand) matching everything it looked at says nothing about the files
+// it didn't, and clearing the mark would delete them. Every series import
+// path calls it: the sweep, a review's Import anyway or reassign, a manual folder import.
+//
+// Any live grab of the download counts, whatever its status and whichever show it was
+// grabbed for (a reassign imports into another): by info hash, and by release name only
+// for grabs that have no hash, each written by its id. Erring wide here only ever keeps
+// a torrent seeding.
+func (c *Coordinator) noteImportUnmatched(ctx context.Context, infoHash, releaseName string, unmatched int) {
+	grabs, err := c.grabsWhere(ctx, liveWhere+` AND media_type = 'series'`)
+	if err != nil {
+		c.log.Warn("series import: couldn't note the unmatched files", "release", releaseName, "err", err)
+		return
+	}
+	want, wantHash := normRelease(releaseName), strings.ToLower(infoHash)
+	var ids []int64
+	for _, g := range grabs {
+		switch {
+		case g.InfoHash != "" && wantHash != "" && strings.ToLower(g.InfoHash) == wantHash:
+			ids = append(ids, g.ID)
+		case g.InfoHash == "" && want != "" && normRelease(g.Title) == want:
+			ids = append(ids, g.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	defer c.grabsChanged()
+	for _, id := range ids {
+		if _, err := c.db.ExecContext(ctx, `UPDATE grabs SET import_unmatched = MAX(import_unmatched, ?) WHERE id = ?`, unmatched, id); err != nil {
+			c.log.Warn("series import: couldn't note the unmatched files", "grab", id, "err", err)
+		}
+	}
 }
 
 // setSeriesGrabStatus finds the grab a download came from — by info hash first, since a

@@ -232,6 +232,9 @@ func (a *api) handleDownloadsFeed(w http.ResponseWriter, r *http.Request) {
 			entry["seed_enabled"] = p.Enabled
 			entry["seed_ratio"] = p.Ratio
 			entry["seed_hours"] = p.Hours
+			// indexer, global (its indexer set none), none or off: the page says when a
+			// torrent seeds to the global goal rather than its indexer's.
+			entry["seed_source"] = p.Source
 			entry["seed_known"] = true
 		}
 		downloads = append(downloads, entry)

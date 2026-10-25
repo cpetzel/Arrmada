@@ -51,6 +51,12 @@ export function useSettingsStore(): SettingsStore {
   return ctx;
 }
 
+// useOptionalSettings is the shared settings where there are any — inside the Settings hub —
+// and null elsewhere (the setup wizard shares the indexer form but not the hub).
+export function useOptionalSettings(): AppSettings | null {
+  return useContext(SettingsContext)?.s ?? null;
+}
+
 // useLoadedSettings is useSettingsStore for a section that only renders once the settings
 // have loaded (the hub shows "Loading…" until then), so s is never null inside it.
 export function useLoadedSettings(): SettingsStore & { s: AppSettings } {

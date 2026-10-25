@@ -62,7 +62,11 @@ type Indexer struct {
 	SeedEnabled bool     `json:"seed_enabled"` // false = delete once imported (no seeding)
 	SeedRatio   float64  `json:"seed_ratio"`   // remove after this ratio (0 = no target)
 	SeedHours   int      `json:"seed_hours"`   // remove after this many hours (0 = no limit)
-	Enabled     bool     `json:"enabled"`
+	// SeedUseGlobal seeds to the global seed goal (Settings → Downloads) instead of
+	// SeedRatio/SeedHours. Its own state, never read from 0/0: an indexer at 0/0 is one
+	// its owner set to seed forever (migration 0349).
+	SeedUseGlobal bool `json:"seed_use_global"`
+	Enabled       bool `json:"enabled"`
 
 	// ProwlarrID is the Prowlarr indexer this row mirrors (0 = not synced from Prowlarr).
 	// A sync owns such a row's name, address and key; everything else stays the owner's.

@@ -40,7 +40,13 @@ func (c *Coordinator) AdoptTorrentHashes(ctx context.Context, queue []download.I
 	if err != nil || len(grabs) == 0 {
 		return 0
 	}
+	return c.adoptHashes(ctx, grabs, queue, true)
+}
 
+// adoptHashes is AdoptTorrentHashes over grabs, which it updates in memory as it pairs
+// them. write false is a dry run that records nothing — the seed check's preview, which
+// must pair exactly as the next cleanup pass will without changing a row.
+func (c *Coordinator) adoptHashes(ctx context.Context, grabs []grab, queue []download.Item, write bool) int {
 	taken := make(map[string]bool, len(grabs))
 	for _, g := range grabs {
 		if g.InfoHash != "" {
@@ -55,7 +61,7 @@ func (c *Coordinator) AdoptTorrentHashes(ctx context.Context, queue []download.I
 			continue // no hash to record, or some grab already owns it
 		}
 		if it.Transport == download.TransportUsenet {
-			if c.adoptUsenetKey(ctx, grabs, it) {
+			if c.adoptUsenetKey(ctx, grabs, it, write) {
 				taken[hash] = true
 				adopted++
 			}
@@ -86,13 +92,15 @@ func (c *Coordinator) AdoptTorrentHashes(ctx context.Context, queue []download.I
 		if found == nil {
 			continue
 		}
-		if err := c.setGrabInfoHash(ctx, found.ID, it.Hash); err != nil {
-			c.log.Warn("seeding: could not record a torrent's hash on its grab",
-				"grab", found.ID, "torrent", it.Name, "err", err)
-			continue
+		if write {
+			if err := c.setGrabInfoHash(ctx, found.ID, it.Hash); err != nil {
+				c.log.Warn("seeding: could not record a torrent's hash on its grab",
+					"grab", found.ID, "torrent", it.Name, "err", err)
+				continue
+			}
+			c.log.Info("seeding: paired a torrent with its grab and recorded the hash",
+				"torrent", it.Name, "recorded_title", found.Title, "identity", want, "hash", it.Hash)
 		}
-		c.log.Info("seeding: paired a torrent with its grab and recorded the hash",
-			"torrent", it.Name, "recorded_title", found.Title, "identity", want, "hash", it.Hash)
 		found.InfoHash = it.Hash
 		taken[hash] = true
 		adopted++
@@ -108,7 +116,7 @@ func (c *Coordinator) AdoptTorrentHashes(ctx context.Context, queue []download.I
 // after the release (nzbname), so the job's name normalises to exactly its grab's title.
 // Exactly one key-less usenet grab must match; two is ambiguous and nothing is written.
 // A torrent grab is never a candidate.
-func (c *Coordinator) adoptUsenetKey(ctx context.Context, grabs []grab, it download.Item) bool {
+func (c *Coordinator) adoptUsenetKey(ctx context.Context, grabs []grab, it download.Item, write bool) bool {
 	want := normRelease(it.Name)
 	if want == "" {
 		return false
@@ -127,11 +135,13 @@ func (c *Coordinator) adoptUsenetKey(ctx context.Context, grabs []grab, it downl
 	if found == nil {
 		return false
 	}
-	if err := c.setGrabInfoHash(ctx, found.ID, it.Hash); err != nil {
-		c.log.Warn("seeding: could not record a usenet job's key on its grab", "grab", found.ID, "job", it.Name, "err", err)
-		return false
+	if write {
+		if err := c.setGrabInfoHash(ctx, found.ID, it.Hash); err != nil {
+			c.log.Warn("seeding: could not record a usenet job's key on its grab", "grab", found.ID, "job", it.Name, "err", err)
+			return false
+		}
+		c.log.Info("seeding: paired a usenet job with its grab and recorded the key", "job", it.Name, "key", it.Hash)
 	}
-	c.log.Info("seeding: paired a usenet job with its grab and recorded the key", "job", it.Name, "key", it.Hash)
 	found.InfoHash = it.Hash
 	return true
 }

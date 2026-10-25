@@ -291,7 +291,7 @@ func TestTorrentGrabStaysOffUsenet(t *testing.T) {
 		t.Fatalf("torrent client calls = %q", calls)
 	}
 	h.c.recordSeriesGrab(h.ctx, h.seriesID, name, "Fake", "", hash)
-	wantSeed, _, _ := h.c.seedRules(h.ctx, "Fake")
+	wantSeed, _, _, _ := h.c.seedRules(h.ctx, "Fake")
 	if g := grabRowOf(t, h.c, name); g.transport != "torrent" || g.seed != wantSeed || g.hash != hash {
 		t.Errorf("torrent grab row = %+v, want torrent with the indexer's seed rule (%v)", g, wantSeed)
 	}

@@ -789,6 +789,8 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 			}
 			return fmt.Errorf("%w: no video files were found in that download to import into %q", ErrNothingToImport, s.Title)
 		}
+		// Files it couldn't place stay only in the download: seed cleanup must keep it.
+		c.noteImportUnmatched(ctx, r.Hash, r.Name, unresolved)
 		c.series.AddEvent(ctx, s.ID, "imported", fmt.Sprintf("Imported %d episode%s from %s: %s", n, plural(n), from, r.Name))
 		c.seriesImported(ctx, s.ID, placed)
 	case "movie":

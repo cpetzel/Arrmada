@@ -21,16 +21,17 @@ type Repo struct {
 // NewRepo builds a repository over the given pool.
 func NewRepo(db *sql.DB) *Repo { return &Repo{db: db} }
 
-const indexerCols = `id, name, kind, url, api_key, username, password, categories, priority, min_seeders, seed_enabled, seed_ratio, seed_hours, enabled, media_types, prowlarr_id, disabled_by, managed_note, caps_json, caps_at`
+const indexerCols = `id, name, kind, url, api_key, username, password, categories, priority, min_seeders, seed_enabled, seed_ratio, seed_hours, enabled, media_types, prowlarr_id, disabled_by, managed_note, caps_json, caps_at, seed_use_global`
 
 func (r *Repo) scan(row interface{ Scan(...any) error }) (Indexer, error) {
 	var (
 		idx        Indexer
 		cats, mt   string
 		seedEn, en int
+		useGlobal  int
 		capsAt     sql.NullTime
 	)
-	err := row.Scan(&idx.ID, &idx.Name, &idx.Kind, &idx.URL, &idx.APIKey, &idx.Username, &idx.Password, &cats, &idx.Priority, &idx.MinSeeders, &seedEn, &idx.SeedRatio, &idx.SeedHours, &en, &mt, &idx.ProwlarrID, &idx.DisabledBy, &idx.ManagedNote, &idx.CapsJSON, &capsAt)
+	err := row.Scan(&idx.ID, &idx.Name, &idx.Kind, &idx.URL, &idx.APIKey, &idx.Username, &idx.Password, &cats, &idx.Priority, &idx.MinSeeders, &seedEn, &idx.SeedRatio, &idx.SeedHours, &en, &mt, &idx.ProwlarrID, &idx.DisabledBy, &idx.ManagedNote, &idx.CapsJSON, &capsAt, &useGlobal)
 	if err != nil {
 		return Indexer{}, err
 	}
@@ -40,6 +41,7 @@ func (r *Repo) scan(row interface{ Scan(...any) error }) (Indexer, error) {
 	idx.Categories = decodeCats(cats)
 	idx.MediaTypes = decodeStrs(mt)
 	idx.SeedEnabled = seedEn != 0
+	idx.SeedUseGlobal = useGlobal != 0
 	idx.Enabled = en != 0
 	return idx, nil
 }
@@ -93,11 +95,11 @@ func createIn(ctx context.Context, ex store.Execer, idx Indexer) (Indexer, error
 		idx.Priority = 25
 	}
 	res, err := ex.ExecContext(ctx,
-		`INSERT INTO indexers (name, kind, url, api_key, username, password, categories, priority, min_seeders, seed_enabled, seed_ratio, seed_hours, enabled, media_types, prowlarr_id, disabled_by, managed_note)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO indexers (name, kind, url, api_key, username, password, categories, priority, min_seeders, seed_enabled, seed_ratio, seed_hours, enabled, media_types, prowlarr_id, disabled_by, managed_note, seed_use_global)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		idx.Name, idx.Kind, idx.URL, idx.APIKey, idx.Username, idx.Password,
 		encodeCats(idx.Categories), idx.Priority, idx.MinSeeders, boolToInt(idx.SeedEnabled), idx.SeedRatio, idx.SeedHours, boolToInt(idx.Enabled), encodeStrs(idx.MediaTypes),
-		idx.ProwlarrID, idx.DisabledBy, idx.ManagedNote)
+		idx.ProwlarrID, idx.DisabledBy, idx.ManagedNote, boolToInt(idx.SeedUseGlobal))
 	if err != nil {
 		return Indexer{}, err
 	}
@@ -116,13 +118,13 @@ func createIn(ctx context.Context, ex store.Execer, idx Indexer) (Indexer, error
 func (r *Repo) Update(ctx context.Context, idx Indexer) error {
 	en := boolToInt(idx.Enabled)
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE indexers SET name=?, kind=?, url=?, username=?, categories=?, priority=?, min_seeders=?, seed_enabled=?, seed_ratio=?, seed_hours=?, media_types=?,
+		`UPDATE indexers SET name=?, kind=?, url=?, username=?, categories=?, priority=?, min_seeders=?, seed_enabled=?, seed_ratio=?, seed_hours=?, media_types=?, seed_use_global=?,
 		    disabled_by = CASE WHEN ? = 1 THEN '' WHEN enabled = 1 THEN '`+DisabledByUser+`' ELSE disabled_by END,
 		    managed_note = CASE WHEN ? = 1 OR enabled = 1 THEN '' ELSE managed_note END,
 		    enabled = ?
 		 WHERE id=?`,
 		idx.Name, idx.Kind, idx.URL, idx.Username, encodeCats(idx.Categories),
-		idx.Priority, idx.MinSeeders, boolToInt(idx.SeedEnabled), idx.SeedRatio, idx.SeedHours, encodeStrs(idx.MediaTypes),
+		idx.Priority, idx.MinSeeders, boolToInt(idx.SeedEnabled), idx.SeedRatio, idx.SeedHours, encodeStrs(idx.MediaTypes), boolToInt(idx.SeedUseGlobal),
 		en, en, en, idx.ID)
 	if err != nil {
 		return err

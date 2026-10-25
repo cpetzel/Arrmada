@@ -988,15 +988,15 @@ func (c *Coordinator) recordMusicGrab(ctx context.Context, mediaType string, id 
 	notesFrom(ctx).grabbed(title) // the search attempt this grab came from, if any
 	// Same profile the album was chosen under (musicProfile), so the stall window matches.
 	profile = c.effectiveProfile(ctx, profile, quality.MediaMusic)
-	transport, seedEnabled, seedRatio, seedHours := c.grabPolicy(ctx, indexerName, infoHash)
+	transport, seedEnabled, seedRatio, seedHours, seedSource := c.grabPolicy(ctx, indexerName, infoHash)
 	// An upgrade grab says so (decided_mode 'upgrade'): its import mustn't move the album
 	// to another edition (importMusicDownload).
 	key, mode := pickOf(ctx, title)
 	res, err := c.db.ExecContext(ctx,
-		`INSERT INTO grabs (movie_id, version_id, title, indexer, quality_profile, stall_minutes, seed_enabled, seed_ratio, seed_hours, media_type, info_hash, decided_by, decided_mode, transport)
-		 VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO grabs (movie_id, version_id, title, indexer, quality_profile, stall_minutes, seed_enabled, seed_ratio, seed_hours, media_type, info_hash, decided_by, decided_mode, transport, seed_source)
+		 VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, title, indexerName, profile, c.quality.StallMinutes(ctx, profile),
-		boolToInt(seedEnabled), seedRatio, seedHours, mediaType, infoHash, key, mode, transport)
+		boolToInt(seedEnabled), seedRatio, seedHours, mediaType, infoHash, key, mode, transport, seedSource)
 	if err != nil {
 		c.log.Warn("music: recording the grab failed", "kind", mediaType, "id", id, "err", err)
 		return 0

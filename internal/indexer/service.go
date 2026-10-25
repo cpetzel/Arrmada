@@ -50,6 +50,12 @@ type Service struct {
 	// stored caps and no categories of its own is searched in the media type's usual
 	// categories. nil = on, the setting's default.
 	defaultCats func(ctx context.Context) bool
+	// globalSeedGoal says whether a new indexer may start on the global seed goal
+	// (Settings → Downloads): one is set and it has a time, so a newly added private
+	// tracker can't be ended at a ratio before its minimum seeding time. A Prowlarr
+	// indexer added then starts on it (SeedUseGlobal). nil = no, so new rows get
+	// DefaultSeedHours as before. Rows that exist already are never switched.
+	globalSeedGoal func(ctx context.Context) bool
 	// aioProwlarr is where the all-in-one image's optional Prowlarr answers while it runs
 	// (SetBundledProwlarr); "" elsewhere.
 	aioProwlarr string
@@ -61,6 +67,18 @@ const KeyDefaultCategories = "indexer_default_categories"
 
 // SetDefaultCategories wires the indexer_default_categories setting (see defaultCats).
 func (s *Service) SetDefaultCategories(fn func(ctx context.Context) bool) { s.defaultCats = fn }
+
+// SetGlobalSeedGoal wires whether a global seed goal is set (see globalSeedGoal).
+func (s *Service) SetGlobalSeedGoal(fn func(ctx context.Context) bool) { s.globalSeedGoal = fn }
+
+// newSeedGoal is the goal a new synced indexer starts with: the global goal while one is
+// set, otherwise the standard window.
+func (s *Service) newSeedGoal(ctx context.Context) (useGlobal bool, hours int) {
+	if s.globalSeedGoal != nil && s.globalSeedGoal(ctx) {
+		return true, 0
+	}
+	return false, DefaultSeedHours
+}
 
 // SetUsenetAvailable wires whether a usenet download client exists (main wires it to the
 // download service's HasTransport). It's asked on every search, so adding or removing a

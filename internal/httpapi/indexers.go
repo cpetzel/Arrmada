@@ -108,7 +108,10 @@ type createIndexerRequest struct {
 	SeedEnabled *bool    `json:"seed_enabled"`
 	SeedRatio   float64  `json:"seed_ratio"`
 	SeedHours   int      `json:"seed_hours"`
-	Enabled     *bool    `json:"enabled"`
+	// SeedUseGlobal seeds to the global seed goal instead of SeedRatio/SeedHours. nil on
+	// create: on it while a global goal is set; nil on update: unchanged.
+	SeedUseGlobal *bool `json:"seed_use_global"`
+	Enabled       *bool `json:"enabled"`
 }
 
 func (a *api) handleCreateIndexer(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +121,10 @@ func (a *api) handleCreateIndexer(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" {
 		a.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if msg := seedGoalProblem(&req.SeedRatio, &req.SeedHours); msg != "" {
+		a.writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	kind := indexer.Kind(req.Kind)
@@ -168,12 +175,24 @@ func (a *api) handleCreateIndexer(w http.ResponseWriter, r *http.Request) {
 	// than a ratio) can never remove a torrent early and breach a private tracker's
 	// minimum-seed-time rule. Editing an indexer respects whatever is sent, so 0/0 stays
 	// deliberately selectable.
+	//
+	// "Use the global default" is its own choice (seed_use_global), always honoured when
+	// sent. A new indexer that doesn't say and sends no goal of its own starts on it only
+	// while the global goal has a time (SafeForNew); otherwise it gets the time-only
+	// default as before.
 	seedRatio, seedHours := req.SeedRatio, req.SeedHours
+	useGlobal := req.SeedUseGlobal != nil && *req.SeedUseGlobal
+	if req.SeedUseGlobal == nil && seedRatio == 0 && seedHours == 0 && a.seedDefault(r.Context()).SafeForNew() {
+		useGlobal = true
+	}
 	if kind == indexer.KindNewznab {
 		// Usenet never seeds; a seed goal on a usenet indexer would only mislead.
-		seedEnabled, seedRatio, seedHours = false, 0, 0
+		seedEnabled, seedRatio, seedHours, useGlobal = false, 0, 0, false
 	}
-	if seedEnabled && seedRatio == 0 && seedHours == 0 {
+	if useGlobal {
+		seedRatio, seedHours = 0, 0
+	}
+	if seedEnabled && !useGlobal && seedRatio == 0 && seedHours == 0 {
 		seedHours = indexer.DefaultSeedHours
 	}
 
@@ -181,20 +200,21 @@ func (a *api) handleCreateIndexer(w http.ResponseWriter, r *http.Request) {
 		req.URL = "" // never used, so never kept (see savedSecretMoves)
 	}
 	created, err := a.deps.Indexers.Create(r.Context(), indexer.Indexer{
-		Name:        req.Name,
-		Kind:        kind,
-		URL:         req.URL,
-		APIKey:      req.APIKey,
-		Username:    req.Username,
-		Password:    req.Password,
-		Categories:  req.Categories,
-		MediaTypes:  req.MediaTypes,
-		Priority:    req.Priority,
-		MinSeeders:  req.MinSeeders,
-		SeedEnabled: seedEnabled,
-		SeedRatio:   seedRatio,
-		SeedHours:   seedHours,
-		Enabled:     enabled,
+		Name:          req.Name,
+		Kind:          kind,
+		URL:           req.URL,
+		APIKey:        req.APIKey,
+		Username:      req.Username,
+		Password:      req.Password,
+		Categories:    req.Categories,
+		MediaTypes:    req.MediaTypes,
+		Priority:      req.Priority,
+		MinSeeders:    req.MinSeeders,
+		SeedEnabled:   seedEnabled,
+		SeedRatio:     seedRatio,
+		SeedHours:     seedHours,
+		SeedUseGlobal: useGlobal,
+		Enabled:       enabled,
 	})
 	if err != nil {
 		a.writeError(w, http.StatusInternalServerError, "could not create indexer")
@@ -240,6 +260,20 @@ func (a *api) handleUpdateIndexer(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	// Only a changed value is checked: a goal saved before the bounds existed mustn't stop
+	// every other edit to the row.
+	var ratioSent *float64
+	var hoursSent *int
+	if req.SeedRatio != old.SeedRatio {
+		ratioSent = &req.SeedRatio
+	}
+	if req.SeedHours != old.SeedHours {
+		hoursSent = &req.SeedHours
+	}
+	if msg := seedGoalProblem(ratioSent, hoursSent); msg != "" {
+		a.writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	kind := indexer.Kind(req.Kind)
 	switch kind {
 	case indexer.KindTorznab, indexer.KindNewznab, indexer.KindTorrentLeech, indexer.KindX1337, indexer.KindMAM:
@@ -269,23 +303,33 @@ func (a *api) handleUpdateIndexer(w http.ResponseWriter, r *http.Request) {
 	if req.SeedEnabled != nil {
 		seedEnabled = *req.SeedEnabled
 	}
+	// Left out, the row keeps its choice: an edit made without it (an older page, a scope
+	// pill) mustn't switch an indexer to or from the global goal.
+	useGlobal := old.SeedUseGlobal
+	if req.SeedUseGlobal != nil {
+		useGlobal = *req.SeedUseGlobal
+	}
+	if kind == indexer.KindNewznab {
+		useGlobal = false
+	}
 
 	err = a.deps.Indexers.Update(r.Context(), indexer.Indexer{
-		ID:          id,
-		Name:        req.Name,
-		Kind:        kind,
-		URL:         req.URL,
-		APIKey:      req.APIKey, // blank = keep existing
-		Username:    req.Username,
-		Password:    req.Password, // blank = keep existing
-		Categories:  req.Categories,
-		MediaTypes:  req.MediaTypes,
-		Priority:    req.Priority,
-		MinSeeders:  req.MinSeeders,
-		SeedEnabled: seedEnabled,
-		SeedRatio:   req.SeedRatio,
-		SeedHours:   req.SeedHours,
-		Enabled:     enabled,
+		ID:            id,
+		Name:          req.Name,
+		Kind:          kind,
+		URL:           req.URL,
+		APIKey:        req.APIKey, // blank = keep existing
+		Username:      req.Username,
+		Password:      req.Password, // blank = keep existing
+		Categories:    req.Categories,
+		MediaTypes:    req.MediaTypes,
+		Priority:      req.Priority,
+		MinSeeders:    req.MinSeeders,
+		SeedEnabled:   seedEnabled,
+		SeedRatio:     req.SeedRatio,
+		SeedHours:     req.SeedHours,
+		SeedUseGlobal: useGlobal,
+		Enabled:       enabled,
 	})
 	if errors.Is(err, indexer.ErrNotFound) {
 		a.writeError(w, http.StatusNotFound, "indexer not found")

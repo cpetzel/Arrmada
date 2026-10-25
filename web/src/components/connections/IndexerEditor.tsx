@@ -4,6 +4,8 @@ import { indexerApi } from "../../lib/indexerApi";
 import { usenetIndexerLine } from "../../lib/indexerStatus";
 import { secretMoved } from "../../lib/sameEndpoint";
 import { useUnsavedGuard } from "../../lib/useUnsavedGuard";
+import { useOptionalSettings } from "../../lib/useSettings";
+import { describeGoal } from "../../lib/seedingApi";
 import { Field } from "../../ui/Field";
 import { Switch } from "../../ui/Switch";
 
@@ -86,6 +88,7 @@ function EditForm({ idx, onSaved }: { idx: Indexer; onSaved: () => void }) {
   const initHours = idx.seed_hours ?? 0;
   const initRatio = idx.seed_ratio ?? 0;
   const [seedEnabled, setSeedEnabled] = useState(idx.seed_enabled ?? true);
+  const [seedMode, setSeedMode] = useState<SeedMode>(seedModeOf(idx));
   const [seedRatio, setSeedRatio] = useState(initRatio || 0);
   const [seedTime, setSeedTime] = useState(initHours % 24 === 0 && initHours > 0 ? initHours / 24 : initHours);
   const [seedUnit, setSeedUnit] = useState<"hours" | "days">(initHours % 24 === 0 && initHours > 0 ? "days" : "hours");
@@ -107,9 +110,7 @@ function EditForm({ idx, onSaved }: { idx: Indexer; onSaved: () => void }) {
     media_types: idx.media_types, // scoping is edited via the pills; preserve it here
     priority,
     min_seeders: minSeeders,
-    seed_enabled: seedEnabled,
-    seed_ratio: seedEnabled ? seedRatio : 0,
-    seed_hours: seedEnabled ? (seedUnit === "days" ? seedTime * 24 : seedTime) : 0,
+    ...seedBody(seedEnabled, seedMode, seedRatio, seedUnit === "days" ? seedTime * 24 : seedTime),
     enabled,
   });
   // Dirty once the form differs from how it opened.
@@ -180,7 +181,7 @@ function EditForm({ idx, onSaved }: { idx: Indexer; onSaved: () => void }) {
       </div>
 
       {/* Nothing from Usenet seeds: there are no seed rules to set. */}
-      {!isNewznab && <SeedingRules enabled={seedEnabled} ratio={seedRatio} time={seedTime} unit={seedUnit} onEnabled={setSeedEnabled} onRatio={setSeedRatio} onTime={setSeedTime} onUnit={setSeedUnit} />}
+      {!isNewznab && <SeedingRules enabled={seedEnabled} mode={seedMode} ratio={seedRatio} time={seedTime} unit={seedUnit} onEnabled={setSeedEnabled} onMode={setSeedMode} onRatio={setSeedRatio} onTime={setSeedTime} onUnit={setSeedUnit} />}
 
       <label className="mt-3 flex items-center gap-2 text-base">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
@@ -212,11 +213,43 @@ function Segmented<T extends string>({ value, options, onChange }: { value: T; o
   );
 }
 
-export function SeedingRules({ enabled, ratio, time, unit, onEnabled, onRatio, onTime, onUnit }: {
-  enabled: boolean; ratio: number; time: number; unit: "hours" | "days";
-  onEnabled: (v: boolean) => void; onRatio: (v: number) => void; onTime: (v: number) => void; onUnit: (v: "hours" | "days") => void;
+// SeedMode is what an indexer seeds to: the global seed goal (Settings → Downloads), a goal
+// of its own, or forever. "Use the global default" is its own choice, never a reading of
+// 0/0: an indexer at 0/0 is one its owner set to seed forever.
+export type SeedMode = "global" | "own" | "forever";
+
+// seedModeOf is the mode an indexer's saved settings are in.
+export function seedModeOf(idx: Pick<Indexer, "seed_use_global" | "seed_ratio" | "seed_hours">): SeedMode {
+  if (idx.seed_use_global) return "global";
+  return (idx.seed_ratio ?? 0) > 0 || (idx.seed_hours ?? 0) > 0 ? "own" : "forever";
+}
+
+// seedBody is the seed part of an indexer's save for a mode: only an own goal sends its
+// numbers, and only "global" turns the global goal on.
+export function seedBody(enabled: boolean, mode: SeedMode, ratio: number, hours: number): Pick<NewIndexer, "seed_enabled" | "seed_ratio" | "seed_hours" | "seed_use_global"> {
+  const own = enabled && mode === "own";
+  return { seed_enabled: enabled, seed_use_global: enabled && mode === "global", seed_ratio: own ? ratio : 0, seed_hours: own ? hours : 0 };
+}
+
+// globalGoalText is the global goal as the indexer form names it: "ratio 2 or 14 days",
+// or what a torrent on it gets while none is set.
+export function globalGoalText(global: { ratio: number; hours: number } | null): string {
+  if (!global) return "set in Settings → Downloads";
+  if (global.ratio > 0 || global.hours > 0) return describeGoal(global.ratio, global.hours);
+  return "none set yet — the standard 14 days until one is";
+}
+
+export function SeedingRules({ enabled, mode, ratio, time, unit, creating, onEnabled, onMode, onRatio, onTime, onUnit }: {
+  enabled: boolean; mode: SeedMode; ratio: number; time: number; unit: "hours" | "days";
+  /** A new indexer: "seed forever" isn't offered (a new one always gets a goal). */
+  creating?: boolean;
+  onEnabled: (v: boolean) => void; onMode: (v: SeedMode) => void; onRatio: (v: number) => void; onTime: (v: number) => void; onUnit: (v: "hours" | "days") => void;
 }) {
   const timeId = useId();
+  const shared = useOptionalSettings();
+  const global = globalGoalText(shared ? { ratio: shared.downloads_seed_ratio ?? 0, hours: shared.downloads_seed_hours ?? 0 } : null);
+  const modes: { v: SeedMode; l: string }[] = [{ v: "global", l: "Global default" }, { v: "own", l: "Own goal" }];
+  if (!creating || mode === "forever") modes.push({ v: "forever", l: "Seed forever" });
   return (
     <div className="mt-3 rounded-lg p-3" style={{ background: "var(--panel)", border: "1px solid var(--line)" }}>
       <div className="flex items-center justify-between">
@@ -228,18 +261,27 @@ export function SeedingRules({ enabled, ratio, time, unit, onEnabled, onRatio, o
       </div>
       {enabled && (
         <>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Labeled label="Seed ratio (0 = none)">
-              <input type="number" min={0} step={0.1} className={field} style={fieldStyle} value={ratio} onChange={(e) => onRatio(Math.max(0, Number(e.target.value)))} placeholder="e.g. 2.5" />
-            </Labeled>
-            <Labeled label="Or after time (0 = none)" controlId={timeId}>
-              <div className="flex items-center gap-2">
-                <input id={timeId} type="number" min={0} className={field} style={fieldStyle} value={time} onChange={(e) => onTime(Math.max(0, Number(e.target.value)))} />
-                <Segmented value={unit} options={[{ v: "hours", l: "Hours" }, { v: "days", l: "Days" }]} onChange={onUnit} />
-              </div>
-            </Labeled>
+          <div className="mt-3" role="group" aria-label="Seed to">
+            <Segmented value={mode} options={modes} onChange={onMode} />
           </div>
-          <p className="mt-2 text-xs text-ink-faint">Removed when either limit is hit (both 0 = seed forever). The library keeps its own copy, so removing the torrent never touches your media.</p>
+          {mode === "global" && <p className="mt-2 text-xs text-ink-dim" data-testid="seed-mode-note">Uses the global default ({global}). A change to it reaches torrents already seeding from this indexer.</p>}
+          {mode === "forever" && <p className="mt-2 text-xs text-ink-dim" data-testid="seed-mode-note">Seeds until you remove it. The global default never applies.</p>}
+          {mode === "own" && (
+            <>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Labeled label="Seed ratio (0 = none)">
+                  <input type="number" min={0} max={100} step={0.1} className={field} style={fieldStyle} value={ratio} onChange={(e) => onRatio(Math.min(100, Math.max(0, Number(e.target.value))))} placeholder="e.g. 2.5" />
+                </Labeled>
+                <Labeled label="Or after time (0 = none)" controlId={timeId}>
+                  <div className="flex items-center gap-2">
+                    <input id={timeId} type="number" min={0} className={field} style={fieldStyle} value={time} onChange={(e) => onTime(Math.max(0, Number(e.target.value)))} />
+                    <Segmented value={unit} options={[{ v: "hours", l: "Hours" }, { v: "days", l: "Days" }]} onChange={onUnit} />
+                  </div>
+                </Labeled>
+              </div>
+              <p className="mt-2 text-xs text-ink-faint">Removed when either limit is hit, so a ratio can end the seed before the time. For a tracker's minimum seeding time, set the time alone. The library keeps its own copy, so removing the torrent never touches your media.</p>
+            </>
+          )}
         </>
       )}
     </div>
@@ -274,6 +316,7 @@ export function indexerBody(idx: Indexer, change: Partial<NewIndexer>): NewIndex
     seed_enabled: idx.seed_enabled,
     seed_ratio: idx.seed_ratio,
     seed_hours: idx.seed_hours,
+    seed_use_global: idx.seed_use_global ?? false,
     enabled: idx.enabled,
     ...change,
   };

@@ -800,7 +800,7 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 		// nothing (everything now equal-or-better), and mis-blocklists the release
 		// with "fully imported — no more episodes for this season".
 		if importFailed == 0 {
-			c.recordHashForContentPath(ctx, path)
+			c.recordHashForContentPath(ctx, path, unresolved)
 		}
 		return nil
 	}
@@ -834,7 +834,9 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 // records its hash as imported and closes out its grab as 'imported', so seed cleanup
 // removes the torrent at its goal. Used after manual imports, which are given a
 // filesystem path rather than a torrent hash.
-func (c *Coordinator) recordHashForContentPath(ctx context.Context, path string) {
+//
+// unmatched is how many of its files the import couldn't place (noteImportUnmatched).
+func (c *Coordinator) recordHashForContentPath(ctx context.Context, path string, unmatched int) {
 	if c.downloads == nil {
 		return
 	}
@@ -847,6 +849,7 @@ func (c *Coordinator) recordHashForContentPath(ctx context.Context, path string)
 		if it.ContentPath != "" && filepath.Clean(it.ContentPath) == clean {
 			c.recordImportedHash(ctx, it.Hash, it.Name, it.SizeBytes)
 			c.setGrabStatusByHash(ctx, it.Hash, it.Name, "series", grabStatusImported)
+			c.noteImportUnmatched(ctx, it.Hash, it.Name, unmatched)
 			return
 		}
 	}

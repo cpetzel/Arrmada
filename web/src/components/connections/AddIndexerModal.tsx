@@ -2,9 +2,10 @@ import { useState } from "react";
 import { type Indexer, type NewIndexer } from "../../lib/api";
 import { indexerApi } from "../../lib/indexerApi";
 import { useUnsavedGuard } from "../../lib/useUnsavedGuard";
+import { useOptionalSettings } from "../../lib/useSettings";
 import { DEFAULT_SEED_DAYS, presetsFor, type IndexerPreset } from "../../lib/indexerPresets";
 import { Button, Modal } from "../../ui";
-import { ALL_MEDIA, Labeled, MEDIA_TYPES, SeedingRules, TestLine, TIE_BREAK_HELP, field, fieldStyle, type TestState } from "./IndexerEditor";
+import { ALL_MEDIA, Labeled, MEDIA_TYPES, SeedingRules, TestLine, TIE_BREAK_HELP, field, fieldStyle, seedBody, type SeedMode, type TestState } from "./IndexerEditor";
 
 // AddIndexerModal is "+ Add indexer" on Settings → Connections: pick a tracker from the
 // catalogue, fill in only what that tracker needs, and Test it before a row exists. Save
@@ -77,6 +78,13 @@ function PresetForm({ preset, onBack, onAdded, onSaving }: {
   const [minSeeders, setMinSeeders] = useState(0);
   const [seedEnabled, setSeedEnabled] = useState(true);
   const [seedRatio, setSeedRatio] = useState(0);
+  // With a global seed goal that has a time (Settings → Downloads), a new indexer starts on
+  // it; otherwise on its own goal of the standard window, as before. A ratio-only goal
+  // could end a new private tracker's torrents before its minimum seeding time, so it is
+  // only ever chosen, never the default.
+  const shared = useOptionalSettings();
+  const globalGoal = (shared?.downloads_seed_hours ?? 0) > 0;
+  const [seedMode, setSeedMode] = useState<SeedMode>(globalGoal ? "global" : "own");
   const [seedTime, setSeedTime] = useState(DEFAULT_SEED_DAYS);
   const [seedUnit, setSeedUnit] = useState<"hours" | "days">("days");
   const [test, setTest] = useState<TestState & { sig?: string }>({});
@@ -95,9 +103,7 @@ function PresetForm({ preset, onBack, onAdded, onSaving }: {
     priority,
     min_seeders: minSeeders,
     // Nothing from Usenet seeds (the server stores a usenet indexer without seed rules).
-    seed_enabled: seedEnabled && !preset.usenet,
-    seed_ratio: seedEnabled && !preset.usenet ? seedRatio : 0,
-    seed_hours: seedEnabled && !preset.usenet ? (seedUnit === "days" ? seedTime * 24 : seedTime) : 0,
+    ...seedBody(seedEnabled && !preset.usenet, seedMode, seedRatio, seedUnit === "days" ? seedTime * 24 : seedTime),
   });
   // A test answers for exactly what was in the form; change anything and it's stale.
   const sig = JSON.stringify(body());
@@ -208,7 +214,7 @@ function PresetForm({ preset, onBack, onAdded, onSaving }: {
         })}
       </div>
 
-      {!preset.usenet && <SeedingRules enabled={seedEnabled} ratio={seedRatio} time={seedTime} unit={seedUnit} onEnabled={setSeedEnabled} onRatio={setSeedRatio} onTime={setSeedTime} onUnit={setSeedUnit} />}
+      {!preset.usenet && <SeedingRules creating enabled={seedEnabled} mode={seedMode} ratio={seedRatio} time={seedTime} unit={seedUnit} onEnabled={setSeedEnabled} onMode={setSeedMode} onRatio={setSeedRatio} onTime={setSeedTime} onUnit={setSeedUnit} />}
       {preset.privateTracker && (
         <p className="mb-0 mt-2 text-xs text-ink-faint">
           A private tracker counts how long you seed. Keep these at least as long as its rules ask; {DEFAULT_SEED_DAYS} days covers most.

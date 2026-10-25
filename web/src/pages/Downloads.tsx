@@ -716,7 +716,9 @@ function seedGoal(it: ActivityDownload): { label: string; frac: number | null } 
   let frac = 0;
   if (ratioTarget > 0) { parts.push(`ratio ${it.ratio.toFixed(2)} / ${ratioTarget.toFixed(2)}`); frac = Math.max(frac, it.ratio / ratioTarget); }
   if (hoursTarget > 0) { parts.push(`${dur(seededSec)} / ${hoursTarget}h`); frac = Math.max(frac, seededSec / (hoursTarget * 3600)); }
-  return { label: `until ${parts.join(" or ")}`, frac: Math.min(1, frac) };
+  // Its indexer set no goal, so the global one (Settings → Downloads) is what ends it.
+  const whose = it.seed_source === "global" ? " (global default)" : "";
+  return { label: `until ${parts.join(" or ")}${whose}`, frac: Math.min(1, frac) };
 }
 
 // SeedingSummary is the at-a-glance strip above the seeding list: how many, live
