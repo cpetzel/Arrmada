@@ -12,7 +12,7 @@ import (
 // Where each download client's files land, as Arrmada sees them (GitHub #70). With two
 // clients on two volumes — the first saving into the Downloads folder, the second into a
 // folder of its own — the disk guard has to judge each download by the volume its own
-// client writes to, and manual import has to be able to read the second client's folder.
+// client writes to.
 //
 // A torrent client is sent Arrmada's own folder as every grab's save path, translated
 // through its path mappings, so its downloads land in that folder as the client names it:
@@ -20,10 +20,8 @@ import (
 // its own (qBittorrent's default save path, SABnzbd's incomplete, completed and category
 // folders): those are asked for over the network, so they're cached.
 //
-// The two kinds are trusted differently. A folder an admin set up — Arrmada's own
-// folders, a client's path mappings — may be read by manual import. A folder the client
-// merely reports is the client's word: the disk guard may measure it (reading how full a
-// drive is harms nothing), but nothing is imported from it.
+// This is only ever used to measure drives: reading how full a drive is harms nothing,
+// whoever named the folder. Nothing here makes a folder readable by manual import.
 
 // ClientFolder is one folder a download client saves into, as Arrmada sees it.
 type ClientFolder struct {
@@ -37,10 +35,8 @@ type ClientFolder struct {
 	Home bool `json:"home"`
 	// Reported is a folder the client itself named (a default save path, a usenet client's
 	// folders), rather than one of Arrmada's folders translated through the client's
-	// mappings. Nothing has checked Arrmada can see it, and it's never an import root.
+	// mappings. Nothing has checked Arrmada can see it.
 	Reported bool `json:"reported"`
-	// Remote is a reported folder as the client names it (before its path mappings).
-	Remote string `json:"remote,omitempty"`
 }
 
 // clientFoldersTTL is how long a client's own answer about where it saves is kept. Its
@@ -49,13 +45,14 @@ type ClientFolder struct {
 const clientFoldersTTL = 10 * time.Minute
 
 // clientFolderTimeout bounds one client's answer, so a client that hangs can't hold up
-// the disk guard's pass or a manual-import check.
+// the disk guard's pass or the status.
 const clientFolderTimeout = 5 * time.Second
 
-// incompleteFolderReader is a client that writes a download somewhere other than where it
-// finishes (SABnzbd's incomplete folder), and says where, as it names it.
-type incompleteFolderReader interface {
-	IncompleteSavePath(ctx context.Context, dc Client) (string, error)
+// usenetFolderReader is a usenet client that names, in one read, the folder it writes a
+// job to while it downloads (incomplete), where finished jobs go (complete) and its
+// categories' own folders, as it names them (SABnzbd).
+type usenetFolderReader interface {
+	UsenetFolders(ctx context.Context, dc Client) (complete, incomplete string, cats map[string]string, err error)
 }
 
 // reportedFolders is what one client last said about where it saves, as it names them.
@@ -70,13 +67,6 @@ type reportedFolders struct {
 type clientFoldersCache struct {
 	mu   sync.Mutex
 	byID map[int64]reportedFolders
-}
-
-// reset forgets every answer, so the next read asks the clients again.
-func (c *clientFoldersCache) reset() {
-	c.mu.Lock()
-	c.byID = nil
-	c.mu.Unlock()
 }
 
 // EnabledClientCount is how many download clients are switched on. A switched-off client
@@ -99,7 +89,7 @@ func (s *Service) ClientFolders(ctx context.Context, folders []string) []ClientF
 	var out []ClientFolder
 	for _, c := range clients {
 		seen := map[string]bool{}
-		add := func(p, remote string, home bool) {
+		add := func(p string, home, reported bool) {
 			p = strings.TrimSpace(p)
 			if p == "" || !filepath.IsAbs(p) {
 				return
@@ -109,11 +99,11 @@ func (s *Service) ClientFolders(ctx context.Context, folders []string) []ClientF
 				return
 			}
 			seen[p] = true
-			out = append(out, ClientFolder{ClientID: c.ID, Client: c.Name, Path: p, Home: home, Reported: remote != "", Remote: remote})
+			out = append(out, ClientFolder{ClientID: c.ID, Client: c.Name, Path: p, Home: home, Reported: reported})
 		}
 		reported := func(remote string, home bool) {
 			if remote = strings.TrimSpace(remote); remote != "" {
-				add(c.PathMaps.ToLocal(remote), remote, home)
+				add(c.PathMaps.ToLocal(remote), home, true)
 			}
 		}
 		torrent := c.Kind.Transport() == TransportTorrent
@@ -123,7 +113,7 @@ func (s *Service) ClientFolders(ctx context.Context, folders []string) []ClientF
 					continue
 				}
 				// The save path a grab is sent with, then back the way the client reports it.
-				add(c.PathMaps.ToLocal(c.PathMaps.ToRemote(d)), "", i == 0)
+				add(c.PathMaps.ToLocal(c.PathMaps.ToRemote(d)), i == 0, false)
 			}
 		}
 		rep := s.reportedFolders(ctx, c)
@@ -143,29 +133,6 @@ func (s *Service) ClientFolders(ctx context.Context, folders []string) []ClientF
 	return out
 }
 
-// MappedFolders is the local side of every enabled client's path mappings: folders an
-// admin set up for a client, and so — unlike what a client reports — folders manual import
-// may read (each still has to pass the import's own rules).
-func (s *Service) MappedFolders(ctx context.Context) []string {
-	clients, err := s.repo.ListEnabled(ctx)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	seen := map[string]bool{}
-	for _, c := range clients {
-		for _, pm := range c.PathMaps {
-			p := strings.TrimSpace(pm.Local)
-			if p == "" || !filepath.IsAbs(p) || seen[filepath.Clean(p)] {
-				continue
-			}
-			seen[filepath.Clean(p)] = true
-			out = append(out, filepath.Clean(p))
-		}
-	}
-	return out
-}
-
 // reportedFolders is what client c says about where it saves, cached (clientFoldersTTL).
 // A failed ask keeps the previous answer, and isn't repeated before the TTL is up either.
 func (s *Service) reportedFolders(ctx context.Context, c Client) reportedFolders {
@@ -173,10 +140,9 @@ func (s *Service) reportedFolders(ctx context.Context, c Client) reportedFolders
 	if !ok {
 		return reportedFolders{}
 	}
+	ufr, isUsenet := impl.(usenetFolderReader)
 	spr, canSave := impl.(savePathReader)
-	ifr, canInc := impl.(incompleteFolderReader)
-	cfr, canCats := impl.(categoryFolderReader)
-	if !canSave && !canInc && !canCats {
+	if !isUsenet && !canSave {
 		return reportedFolders{}
 	}
 	key := string(c.Kind) + "\x00" + c.URL + "\x00" + c.Username
@@ -192,29 +158,23 @@ func (s *Service) reportedFolders(ctx context.Context, c Client) reportedFolders
 	next := reportedFolders{at: time.Now(), key: key, save: prev.save, incomplete: prev.incomplete, cats: prev.cats}
 	cctx, cancel := context.WithTimeout(ctx, clientFolderTimeout)
 	defer cancel()
-	if canSave {
+	switch {
+	case isUsenet:
+		complete, incomplete, cats, err := ufr.UsenetFolders(cctx, c)
+		if err != nil {
+			s.log.Debug("couldn't ask a download client where it saves", "client", c.Name, "err", err)
+			break
+		}
+		next.save, next.incomplete, next.cats = complete, incomplete, nil
+		for _, f := range cats {
+			next.cats = append(next.cats, f)
+		}
+		sort.Strings(next.cats)
+	case canSave:
 		if p, err := spr.DefaultSavePath(cctx, c); err == nil {
 			next.save = p
 		} else {
 			s.log.Debug("couldn't ask a download client where it saves", "client", c.Name, "err", err)
-		}
-	}
-	if canInc {
-		if p, err := ifr.IncompleteSavePath(cctx, c); err == nil {
-			next.incomplete = p
-		} else {
-			s.log.Debug("couldn't ask a download client where it downloads to", "client", c.Name, "err", err)
-		}
-	}
-	if canCats {
-		if m, err := cfr.CategoryFolders(cctx, c); err == nil {
-			next.cats = nil
-			for _, f := range m {
-				next.cats = append(next.cats, f)
-			}
-			sort.Strings(next.cats)
-		} else {
-			s.log.Debug("couldn't ask a download client for its category folders", "client", c.Name, "err", err)
 		}
 	}
 	s.clientFolders.mu.Lock()

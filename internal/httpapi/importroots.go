@@ -3,14 +3,11 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/tristenlammi/arrmada/internal/config"
 	"github.com/tristenlammi/arrmada/internal/libroots"
 	"github.com/tristenlammi/arrmada/internal/pathguard"
 )
@@ -84,97 +81,8 @@ func (a *api) checkImportPath(ctx context.Context, p string) (string, error) {
 	if libroots.InDataDir(clean, a.deps.Config.DataDir) {
 		return "", errImportPathDataDir
 	}
-	if !a.withinImportRoots(ctx, clean) {
-		return "", a.outsideError(ctx, clean)
+	if !pathguard.Within(clean, a.importRoots(ctx)...) {
+		return "", errImportPathOutside
 	}
 	return clean, nil
-}
-
-// withinImportRoots reports whether p is inside a folder manual import may read: the
-// downloads and library folders, then the folders an admin mapped for a download client.
-// The second list is only read when the first doesn't hold p.
-func (a *api) withinImportRoots(ctx context.Context, p string, extra ...string) bool {
-	return pathguard.Within(p, append(a.importRoots(ctx), extra...)...) || pathguard.Within(p, a.clientImportRoots(ctx)...)
-}
-
-// clientImportRoots is the local side of each enabled download client's path mappings
-// (GitHub #70). A second client on a volume of its own saves outside every downloads
-// folder Arrmada was given — say /downloads beside the first client's /download, through
-// the mapping that tells Arrmada where it sees that client's folder — and its finished
-// downloads must still be importable from there. Only where an import may read from
-// widens: where the files go in the library is decided exactly as before.
-//
-// Only folders an admin set up count: a mapping is saved by an admin on the client's
-// card. A folder the client merely reports (its default save path, a usenet category's
-// folder) is the client's word, and never an import root (see outsideError for how to
-// allow one). Arrmada's own downloads folders as a client is sent them need no entry
-// here: translated through the client's mappings they land in a downloads folder or in
-// one of these. Each must still pass usableClientRoot.
-func (a *api) clientImportRoots(ctx context.Context) []string {
-	if a.deps.Downloads == nil {
-		return nil
-	}
-	var out []string
-	for _, p := range a.deps.Downloads.MappedFolders(ctx) {
-		if usableClientRoot(p, a.deps.Config) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// outsideError is errImportPathOutside, and — when p is inside a folder a download client
-// says it saves into but that no admin mapped — how to allow that folder: a path mapping
-// on that client, which only an admin can add.
-func (a *api) outsideError(ctx context.Context, p string) error {
-	if a.deps.Downloads == nil {
-		return errImportPathOutside
-	}
-	var folders []string
-	for _, r := range a.roots().DownloadFolders(ctx) {
-		folders = append(folders, r.Path)
-	}
-	for _, f := range a.deps.Downloads.ClientFolders(ctx, folders) {
-		if !f.Reported || !usableClientRoot(f.Path, a.deps.Config) || !pathguard.Within(p, f.Path) {
-			continue
-		}
-		return fmt.Errorf("%w. %s is in %s, a folder %s says it saves into. To import from there, an admin can add a path mapping to %s in Settings → Connections → Download clients: %s as %s names it, %s in Arrmada",
-			errImportPathOutside, p, f.Path, f.Client, f.Client, f.Remote, f.Client, f.Path)
-	}
-	return errImportPathOutside
-}
-
-// systemDirs are the container's own folders: no download client's folder is one of them
-// or inside one, whatever it's mapped to.
-var systemDirs = []string{"/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/proc", "/root", "/run", "/sbin", "/sys", "/usr", "/var"}
-
-// usableClientRoot reports whether a download client's mapped folder may be read by
-// manual import: a full path to a folder that's there (symlinks followed), not a whole
-// filesystem, not Arrmada's data folder, inside it or holding it, not the managed library
-// volume, inside it or holding it (that isn't an import root either; the library folders
-// in it are roots of their own), and not one of the container's system folders.
-func usableClientRoot(p string, cfg config.Config) bool {
-	if strings.TrimSpace(p) == "" || !filepath.IsAbs(p) {
-		return false
-	}
-	rp, err := pathguard.Resolve(p)
-	if err != nil {
-		return false
-	}
-	if st, err := os.Stat(rp); err != nil || !st.IsDir() {
-		return false
-	}
-	if libroots.UnderDataDir(rp, cfg.DataDir) {
-		return false
-	}
-	if lib := strings.TrimSpace(cfg.LibraryDir); lib != "" && (pathguard.Under(lib, rp) || pathguard.Under(rp, lib)) {
-		return false
-	}
-	slashed := filepath.ToSlash(rp)
-	for _, d := range systemDirs {
-		if slashed == d || strings.HasPrefix(slashed, d+"/") {
-			return false
-		}
-	}
-	return true
 }

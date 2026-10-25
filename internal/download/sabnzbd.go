@@ -1072,17 +1072,19 @@ func (s *SABnzbd) DefaultSavePath(ctx context.Context, dc Client) (string, error
 	return st.Status.CompleteDir, nil
 }
 
-// IncompleteSavePath is SABnzbd's incomplete folder as SABnzbd names it — where a job is
-// written while it downloads, so the drive the disk guard has to judge it by.
-func (s *SABnzbd) IncompleteSavePath(ctx context.Context, dc Client) (string, error) {
+// UsenetFolders is, from one status read, SABnzbd's completed folder, its incomplete
+// folder — where a job is written while it downloads, so the drive the disk guard judges
+// it by — and Arrmada's categories' own folders, all as SABnzbd names them.
+func (s *SABnzbd) UsenetFolders(ctx context.Context, dc Client) (complete, incomplete string, cats map[string]string, err error) {
 	st, err := s.fullStatus(ctx, dc)
 	if err != nil {
-		return "", err
+		return "", "", nil, err
 	}
-	if st.Status.DownloadDir == "" {
-		return "", errors.New("SABnzbd didn't say where it downloads to")
+	cats, err = s.categoryFolders(ctx, dc, st.Status.CompleteDir)
+	if err != nil {
+		return "", "", nil, err
 	}
-	return st.Status.DownloadDir, nil
+	return st.Status.CompleteDir, st.Status.DownloadDir, cats, nil
 }
 
 type sabCatConfig struct {

@@ -32,25 +32,36 @@ func (p perClient) Remove(context.Context, Client, string, bool) error          
 func (p perClient) TorrentAction(context.Context, Client, string, string) error { return nil }
 func (p perClient) Test(context.Context, Client) error                          { return nil }
 
-// savingFake is a client that says where it saves (as SABnzbd does: its completed folder)
-// and, when inc is set, where it writes a download while it's running (its incomplete one).
+// savingFake is a torrent client that says where it saves by default.
 type savingFake struct {
 	*fakeClient
-	save, inc string
-	reads     int
+	save  string
+	reads int
 }
 
 func (s *savingFake) DefaultSavePath(context.Context, Client) (string, error) {
 	s.reads++
 	return s.save, nil
 }
-func (s *savingFake) IncompleteSavePath(context.Context, Client) (string, error) {
-	return s.inc, nil
+
+// usenetFake is a usenet client that says where it finishes jobs (save) and, when inc is
+// set, where it writes a job while it's running — as SABnzbd does, in one read.
+type usenetFake struct {
+	*fakeClient
+	save, inc string
+	cats      map[string]string
+	err       error
+	reads     int
+}
+
+func (u *usenetFake) UsenetFolders(context.Context, Client) (string, string, map[string]string, error) {
+	u.reads++
+	return u.save, u.inc, u.cats, u.err
 }
 
 // addSAB adds a SABnzbd beside the clients the fixture has, and lets the guard watch any
 // folder the test's clients report (no real folder exists).
-func addSAB(t *testing.T, g *DiskGuard, ctx context.Context, sab *savingFake) {
+func addSAB(t *testing.T, g *DiskGuard, ctx context.Context, sab *usenetFake) {
 	t.Helper()
 	g.svc.registry.impls[KindSABnzbd] = sab
 	if _, err := g.svc.repo.Create(ctx, Client{Name: "sab", Kind: KindSABnzbd, URL: "http://sab", Enabled: true}); err != nil {
@@ -77,7 +88,7 @@ func TestGuardJudgesAnUnplaceableDownloadByTheDownloadsFolder(t *testing.T) {
 		{Hash: "a1", State: "downloading", ContentPath: "/download/a1"},
 		{Hash: "elsewhere", Name: "Saved somewhere else", State: "downloading", ContentPath: "/mnt/other/x"},
 	}, []Item{{Hash: "b1", State: "downloading", ContentPath: "/download/b1"}})
-	sab := &savingFake{fakeClient: &fakeClient{items: []Item{{Hash: "sab-job", Name: "Usenet job", State: "downloading", RawState: "Downloading"}}}}
+	sab := &usenetFake{fakeClient: &fakeClient{items: []Item{{Hash: "sab-job", Name: "Usenet job", State: "downloading", RawState: "Downloading"}}}}
 	addSAB(t, g, ctx, sab) // says nothing: save is ""
 	used := map[string]float64{"/download": 60, "/downloads": 30, "/mnt/other": 10}
 	g.usage = usageOf(used)
@@ -116,7 +127,7 @@ func TestGuardJudgesAnUnplaceableDownloadByTheDownloadsFolder(t *testing.T) {
 // drive it's judged by — not its completed folder, and not the Downloads folder.
 func TestGuardJudgesAUsenetJobByItsIncompleteFolder(t *testing.T) {
 	g, a, _, ctx := twoClientGuard(t, []Item{{Hash: "a1", State: "downloading", ContentPath: "/download/a1"}}, nil)
-	sab := &savingFake{fakeClient: &fakeClient{items: []Item{{Hash: "sab-job", State: "downloading", RawState: "Downloading"}}},
+	sab := &usenetFake{fakeClient: &fakeClient{items: []Item{{Hash: "sab-job", State: "downloading", RawState: "Downloading"}}},
 		save: "/usenet/complete", inc: "/usenet/incomplete"}
 	addSAB(t, g, ctx, sab)
 	used := map[string]float64{"/download": 95, "/downloads": 30, "/usenet/incomplete": 40, "/usenet/complete": 99}
@@ -143,7 +154,7 @@ func TestGuardJudgesAUsenetJobByItsIncompleteFolder(t *testing.T) {
 func TestGuardNeverStrandsOnAnUnmeasurableClientFolder(t *testing.T) {
 	for _, visible := range []bool{false, true} {
 		g, a, _, ctx := guardFixture(t, []Item{{Hash: "a1", State: "paused", ContentPath: "/download/a1"}})
-		sab := &savingFake{fakeClient: &fakeClient{items: []Item{{Hash: "sab-job", State: "paused"}}}, save: "/sab-only/complete"}
+		sab := &usenetFake{fakeClient: &fakeClient{items: []Item{{Hash: "sab-job", State: "paused"}}}, save: "/sab-only/complete"}
 		addSAB(t, g, ctx, sab)
 		g.dirOK = func(string) bool { return visible }
 		g.SetDirFunc(func() string { return "/download" })
@@ -173,7 +184,7 @@ func TestGuardNeverStrandsOnAnUnmeasurableClientFolder(t *testing.T) {
 // old client is never asked anything.
 func TestGuardIgnoresADisabledSecondClient(t *testing.T) {
 	g, one, _, ctx := guardFixture(t, []Item{{Hash: "x", State: "downloading", ContentPath: "/mnt/elsewhere/x"}})
-	old := &savingFake{fakeClient: &fakeClient{}, save: "/old", inc: "/old"}
+	old := &usenetFake{fakeClient: &fakeClient{}, save: "/old", inc: "/old"}
 	g.svc.registry.impls[KindSABnzbd] = old
 	if _, err := g.svc.repo.Create(ctx, Client{Name: "old", Kind: KindSABnzbd, URL: "http://old", Enabled: false}); err != nil {
 		t.Fatal(err)
@@ -361,5 +372,71 @@ func TestGuardReleasesWhatTheOldGuardHeldOnTheWrongVolume(t *testing.T) {
 	}
 	if h := g.held(ctx); len(h) != 1 || h[0] != "a1" {
 		t.Errorf("held %v, want the first client's", h)
+	}
+}
+
+// A path the client reported but Arrmada can't follow — a Windows client's E:\other, a
+// relative one — is judged by the Downloads folder's drive, not guessed onto its client's
+// home folder (which has room here).
+func TestGuardJudgesAnUnfollowablePathByTheDownloadsFolder(t *testing.T) {
+	g, _, b, ctx := twoClientGuard(t, nil, []Item{
+		{Hash: "win", State: "downloading", ContentPath: `E:\other\Film`},
+		{Hash: "rel", State: "downloading", ContentPath: "other/Film"},
+		{Hash: "home", State: "downloading"},
+	})
+	g.usage = usageOf(map[string]float64{"/download": 95, "/downloads": 40})
+	var logged []string
+	g.noteUnknown = func(it Item) { logged = append(logged, it.Hash) }
+	if err := g.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !sameSet(b.paused, "win", "rel") {
+		t.Errorf("paused %v, want the two it can't follow, not the one on its own client's drive", b.paused)
+	}
+	if !sameSet(logged, "win", "rel") {
+		t.Errorf("logged %v", logged)
+	}
+}
+
+// A folder a client reports that reads as RAM or the container's own filesystem is a
+// folder Docker made, not the client's drive: it isn't watched, and the client's jobs are
+// judged by the Downloads folder's drive.
+func TestGuardDoesNotWatchAReportedFolderOnRAM(t *testing.T) {
+	g, a, _, ctx := twoClientGuard(t, []Item{{Hash: "a1", State: "downloading", ContentPath: "/download/a1"}}, nil)
+	sab := &usenetFake{fakeClient: &fakeClient{items: []Item{{Hash: "sab-job", State: "downloading", RawState: "Downloading"}}},
+		save: "/usenet/complete", inc: "/usenet/incomplete"}
+	addSAB(t, g, ctx, sab)
+	g.SetFSTypeFunc(func(p string) (uint64, bool) {
+		if p == "/usenet/incomplete" || p == "/usenet/complete" {
+			return diskspace.TypeTmpfs, true
+		}
+		return 0xEF53, true
+	})
+	g.usage = usageOf(map[string]float64{"/download": 95, "/downloads": 40, "/usenet/incomplete": 10, "/usenet/complete": 10})
+	if err := g.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !sameSet(a.paused, "a1") || !sameSet(sab.paused, "sab-job") {
+		t.Errorf("paused %v and %v, want the usenet job judged by the Downloads folder", a.paused, sab.paused)
+	}
+	for _, v := range g.Status(ctx).Volumes {
+		if v.Path == "/usenet/incomplete" || v.Path == "/usenet/complete" {
+			t.Errorf("watched %s, which reads as RAM", v.Path)
+		}
+	}
+}
+
+// What the status and a resume by hand are told (HeldNow) agrees with the guard's pass for
+// a download held with no folder recorded: the second client's, on its own drive with
+// room, isn't counted as held for the full Downloads drive.
+func TestHeldNowJudgesAnUnrecordedHashLikeThePass(t *testing.T) {
+	g, _, _, ctx := twoClientGuard(t,
+		[]Item{{Hash: "a1", State: "paused", ContentPath: "/download/a1"}},
+		[]Item{{Hash: "b1", State: "paused", ContentPath: "/download/b1"}})
+	g.save(ctx, []string{"a1", "b1"})
+	g.usage = usageOf(map[string]float64{"/download": 95, "/downloads": 40})
+	now := g.HeldNow(ctx)
+	if _, ok := now["a1"]; !ok || len(now) != 1 {
+		t.Errorf("held now %v, want only the first client's", now)
 	}
 }

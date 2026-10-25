@@ -11,23 +11,6 @@ import (
 	"github.com/tristenlammi/arrmada/internal/store"
 )
 
-// folderFake says where it saves and which category folders it has, or fails to.
-type folderFake struct {
-	*fakeClient
-	save  string
-	cats  map[string]string
-	err   error
-	asked int
-}
-
-func (f *folderFake) DefaultSavePath(context.Context, Client) (string, error) {
-	f.asked++
-	return f.save, f.err
-}
-func (f *folderFake) CategoryFolders(context.Context, Client) (map[string]string, error) {
-	return f.cats, f.err
-}
-
 func folderService(t *testing.T) (*Service, context.Context) {
 	t.Helper()
 	st, err := store.Open(t.TempDir())
@@ -43,7 +26,7 @@ func folderService(t *testing.T) (*Service, context.Context) {
 func TestClientFolders(t *testing.T) {
 	s, ctx := folderService(t)
 	s.registry.impls[KindQbittorrent] = &fakeClient{}
-	sab := &folderFake{fakeClient: &fakeClient{}, save: "/data/usenet/complete",
+	sab := &usenetFake{fakeClient: &fakeClient{}, save: "/data/usenet/complete",
 		cats: map[string]string{"arrmada-tv": "/data/usenet/tv"}}
 	s.registry.impls[KindSABnzbd] = sab
 	for _, c := range []Client{
@@ -66,8 +49,8 @@ func TestClientFolders(t *testing.T) {
 		{Client: "first", Path: "/mnt/disk2/dl"},
 		{Client: "second", Path: "/downloads", Home: true},
 		{Client: "second", Path: "/mnt/disk2/dl"},
-		{Client: "sab", Path: "/usenet/complete", Home: true, Reported: true, Remote: "/data/usenet/complete"},
-		{Client: "sab", Path: "/usenet/tv", Reported: true, Remote: "/data/usenet/tv"},
+		{Client: "sab", Path: "/usenet/complete", Home: true, Reported: true},
+		{Client: "sab", Path: "/usenet/tv", Reported: true},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v", got)
@@ -79,10 +62,6 @@ func TestClientFolders(t *testing.T) {
 			t.Errorf("folder %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	// Only what an admin mapped counts as a client's folder for import.
-	if m := s.MappedFolders(ctx); len(m) != 2 || m[0] != "/downloads" || m[1] != "/usenet" {
-		t.Errorf("mapped folders = %v, want the enabled clients' mapping targets", m)
-	}
 	if n, _ := s.EnabledClientCount(ctx); n != 3 {
 		t.Errorf("enabled clients = %d, want 3", n)
 	}
@@ -92,7 +71,7 @@ func TestClientFolders(t *testing.T) {
 // so that's its home; its completed folder is still one of its folders.
 func TestClientFoldersUsenetHomeIsTheIncompleteFolder(t *testing.T) {
 	s, ctx := folderService(t)
-	s.registry.impls[KindSABnzbd] = &savingFake{fakeClient: &fakeClient{}, save: "/usenet/complete", inc: "/usenet/incomplete"}
+	s.registry.impls[KindSABnzbd] = &usenetFake{fakeClient: &fakeClient{}, save: "/usenet/complete", inc: "/usenet/incomplete"}
 	if _, err := s.repo.Create(ctx, Client{Name: "sab", Kind: KindSABnzbd, URL: "http://sab", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +85,7 @@ func TestClientFoldersUsenetHomeIsTheIncompleteFolder(t *testing.T) {
 // last answer and isn't repeated every pass, and an edited client is asked again.
 func TestClientFoldersAreCached(t *testing.T) {
 	s, ctx := folderService(t)
-	sab := &folderFake{fakeClient: &fakeClient{}, save: "/usenet/complete"}
+	sab := &usenetFake{fakeClient: &fakeClient{}, save: "/usenet/complete"}
 	s.registry.impls[KindSABnzbd] = sab
 	c, err := s.repo.Create(ctx, Client{Name: "sab", Kind: KindSABnzbd, URL: "http://sab", Enabled: true})
 	if err != nil {
@@ -120,12 +99,12 @@ func TestClientFoldersAreCached(t *testing.T) {
 		}
 		return ""
 	}
-	if h := home(); h != "/usenet/complete" || sab.asked != 1 {
-		t.Fatalf("home %q after %d asks", h, sab.asked)
+	if h := home(); h != "/usenet/complete" || sab.reads != 1 {
+		t.Fatalf("home %q after %d asks", h, sab.reads)
 	}
 	_ = home()
-	if sab.asked != 1 {
-		t.Errorf("asked %d times inside the TTL", sab.asked)
+	if sab.reads != 1 {
+		t.Errorf("asked %d times inside the TTL", sab.reads)
 	}
 
 	// Past the TTL, with the client failing: the old answer stands, asked once.
@@ -138,12 +117,12 @@ func TestClientFoldersAreCached(t *testing.T) {
 	}
 	age()
 	sab.err, sab.save = errors.New("down"), ""
-	if h := home(); h != "/usenet/complete" || sab.asked != 2 {
-		t.Errorf("home %q after %d asks, want the last answer", h, sab.asked)
+	if h := home(); h != "/usenet/complete" || sab.reads != 2 {
+		t.Errorf("home %q after %d asks, want the last answer", h, sab.reads)
 	}
 	_ = home()
-	if sab.asked != 2 {
-		t.Errorf("a failing client was asked again inside the TTL (%d)", sab.asked)
+	if sab.reads != 2 {
+		t.Errorf("a failing client was asked again inside the TTL (%d)", sab.reads)
 	}
 
 	// Pointed at another SABnzbd: the old answer is not that one's.
@@ -151,7 +130,7 @@ func TestClientFoldersAreCached(t *testing.T) {
 	if err := s.repo.Update(ctx, c); err != nil {
 		t.Fatal(err)
 	}
-	if h := home(); h != "" || sab.asked != 3 {
-		t.Errorf("home %q after %d asks, want nothing known for the new address", h, sab.asked)
+	if h := home(); h != "" || sab.reads != 3 {
+		t.Errorf("home %q after %d asks, want nothing known for the new address", h, sab.reads)
 	}
 }

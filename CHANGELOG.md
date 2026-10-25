@@ -384,13 +384,6 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   guard can't place is judged by the Downloads folder's drive, as before, and named once in
   the log. Settings → Downloads lists each client's drive with the guard's reading. With one
   download client switched on, nothing changes.
-- **Manual import reads a second download client's mapped folder** (#70). The Arrmada side
-  of a switched-on client's path mappings, such as a second client's own `/downloads`, is no
-  longer refused as outside your downloads folders. A folder a client only reports (its
-  default save folder, a SABnzbd folder) still is, and the message says which path mapping
-  an admin can add to allow it. Only where an import reads from changes; where files go in
-  the library doesn't. A mapped folder is still refused when it's a whole disk, a system
-  folder, Arrmada's data folder or inside the managed library volume.
 - **Episode thumbnails from TVDB load again** (#76). TVDB can give an episode image as a path
   rather than a full address, and the browser then asked Arrmada for it ("Page not found").
   New and refreshed episodes get TVDB's artwork address, and the update fixes the ones

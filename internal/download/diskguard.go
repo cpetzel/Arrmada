@@ -201,8 +201,10 @@ func (g *DiskGuard) watching(ctx context.Context) watch {
 	for _, f := range g.svc.ClientFolders(ctx, w.dirs) {
 		w.client[f.ClientID] = f.Client
 		// A whole filesystem is no one's downloads folder (and "/" reads as the container's
-		// own); a folder only the client named is watched once Arrmada can see it.
-		if filepath.Dir(f.Path) == f.Path || (f.Reported && (g.dirOK == nil || !g.dirOK(f.Path))) {
+		// own); a folder only the client named is watched once Arrmada can see it, and only
+		// when it's on a disk: one that reads as RAM or the container's own filesystem is a
+		// folder Docker made, not the client's drive (as for "measure a different drive").
+		if filepath.Dir(f.Path) == f.Path || (f.Reported && (g.dirOK == nil || !g.dirOK(f.Path) || g.notADisk(f.Path) != "")) {
 			continue
 		}
 		folders = append(folders, f)
@@ -227,9 +229,12 @@ func (g *DiskGuard) watching(ctx context.Context) watch {
 // place is the watched folder a download writes into: the one its content path is in,
 // else — with no path yet — where its client's downloads are written. Anything else is
 // the Downloads folder's (dirs[0]), as it always was; placed is false then, with several
-// clients, so the guard can say once that it couldn't tell.
+// clients, so the guard can say once that it couldn't tell. A path the client did report
+// but that isn't one here (a Windows client's "E:\other", a relative one) is such a
+// download too: it says where the client writes, just not in a way Arrmada can follow, so
+// the client's home folder is no better a guess.
 func (w watch) place(it Item) (d string, placed bool) {
-	if c := strings.TrimSpace(it.ContentPath); c != "" && filepath.IsAbs(c) {
+	if c := strings.TrimSpace(it.ContentPath); c != "" {
 		if d, ok := folderIn(c, w.dirs); ok {
 			return d, true
 		}
@@ -521,8 +526,9 @@ func (g *DiskGuard) isZFS(p string) bool {
 }
 
 // HeldNow returns, per held download the guard would pause again right now, the volume
-// it's held on. Each is judged by the downloads folder it was held for (the Downloads
-// folder when none was recorded), measured as the guard measures it: one whose drive has
+// it's held on. Each is judged by the downloads folder it was held for (when none was
+// recorded, where the pass would place it with several clients, else the Downloads
+// folder), measured as the guard measures it: one whose drive has
 // drained, or can't be read at all — the "measure a different drive" mount gone — isn't
 // listed, so resuming it by hand isn't refused in the name of a reading the guard can't
 // take. Empty while the guard is off.
@@ -535,13 +541,42 @@ func (g *DiskGuard) HeldNow(ctx context.Context) map[string]GuardVolume {
 		return nil
 	}
 	lim := g.limits(ctx)
-	dirs := g.paths() // the Downloads folder is all it needs: the rest come recorded
+	w := g.watching(ctx)
+	dirs := w.dirs
 	mr := g.measurer(ctx, dirs[0])
 	recorded := g.heldDirs(ctx)
+	// With several clients, a hash held without a recorded folder is judged as the guard's
+	// pass judges it (watch.place, then judgedBy), so this agrees with what Check would do.
+	var byHash map[string]Item
+	var use map[string]diskspace.Usage
+	if w.multi {
+		for _, h := range held {
+			if recorded[h] != "" {
+				continue
+			}
+			if items, _, err := g.svc.QueueComplete(ctx); err == nil {
+				byHash = map[string]Item{}
+				for _, it := range items {
+					byHash[strings.ToLower(it.Hash)] = it
+				}
+			}
+			use = map[string]diskspace.Usage{}
+			for _, d := range dirs {
+				if u, ok, _ := g.measureUsage(mr.of(d)); ok {
+					use[d] = u
+				}
+			}
+			break
+		}
+	}
 	vols := map[string]*GuardVolume{} // by folder; nil = drained or unreadable
 	out := map[string]GuardVolume{}
 	for _, h := range held {
 		d := recorded[h]
+		if it, ok := byHash[h]; d == "" && ok {
+			d, _ = w.place(it)
+			d = w.judgedBy(d, use)
+		}
 		if d == "" {
 			d = dirs[0]
 		}
