@@ -338,16 +338,17 @@ func (s *Service) applyProwlarr(ctx context.Context, tx *sql.Tx, base, key strin
 			// A new synced indexer must not inherit Go's zero values: SeedEnabled=false
 			// means "remove as soon as it's imported", i.e. never seed at all — a
 			// hit-and-run on any private tracker. Seed for the default window instead, or
-			// to the global seed goal when one is set (no goal of its own uses it).
+			// to the global seed goal when one is set.
+			useGlobal, hours := s.newSeedGoal(ctx)
 			idx := Indexer{
 				Name: name, Kind: KindTorznab, URL: feed, APIKey: key, Priority: priority,
 				MediaTypes:  mediaTypesFor(pi.Capabilities.Categories),
-				SeedEnabled: true, SeedHours: s.newSeedHours(ctx), Enabled: true, ProwlarrID: pi.ID,
+				SeedEnabled: true, SeedHours: hours, SeedUseGlobal: useGlobal, Enabled: true, ProwlarrID: pi.ID,
 			}
 			if usenet {
 				// Prowlarr serves a usenet indexer as Newznab at the same address. Usenet
 				// never seeds, so there's no seed goal to give it.
-				idx.Kind, idx.SeedEnabled, idx.SeedHours = KindNewznab, false, 0
+				idx.Kind, idx.SeedEnabled, idx.SeedHours, idx.SeedUseGlobal = KindNewznab, false, 0, false
 			}
 			created, err := createIn(ctx, tx, idx)
 			if err != nil {

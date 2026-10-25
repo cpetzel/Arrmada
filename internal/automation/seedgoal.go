@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tristenlammi/arrmada/internal/download"
+	"github.com/tristenlammi/arrmada/internal/indexer"
 )
 
 // The global seed goal (Settings → Downloads): a ratio and a seeding time that every
@@ -58,7 +59,7 @@ func ValidSeedRatio(r float64) bool {
 func ValidSeedHours(h int) bool { return h >= 0 && h <= MaxSeedHours }
 
 // SetSeedDefault wires the global seed goal. Asked on every seed check, so a change in
-// Settings applies on the next pass, to torrents already seeding as well as new ones.
+// Settings reaches every grab recorded on the global goal on the next pass.
 func (c *Coordinator) SetSeedDefault(fn func(ctx context.Context) SeedDefault) { c.seedDefaultFn = fn }
 
 func (c *Coordinator) seedDefault(ctx context.Context) SeedDefault {
@@ -68,36 +69,49 @@ func (c *Coordinator) seedDefault(ctx context.Context) SeedDefault {
 	return c.seedDefaultFn(ctx)
 }
 
-// Where a torrent's seed goal comes from.
+// Where a grab's goal came from, recorded on it when it was grabbed (grabs.seed_source,
+// migration 0349). "" is a grab from before then: it keeps the goal recorded on it.
 const (
-	SeedSourceIndexer = "indexer" // the goal recorded on its grab: its indexer's, or a manual grab's default
-	SeedSourceGlobal  = "global"  // the global goal, because its indexer set none
-	SeedSourceNone    = "none"    // no goal anywhere: seeds until someone removes it
+	seedRecOwn     = "own"     // its indexer's own goal (or seeding off), recorded on the row
+	seedRecGlobal  = "global"  // its indexer is on the global goal: read live at each check
+	seedRecNone    = "none"    // its indexer seeds forever (0/0)
+	seedRecDefault = "default" // a manual or unknown-indexer grab: the standard window
+)
+
+// Where the goal a torrent seeds to now comes from (SeedPolicy.Source).
+const (
+	SeedSourceIndexer = "indexer" // its indexer's goal, recorded when it was grabbed
+	SeedSourceDefault = "default" // the standard window, recorded for a manual or unknown-indexer grab
+	SeedSourceGlobal  = "global"  // the global goal, read live
+	SeedSourceNone    = "none"    // no goal: seeds until someone removes it
 	SeedSourceOff     = "off"     // seeding is off for its indexer: removed once imported
 )
 
 // effectiveSeedGoal is the goal a grab's torrent seeds to now.
 //
-// Precedence: the indexer's own goal, recorded on the grab when it was made, wins; a grab
-// whose indexer set neither a ratio nor a time takes the global goal; with no global goal
-// either it seeds until removed — what such a grab always did. The global goal is read at
-// check time rather than recorded, so setting it covers torrents already seeding, the way
-// the global stall timeout covers grabs already in flight.
+// The global goal is opt-in and forward-only. Only a grab recorded on it (its indexer was
+// set to "use the global default", or it was a manual grab while a global goal was set)
+// follows it, and follows it live, so clearing, raising or fixing the goal reaches it. A
+// grab from before the global goal existed, and a grab from an indexer at 0/0, never pick
+// it up: 0/0 is "seed forever", chosen by the indexer's owner, and reading it as "use the
+// global goal" would delete every such torrent the moment one was set.
 //
-// Only the whole goal is inherited, never one half of it. An indexer set to "ratio 2" is
-// a tracker that wants a ratio; filling in a global time beside it would remove the
-// torrent before that ratio was reached, and erring short costs a tracker ban.
-//
-// A dismissed grab keeps what was recorded: the user took that download over and said
-// they would handle it, so a goal set later doesn't start removing it.
+// A grab on the global goal while none is set gets the standard window, as a manual grab
+// always did.
 func effectiveSeedGoal(g grab, def SeedDefault) SeedPolicy {
 	switch {
 	case !g.SeedEnabled:
 		return SeedPolicy{Source: SeedSourceOff}
-	case g.SeedRatio > 0 || g.SeedHours > 0:
-		return SeedPolicy{Enabled: true, Ratio: g.SeedRatio, Hours: g.SeedHours, Source: SeedSourceIndexer}
-	case g.Status != grabStatusDismissed && def.Set():
+	case g.SeedSource == seedRecGlobal && def.Set():
 		return SeedPolicy{Enabled: true, Ratio: def.Ratio, Hours: def.Hours, Source: SeedSourceGlobal}
+	case g.SeedSource == seedRecGlobal:
+		return SeedPolicy{Enabled: true, Hours: indexer.DefaultSeedHours, Source: SeedSourceGlobal, GlobalUnset: true}
+	case g.SeedRatio > 0 || g.SeedHours > 0:
+		src := SeedSourceIndexer
+		if g.SeedSource == seedRecDefault {
+			src = SeedSourceDefault
+		}
+		return SeedPolicy{Enabled: true, Ratio: g.SeedRatio, Hours: g.SeedHours, Source: src}
 	}
 	return SeedPolicy{Enabled: true, Source: SeedSourceNone}
 }
@@ -112,8 +126,11 @@ func seedGoalMet(p SeedPolicy, it download.Item) (bool, string) {
 		return true, "seeding off — removed after import"
 	}
 	whose := "indexer's"
-	if p.Source == SeedSourceGlobal {
+	switch p.Source {
+	case SeedSourceGlobal:
 		whose = "global"
+	case SeedSourceDefault:
+		whose = "standard"
 	}
 	if ratio := it.SeedRatio(); p.Ratio > 0 && ratio >= 0 && ratio >= p.Ratio {
 		return true, fmt.Sprintf("seed goal met: ratio %.2f reached the %s goal of %s", ratio, whose, fmtRatio(p.Ratio))
@@ -145,9 +162,10 @@ const (
 	SeedOutcomeRemoveKeep = "remove_keep_files" // goal met: removed from the client, its files kept (dismissed)
 	SeedOutcomeSeeding    = "seeding"           // still short of its goal
 	SeedOutcomeForever    = "seeds_forever"     // no goal at all
+	SeedOutcomeUnmatched  = "kept_unmatched"    // goal met, but its import left files unmatched: keeps seeding
 	SeedOutcomeNotYet     = "not_imported"      // Arrmada's, but not imported yet: never touched before it is
 	SeedOutcomeReview     = "held_for_review"   // waiting on a decision in Review
-	SeedOutcomeNotOurs    = "not_ours"          // nothing Arrmada grabbed: never touched
+	SeedOutcomeNotOurs    = "not_ours"          // nothing Arrmada grabbed (or only a name ties it to one): never touched
 )
 
 // SeedCheckRow is one finished torrent in the seed check: where it stands against the
@@ -165,6 +183,8 @@ type SeedCheckRow struct {
 	Outcome        string     `json:"outcome"`
 	// Reason is why the goal counts as met, when it is.
 	Reason string `json:"reason,omitempty"`
+	// Later is a removal past the per-pass limit: it goes on a later pass.
+	Later bool `json:"later,omitempty"`
 }
 
 // SeedCheck reports, for every finished torrent in the queue, what ManageSeeding would do
@@ -172,8 +192,10 @@ type SeedCheckRow struct {
 // what an unsaved value would do). It changes nothing.
 //
 // It follows ManageSeeding's own rules, in its order: only a grab whose data has landed
-// (imported or dismissed) can be removed, a torrent no grab knows is never touched, and
-// one held for review waits for the decision.
+// (imported or dismissed) can be removed, a torrent no grab knows (or that only a name
+// ties to a grab with another hash) is never touched, one held for review waits for the
+// decision, one whose import left files unmatched keeps seeding, one grab removes one
+// torrent, and no more than maxSeedRemovalsPerPass go in one pass.
 func (c *Coordinator) SeedCheck(ctx context.Context, queue []download.Item, def *SeedDefault) ([]SeedCheckRow, error) {
 	cleanup, err := c.seedCleanupGrabs(ctx)
 	if err != nil {
@@ -187,6 +209,8 @@ func (c *Coordinator) SeedCheck(ctx context.Context, queue []download.Item, def 
 	if def != nil {
 		d = *def
 	}
+	cm, lm := newSeedMatcher(cleanup, queue), newSeedMatcher(live, queue)
+	removals := 0
 	rows := []SeedCheckRow{}
 	for _, it := range queue {
 		if it.Transport == download.TransportUsenet || !it.Complete() {
@@ -194,9 +218,9 @@ func (c *Coordinator) SeedCheck(ctx context.Context, queue []download.Item, def 
 		}
 		ratio := it.SeedRatio()
 		row := SeedCheckRow{Hash: it.Hash, Name: it.Name, Ratio: math.Max(ratio, 0), RatioKnown: ratio >= 0, SeedingSeconds: it.SeedingTime}
-		g := matchGrab(cleanup, it.Hash, it.Name)
+		g := cm.match(it)
 		if g == nil {
-			if lg := matchGrab(live, it.Hash, it.Name); lg != nil {
+			if lg := lm.match(it); lg != nil {
 				row.Indexer = lg.Indexer
 				row.Goal = effectiveSeedGoal(*lg, d)
 				row.Outcome = SeedOutcomeNotYet
@@ -219,10 +243,16 @@ func (c *Coordinator) SeedCheck(ctx context.Context, queue []download.Item, def 
 			row.Outcome = SeedOutcomeSeeding
 		case c.heldForReview(ctx, it.Hash):
 			row.Outcome, row.Reason = SeedOutcomeReview, why
-		case g.Status == grabStatusImported:
-			row.Outcome, row.Reason = SeedOutcomeRemove, why
+		case g.Status == grabStatusImported && g.ImportUnmatched > 0:
+			row.Outcome, row.Reason = SeedOutcomeUnmatched, why
 		default:
-			row.Outcome, row.Reason = SeedOutcomeRemoveKeep, why
+			row.Outcome, row.Reason = SeedOutcomeRemove, why
+			if g.Status != grabStatusImported {
+				row.Outcome = SeedOutcomeRemoveKeep
+			}
+			cm.use(g)
+			removals++
+			row.Later = removals > maxSeedRemovalsPerPass
 		}
 		rows = append(rows, row)
 	}

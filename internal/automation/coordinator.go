@@ -2406,10 +2406,12 @@ func (c *Coordinator) DetectStalled(ctx context.Context) {
 }
 
 // ManageSeeding removes finished torrents once they hit their seed goal (ratio or time):
-// their indexer's, or the global one when the indexer set none (effectiveSeedGoal). An
-// imported one goes with its data — safe, the library keeps its own copy. A
-// dismissed one goes with its files kept: Arrmada never imported them, and the user said
-// they'd handle them, so they may be the only copy.
+// the one recorded on their grab, or the global one for a grab recorded on it
+// (effectiveSeedGoal). An imported one goes with its data — safe, the library keeps its
+// own copy. A dismissed one goes with its files kept: Arrmada never imported them, and the
+// user said they'd handle them, so they may be the only copy.
+//
+// At most maxSeedRemovalsPerPass torrents go in one pass; the rest wait for the next.
 func (c *Coordinator) ManageSeeding(ctx context.Context) {
 	grabs, err := c.seedCleanupGrabs(ctx)
 	if err != nil || len(grabs) == 0 {
@@ -2430,6 +2432,8 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 	}
 	// The global goal, read once per pass: a change in Settings applies from the next one.
 	def := c.seedDefault(ctx)
+	m := newSeedMatcher(grabs, queue)
+	removed, deferred := 0, 0
 	for _, it := range queue {
 		usenet := it.Transport == download.TransportUsenet
 		if !it.Complete() {
@@ -2437,22 +2441,23 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 			// landed another way first) has nothing left to do in SABnzbd: clear it out,
 			// partial files and all, rather than leave a failure on the queue for good.
 			if usenet && it.Phase() == "error" {
-				if g := matchGrab(grabs, it.Hash, it.Name); g != nil && g.Status == grabStatusImported {
+				if g := m.match(it); g != nil && g.Status == grabStatusImported {
+					m.use(g)
 					c.clearFailedUsenetJob(ctx, it, *g)
 				}
 			}
 			continue // still downloading — never remove before it's done + imported
 		}
-		g := matchGrab(grabs, it.Hash, it.Name)
+		g := m.match(it)
 		if g == nil {
-			continue // untracked torrent — leave it alone
+			continue // untracked torrent, or one only a name ties to a grab of another — leave it alone
 		}
 		// Seed policy is snapshotted on the grab (see recordGrab), so this works
 		// even if the originating indexer was later removed or renamed.
 		//   off → remove as soon as it's imported (no seeding).
-		//   on  → remove once it hits a ratio or seeding-time goal; a grab whose indexer
-		//         set neither takes the global goal, and with none of that it seeds
-		//         forever (effectiveSeedGoal).
+		//   on  → remove once it hits a ratio or seeding-time goal: the recorded one, or
+		//         the global one, live, for a grab recorded on it; 0/0 seeds forever
+		//         (effectiveSeedGoal).
 		// A usenet job never seeds, whatever its row says (one recorded before the
 		// transport was known may say it does): it goes as soon as it's imported.
 		ratio := it.SeedRatio()
@@ -2473,20 +2478,31 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 		// Only data whose content Arrmada imported is deleted with the torrent.
 		deleteData := g.Status == grabStatusImported
 		if usenet {
+			m.use(g)
 			c.cleanUpUsenetJob(ctx, it, *g, deleteData)
 			continue
 		}
+		// Files its import couldn't match to an episode are only in the download, and
+		// removing it with its data would delete them: it keeps seeding.
+		if deleteData && g.ImportUnmatched > 0 {
+			continue
+		}
+		if removed >= maxSeedRemovalsPerPass {
+			deferred++
+			continue
+		}
+		// One grab removes one torrent: a second torrent it would match (two of the same
+		// name for a grab without a hash) waits for a pass that can tell them apart.
+		m.use(g)
 		if err := c.dropTorrent(ctx, it.Hash, deleteData); err != nil {
 			c.log.Warn("automation: remove seeded torrent failed", "release", g.Title, "err", err)
 			continue
 		}
+		removed++
 		c.setGrabStatus(ctx, g.ID, grabStatusSeeded)
 		// The same torrent recorded again by a later re-grab that never closed: it left the
 		// client with this one, and left 'grabbed' it would read as a vanished download.
 		c.closeStaleTwins(ctx, *g, grabStatusSeeded)
-		if usenet || reason == "" {
-			reason = "seed goal met"
-		}
 		what := "download removed"
 		if !deleteData {
 			what = "torrent removed, files kept in the downloads folder"
@@ -2495,7 +2511,62 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 			"delete_data", deleteData, "ratio", ratio, "uploaded_bytes", it.UploadedBytes, "seed_time_s", it.SeedingTime)
 		c.addMediaEvent(ctx, g, "seeded", g.Title+" — "+reason+", "+what)
 	}
+	if deferred > 0 {
+		c.log.Info("automation: seed cleanup reached its limit for one pass — the rest wait for the next",
+			"removed", removed, "waiting", deferred, "limit_per_pass", maxSeedRemovalsPerPass)
+	}
 }
+
+// maxSeedRemovalsPerPass caps how many torrents one seed-cleanup pass removes. A goal
+// changed in Settings, or a client whose counters jump, can make hundreds reach their goal
+// at once; spreading them out (a pass every few minutes) leaves time to notice a mistake.
+const maxSeedRemovalsPerPass = 10
+
+// seedMatcher pairs the queue's downloads with the grabs seed cleanup may act on, more
+// strictly than matchGrab: a grab that knows its info hash matches only that hash, never a
+// different torrent that happens to share its name (a cross-seed, a copy added by hand),
+// which would be removed with its data. Only a grab without a hash (rows predating
+// migration 0062) falls back to the name, and only when exactly one download in the queue
+// has that name. A grab that has acted once (use) matches nothing else in the
+// pass, so one grab never removes two torrents.
+type seedMatcher struct {
+	grabs []grab
+	names map[string]int // downloads in the queue per normalized name
+	used  map[int64]bool
+}
+
+func newSeedMatcher(grabs []grab, queue []download.Item) *seedMatcher {
+	m := &seedMatcher{grabs: grabs, names: map[string]int{}, used: map[int64]bool{}}
+	for _, it := range queue {
+		m.names[normRelease(it.Name)]++
+	}
+	return m
+}
+
+func (m *seedMatcher) match(it download.Item) *grab {
+	if it.Hash != "" {
+		want := strings.ToLower(it.Hash)
+		for i := range m.grabs {
+			g := &m.grabs[i]
+			if g.InfoHash != "" && strings.ToLower(g.InfoHash) == want && !m.used[g.ID] {
+				return g
+			}
+		}
+	}
+	want := normRelease(it.Name)
+	if m.names[want] != 1 {
+		return nil // two downloads of one name: a name can't say which is the grab's
+	}
+	for i := range m.grabs {
+		g := &m.grabs[i]
+		if g.InfoHash == "" && normRelease(g.Title) == want && !m.used[g.ID] {
+			return g
+		}
+	}
+	return nil
+}
+
+func (m *seedMatcher) use(g *grab) { m.used[g.ID] = true }
 
 // heldForReview reports whether a download is waiting on a decision in Review: a pending
 // review for its hash, or any grab of it held for review. Seed cleanup must not remove it.
@@ -2527,8 +2598,11 @@ type SeedPolicy struct {
 	Enabled bool    `json:"enabled"`
 	Ratio   float64 `json:"ratio"`
 	Hours   int     `json:"hours"`
-	// Source is where the goal comes from: indexer, global, none or off (seedgoal.go).
-	Source string `json:"source"`
+	// Source is where the goal comes from: indexer, default, global, none or off
+	// (seedgoal.go). GlobalUnset marks a grab on the global goal while none is set: it
+	// seeds for the standard window.
+	Source      string `json:"source"`
+	GlobalUnset bool   `json:"global_unset,omitempty"`
 }
 
 // SeedPolicies returns the seed policy for every live grab (downloading or seeding), keyed

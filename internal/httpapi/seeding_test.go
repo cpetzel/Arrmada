@@ -63,9 +63,9 @@ func indexerSettingsAPI(t *testing.T) (*api, *indexer.Service) {
 	return a, svc
 }
 
-// An indexer's seed goal is held to the same bounds; a new indexer without a goal gets the
-// standard window when there's no global goal (as before) and keeps 0/0 — "use the global
-// goal" — when there is one.
+// An indexer's seed goal is held to the same bounds. A new indexer that doesn't say gets
+// the standard window when there's no global goal (as before) and starts on the global
+// goal — its own state, not 0/0 — when there is one.
 func TestIndexerSeedGoalValidationAndGlobalDefault(t *testing.T) {
 	a, svc := indexerSettingsAPI(t)
 	ctx := context.Background()
@@ -84,26 +84,65 @@ func TestIndexerSeedGoalValidationAndGlobalDefault(t *testing.T) {
 	if err := a.deps.Settings.Set(ctx, automation.KeySeedRatio, "2"); err != nil {
 		t.Fatal(err)
 	}
-	if w := callIndexer(t, a.handleCreateIndexer, http.MethodPost, "/api/v1/indexers", "", `{"name":"After","kind":"torznab","url":"http://b/api"}`); w.Code != http.StatusCreated {
-		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	for _, body := range []string{
+		`{"name":"After","kind":"torznab","url":"http://b/api"}`,
+		`{"name":"Own","kind":"torznab","url":"http://c/api","seed_use_global":false,"seed_ratio":3}`,
+	} {
+		if w := callIndexer(t, a.handleCreateIndexer, http.MethodPost, "/api/v1/indexers", "", body); w.Code != http.StatusCreated {
+			t.Fatalf("create %s = %d %s", body, w.Code, w.Body.String())
+		}
 	}
-	list, err := svc.List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := map[string]indexer.Indexer{}
-	for _, ix := range list {
-		got[ix.Name] = ix
-	}
-	if b := got["Before"]; !b.SeedEnabled || b.SeedHours != indexer.DefaultSeedHours || b.SeedRatio != 0 {
+	got := indexersByName(t, svc)
+	if b := got["Before"]; !b.SeedEnabled || b.SeedUseGlobal || b.SeedHours != indexer.DefaultSeedHours || b.SeedRatio != 0 {
 		t.Errorf("no global goal: %+v, want the standard window", b)
 	}
-	if af := got["After"]; !af.SeedEnabled || af.SeedHours != 0 || af.SeedRatio != 0 {
-		t.Errorf("with a global goal: %+v, want 0/0 (uses the global goal)", af)
+	if af := got["After"]; !af.SeedEnabled || !af.SeedUseGlobal || af.SeedHours != 0 || af.SeedRatio != 0 {
+		t.Errorf("with a global goal: %+v, want it on the global goal", af)
+	}
+	if o := got["Own"]; o.SeedUseGlobal || o.SeedRatio != 3 {
+		t.Errorf("own goal chosen: %+v", o)
 	}
 
 	id := strconv.FormatInt(got["Before"].ID, 10)
-	if w := callIndexer(t, a.handleUpdateIndexer, http.MethodPut, "/api/v1/indexers/"+id, id, `{"name":"Before","kind":"torznab","url":"http://a/api","seed_ratio":-2}`); w.Code != http.StatusBadRequest {
+	if w := callIndexer(t, a.handleUpdateIndexer, http.MethodPut, "/api/v1/indexers/"+id, id, `{"name":"Before","kind":"torznab","url":"http://a/api","seed_enabled":true,"seed_ratio":-2,"seed_hours":336}`); w.Code != http.StatusBadRequest {
 		t.Errorf("update with a negative ratio = %d, want 400", w.Code)
 	}
+	// An edit that leaves seed_use_global out keeps the row's choice.
+	aid := strconv.FormatInt(got["After"].ID, 10)
+	if w := callIndexer(t, a.handleUpdateIndexer, http.MethodPut, "/api/v1/indexers/"+aid, aid, `{"name":"After","kind":"torznab","url":"http://b/api","seed_enabled":true,"priority":5}`); w.Code != http.StatusNoContent {
+		t.Fatalf("update = %d %s", w.Code, w.Body.String())
+	}
+	if af := indexersByName(t, svc)["After"]; !af.SeedUseGlobal || af.Priority != 5 {
+		t.Errorf("after an edit without seed_use_global: %+v, want still on the global goal", af)
+	}
+}
+
+// A goal saved before the bounds existed doesn't block an edit that leaves it alone; only
+// a changed value is checked.
+func TestIndexerUpdateChecksOnlyAChangedSeedGoal(t *testing.T) {
+	a, svc := indexerSettingsAPI(t)
+	row, err := svc.Create(context.Background(), indexer.Indexer{Name: "Old", Kind: indexer.KindTorznab, URL: "http://o/api", SeedEnabled: true, SeedHours: 50000, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(row.ID, 10)
+	if w := callIndexer(t, a.handleUpdateIndexer, http.MethodPut, "/api/v1/indexers/"+id, id, `{"name":"Renamed","kind":"torznab","url":"http://o/api","seed_enabled":true,"seed_hours":50000}`); w.Code != http.StatusNoContent {
+		t.Fatalf("an edit leaving the old goal alone = %d %s, want 204", w.Code, w.Body.String())
+	}
+	if w := callIndexer(t, a.handleUpdateIndexer, http.MethodPut, "/api/v1/indexers/"+id, id, `{"name":"Renamed","kind":"torznab","url":"http://o/api","seed_enabled":true,"seed_hours":60000}`); w.Code != http.StatusBadRequest {
+		t.Errorf("changing it to another out-of-bounds value = %d, want 400", w.Code)
+	}
+}
+
+func indexersByName(t *testing.T, svc *indexer.Service) map[string]indexer.Indexer {
+	t.Helper()
+	list, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]indexer.Indexer{}
+	for _, ix := range list {
+		out[ix.Name] = ix
+	}
+	return out
 }

@@ -2,19 +2,20 @@ package automation
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/tristenlammi/arrmada/internal/indexer"
 )
 
-// The goal a torrent seeds to: its indexer's own goal first, then the global one, then
-// what it always did. Only the whole goal is inherited, and a dismissed grab keeps what
-// was recorded for it.
+// The goal a torrent seeds to: what was recorded on its grab, or — only for a grab
+// recorded on the global goal — the global goal, read live. A grab from before the global
+// goal existed, and a 0/0 ("seed forever") grab, never pick it up.
 func TestEffectiveSeedGoalPrecedence(t *testing.T) {
 	global := SeedDefault{Ratio: 1, Hours: 72}
-	imported := func(enabled bool, ratio float64, hours int) grab {
-		return grab{SeedEnabled: enabled, SeedRatio: ratio, SeedHours: hours, Status: grabStatusImported}
+	g := func(source string, enabled bool, ratio float64, hours int) grab {
+		return grab{SeedEnabled: enabled, SeedRatio: ratio, SeedHours: hours, SeedSource: source, Status: grabStatusImported}
 	}
 	cases := []struct {
 		name string
@@ -22,15 +23,14 @@ func TestEffectiveSeedGoalPrecedence(t *testing.T) {
 		def  SeedDefault
 		want SeedPolicy
 	}{
-		{"indexer goal wins over the global one", imported(true, 2, 0), global, SeedPolicy{Enabled: true, Ratio: 2, Source: SeedSourceIndexer}},
-		// A ratio-only indexer must not have the global time filled in beside it: that
-		// would end the seed before the tracker's ratio was reached.
-		{"half an indexer goal is still the indexer's", imported(true, 0, 500), global, SeedPolicy{Enabled: true, Hours: 500, Source: SeedSourceIndexer}},
-		{"an indexer with no goal takes the global one", imported(true, 0, 0), global, SeedPolicy{Enabled: true, Ratio: 1, Hours: 72, Source: SeedSourceGlobal}},
-		{"no global goal: seeds forever, as before", imported(true, 0, 0), SeedDefault{}, SeedPolicy{Enabled: true, Source: SeedSourceNone}},
-		{"seeding off stays off", imported(false, 0, 0), global, SeedPolicy{Source: SeedSourceOff}},
-		{"a grab not imported yet shows the global goal it will get", grab{SeedEnabled: true, Status: grabStatusGrabbed}, global, SeedPolicy{Enabled: true, Ratio: 1, Hours: 72, Source: SeedSourceGlobal}},
-		{"a dismissed grab keeps what was recorded", grab{SeedEnabled: true, Status: grabStatusDismissed}, global, SeedPolicy{Enabled: true, Source: SeedSourceNone}},
+		{"an own goal stays its own", g(seedRecOwn, true, 2, 0), global, SeedPolicy{Enabled: true, Ratio: 2, Source: SeedSourceIndexer}},
+		{"seed forever stays forever with a global goal set", g(seedRecNone, true, 0, 0), global, SeedPolicy{Enabled: true, Source: SeedSourceNone}},
+		{"a grab from before the global goal (0/0) stays forever", g("", true, 0, 0), global, SeedPolicy{Enabled: true, Source: SeedSourceNone}},
+		{"a grab from before the global goal keeps its recorded goal", g("", true, 0, 500), global, SeedPolicy{Enabled: true, Hours: 500, Source: SeedSourceIndexer}},
+		{"a grab on the global goal follows it", g(seedRecGlobal, true, 0, 0), global, SeedPolicy{Enabled: true, Ratio: 1, Hours: 72, Source: SeedSourceGlobal}},
+		{"a grab on the global goal with none set gets the standard window", g(seedRecGlobal, true, 0, 0), SeedDefault{}, SeedPolicy{Enabled: true, Hours: indexer.DefaultSeedHours, Source: SeedSourceGlobal, GlobalUnset: true}},
+		{"a manual grab's standard window says so", g(seedRecDefault, true, 0, 336), global, SeedPolicy{Enabled: true, Hours: 336, Source: SeedSourceDefault}},
+		{"seeding off stays off", g(seedRecOwn, false, 0, 0), global, SeedPolicy{Source: SeedSourceOff}},
 	}
 	for _, tc := range cases {
 		if got := effectiveSeedGoal(tc.g, tc.def); got != tc.want {
@@ -74,11 +74,19 @@ func (h *lifecycleHarness) seedTorrent(hash, name string, uploadedGB int64, seed
 	})
 }
 
+// seedGrab is the seed rule a test grab is recorded with.
+type seedGrab struct {
+	source  string
+	enabled bool
+	ratio   float64
+	hours   int
+}
+
 // grabWith records a series grab with the given seed rule and status.
-func (h *lifecycleHarness) grabWith(t *testing.T, title, hash, status string, enabled bool, ratio float64, hours int) int64 {
+func (h *lifecycleHarness) grabWith(t *testing.T, title, hash, status string, r seedGrab) int64 {
 	t.Helper()
-	res, err := h.c.db.Exec(`INSERT INTO grabs (movie_id, title, indexer, stall_minutes, media_type, info_hash, seed_enabled, seed_ratio, seed_hours, status)
-		VALUES (?, ?, 'Fake', 60, 'series', ?, ?, ?, ?, ?)`, h.seriesID, title, hash, boolToInt(enabled), ratio, hours, status)
+	res, err := h.c.db.Exec(`INSERT INTO grabs (movie_id, title, indexer, stall_minutes, media_type, info_hash, seed_enabled, seed_ratio, seed_hours, seed_source, status)
+		VALUES (?, ?, 'Fake', 60, 'series', ?, ?, ?, ?, ?, ?)`, h.seriesID, title, hash, boolToInt(r.enabled), r.ratio, r.hours, r.source, status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,20 +98,49 @@ func (h *lifecycleHarness) setGlobal(d SeedDefault) {
 	h.c.SetSeedDefault(func(context.Context) SeedDefault { return d })
 }
 
-// An imported torrent whose indexer set no goal seeded forever. With a global goal it is
-// removed at that goal, with its data (the library has its own copy), and the show's
-// history says the global goal ended it.
-func TestGlobalSeedGoalEndsATorrentWhoseIndexerSetNone(t *testing.T) {
+var (
+	onGlobal = seedGrab{source: seedRecGlobal, enabled: true}
+	forever  = seedGrab{source: seedRecNone, enabled: true}
+)
+
+// Setting a global goal never reaches what was set to seed forever, or a grab from before
+// the global goal existed: their owner chose "forever", and the global goal used to take
+// that over and delete them with their data.
+func TestGlobalSeedGoalIsNeverRetroactive(t *testing.T) {
+	h := newLifecycleHarness(t)
+	h.setGlobal(SeedDefault{Ratio: 2})
+	chosen := "Show.S01.1080p.WEB-DL-AAA"
+	h.grabWith(t, chosen, hashFor(chosen), grabStatusImported, forever)
+	h.seedTorrent(hashFor(chosen), chosen, 5, 1000)
+	legacy := "Show.S01.1080p.WEB-DL-BBB"
+	h.grabWith(t, legacy, hashFor(legacy), grabStatusImported, seedGrab{enabled: true}) // seed_source ''
+	h.seedTorrent(hashFor(legacy), legacy, 5, 1000)
+
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != 0 {
+		t.Fatalf("the global goal removed a torrent set to seed forever: %+v", *h.removed)
+	}
+}
+
+// A grab on the global goal is removed at it, with its data, and the show's history says
+// the global goal ended the seed. The goal is read live: clearing it falls back to the
+// standard window rather than "forever" or the old value.
+func TestGlobalSeedGoalEndsAGrabRecordedOnIt(t *testing.T) {
 	h := newLifecycleHarness(t)
 	name := "Show.S01.1080p.WEB-DL-GRP"
 	hash := hashFor(name)
-	gid := h.grabWith(t, name, hash, grabStatusImported, true, 0, 0)
+	gid := h.grabWith(t, name, hash, grabStatusImported, onGlobal)
 	h.seedTorrent(hash, name, 3, 10) // ratio 3, 10 hours
 
-	// Unset: exactly as before — no goal, never removed.
+	h.setGlobal(SeedDefault{}) // none set: the standard 14 days, not met at 10 hours
 	h.c.ManageSeeding(h.ctx)
 	if len(*h.removed) != 0 {
-		t.Fatalf("removed with no global goal set: %+v", *h.removed)
+		t.Fatalf("removed before the standard window with no global goal set: %+v", *h.removed)
+	}
+	h.setGlobal(SeedDefault{Ratio: 4}) // raised past what it has
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != 0 {
+		t.Fatalf("removed short of the global ratio: %+v", *h.removed)
 	}
 
 	h.setGlobal(SeedDefault{Ratio: 2})
@@ -119,34 +156,111 @@ func TestGlobalSeedGoalEndsATorrentWhoseIndexerSetNone(t *testing.T) {
 	}
 }
 
-// The indexer's own goal wins: a global ratio the torrent has passed doesn't remove it
-// while its indexer's higher ratio isn't met.
-func TestIndexerSeedGoalBeatsTheGlobalOne(t *testing.T) {
+// A grab that knows its info hash matches only that torrent. Another torrent with the
+// same name — a cross-seed, a copy added by hand — used to match it by name and be
+// removed with its data.
+func TestSeedCleanupNeverMatchesAnotherHashByName(t *testing.T) {
 	h := newLifecycleHarness(t)
 	name := "Show.S01.1080p.WEB-DL-GRP"
-	hash := hashFor(name)
-	h.grabWith(t, name, hash, grabStatusImported, true, 10, 0)
-	h.seedTorrent(hash, name, 3, 1000)
-	h.setGlobal(SeedDefault{Ratio: 1, Hours: 24})
+	h.grabWith(t, name, hashFor(name), grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+	other := hashFor("someone else's copy")
+	h.seedTorrent(other, name, 5, 1000)
+
 	h.c.ManageSeeding(h.ctx)
 	if len(*h.removed) != 0 {
-		t.Fatalf("removed at the global goal although the indexer wants ratio 10: %+v", *h.removed)
+		t.Fatalf("a same-name torrent with another hash was removed: %+v", *h.removed)
+	}
+	rows, err := h.c.SeedCheckQueue(h.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Outcome != SeedOutcomeNotOurs {
+		t.Errorf("seed check = %+v, want it reported as not ours", rows)
 	}
 }
 
-// The global goal never reaches a torrent that isn't imported yet, one the user took over
-// by dismissing its review, or one Arrmada didn't grab at all.
+// A grab without a hash (from before hashes were kept) can only be told by its name. Two
+// torrents of that name used to both be removed by it in one pass; now a name that two
+// downloads share matches neither, and a grab removes one torrent at most.
+func TestSeedCleanupRemovesOneTorrentPerGrab(t *testing.T) {
+	h := newLifecycleHarness(t)
+	name := "Show.S01.1080p.WEB-DL-GRP"
+	h.grabWith(t, name, "", grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+	h.seedTorrent(hashFor("copy one"), name, 5, 1000)
+	h.seedTorrent(hashFor("copy two"), name+".mkv", 5, 1000) // the same name once normalized
+
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != 0 {
+		t.Fatalf("one hashless grab removed %d torrents: %+v", len(*h.removed), *h.removed)
+	}
+}
+
+// No more than maxSeedRemovalsPerPass torrents go in one pass; the rest go on the next.
+func TestSeedCleanupIsCappedPerPass(t *testing.T) {
+	h := newLifecycleHarness(t)
+	for i := 0; i < maxSeedRemovalsPerPass+3; i++ {
+		name := fmt.Sprintf("Show.S01E%02d.1080p.WEB-DL-GRP", i+1)
+		h.grabWith(t, name, hashFor(name), grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+		h.seedTorrent(hashFor(name), name, 5, 1000)
+	}
+	rows, err := h.c.SeedCheckQueue(h.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := 0
+	for _, r := range rows {
+		if r.Later {
+			later++
+		}
+	}
+	if later != 3 {
+		t.Errorf("seed check marks %d removals for a later pass, want 3", later)
+	}
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != maxSeedRemovalsPerPass {
+		t.Fatalf("one pass removed %d, want %d", len(*h.removed), maxSeedRemovalsPerPass)
+	}
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != maxSeedRemovalsPerPass+3 {
+		t.Fatalf("after the next pass %d removed, want all %d", len(*h.removed), maxSeedRemovalsPerPass+3)
+	}
+}
+
+// A series import that left files unmatched leaves them only in the download; removing it
+// with its data would delete them, so it keeps seeding past its goal.
+func TestSeedCleanupKeepsATorrentWithUnmatchedFiles(t *testing.T) {
+	h := newLifecycleHarness(t)
+	name := "Show.S01.1080p.WEB-DL-GRP"
+	hash := hashFor(name)
+	h.grabWith(t, name, hash, grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 1})
+	h.c.noteImportUnmatched(h.ctx, h.seriesID, hash, 2)
+	h.seedTorrent(hash, name, 5, 1000)
+
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != 0 {
+		t.Fatalf("removed with its data although its import left files unmatched: %+v", *h.removed)
+	}
+	rows, _ := h.c.SeedCheckQueue(h.ctx, nil)
+	if len(rows) != 1 || rows[0].Outcome != SeedOutcomeUnmatched {
+		t.Errorf("seed check = %+v, want kept_unmatched", rows)
+	}
+	// A later import that matched everything clears it.
+	h.c.noteImportUnmatched(h.ctx, h.seriesID, hash, 0)
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != 1 {
+		t.Fatalf("removals after every file matched = %+v, want one", *h.removed)
+	}
+}
+
+// The global goal never reaches a torrent that isn't imported yet, or one Arrmada didn't
+// grab at all.
 func TestGlobalSeedGoalLeavesWhatIsntOursToRemove(t *testing.T) {
 	h := newLifecycleHarness(t)
 	h.setGlobal(SeedDefault{Ratio: 0.5, Hours: 1})
 
 	pending := "Show.S01.1080p.WEB-DL-AAA"
-	h.grabWith(t, pending, hashFor(pending), grabStatusGrabbed, true, 0, 0)
+	h.grabWith(t, pending, hashFor(pending), grabStatusGrabbed, onGlobal)
 	h.seedTorrent(hashFor(pending), pending, 5, 500)
-
-	dismissed := "Show.S01.1080p.WEB-DL-BBB"
-	h.grabWith(t, dismissed, hashFor(dismissed), grabStatusDismissed, true, 0, 0)
-	h.seedTorrent(hashFor(dismissed), dismissed, 5, 500)
 
 	manual := "Some.Other.Thing.2020.1080p-CCC"
 	h.seedTorrent(hashFor(manual), manual, 5, 500) // in the client, no grab
@@ -164,7 +278,7 @@ func TestGlobalSeedGoalLeavesWhatIsntOursToRemove(t *testing.T) {
 	for _, r := range rows {
 		got[r.Name] = r.Outcome
 	}
-	want := map[string]string{pending: SeedOutcomeNotYet, dismissed: SeedOutcomeForever, manual: SeedOutcomeNotOurs}
+	want := map[string]string{pending: SeedOutcomeNotYet, manual: SeedOutcomeNotOurs}
 	for n, o := range want {
 		if got[n] != o {
 			t.Errorf("seed check for %s = %q, want %q", n, got[n], o)
@@ -177,20 +291,15 @@ func TestGlobalSeedGoalLeavesWhatIsntOursToRemove(t *testing.T) {
 func TestSeedCheckReportsWhatWouldHappen(t *testing.T) {
 	h := newLifecycleHarness(t)
 	met := "Show.S01.1080p.WEB-DL-AAA"
-	h.grabWith(t, met, hashFor(met), grabStatusImported, true, 0, 0)
+	h.grabWith(t, met, hashFor(met), grabStatusImported, onGlobal)
 	h.seedTorrent(hashFor(met), met, 3, 10)
 	short := "Show.S01.1080p.WEB-DL-BBB"
-	h.grabWith(t, short, hashFor(short), grabStatusImported, true, 5, 0)
+	h.grabWith(t, short, hashFor(short), grabStatusImported, seedGrab{source: seedRecOwn, enabled: true, ratio: 5})
 	h.seedTorrent(hashFor(short), short, 3, 10)
 	off := "Show.S01.1080p.WEB-DL-CCC"
-	h.grabWith(t, off, hashFor(off), grabStatusImported, false, 0, 0)
+	h.grabWith(t, off, hashFor(off), grabStatusImported, seedGrab{source: seedRecOwn})
 	h.seedTorrent(hashFor(off), off, 0, 1)
 
-	// No global goal saved: the blank indexer's torrent seeds forever.
-	rows, err := h.c.SeedCheckQueue(h.ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	byName := func(rows []SeedCheckRow) map[string]SeedCheckRow {
 		m := map[string]SeedCheckRow{}
 		for _, r := range rows {
@@ -198,12 +307,17 @@ func TestSeedCheckReportsWhatWouldHappen(t *testing.T) {
 		}
 		return m
 	}
+	// No global goal saved: the grab on it gets the standard window, not met at 10 hours.
+	rows, err := h.c.SeedCheckQueue(h.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := byName(rows)
-	if m[met].Outcome != SeedOutcomeForever || m[short].Outcome != SeedOutcomeSeeding || m[off].Outcome != SeedOutcomeRemove {
-		t.Errorf("unsaved: outcomes = %q / %q / %q", m[met].Outcome, m[short].Outcome, m[off].Outcome)
+	if m[met].Outcome != SeedOutcomeSeeding || !m[met].Goal.GlobalUnset || m[short].Outcome != SeedOutcomeSeeding || m[off].Outcome != SeedOutcomeRemove {
+		t.Errorf("unsaved: %+v / %+v / %+v", m[met], m[short], m[off])
 	}
 
-	// Previewing a global ratio of 2: the blank indexer's torrent would go, by the global goal.
+	// Previewing a global ratio of 2: the grab on the global goal would go, by it.
 	rows, err = h.c.SeedCheckQueue(h.ctx, &SeedDefault{Ratio: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -221,24 +335,52 @@ func TestSeedCheckReportsWhatWouldHappen(t *testing.T) {
 	}
 }
 
-// A torrent added by hand (indexer "manual", which no indexer is called) used to get the
-// standard window; with a global goal it gets that instead. A known indexer's own values
-// are recorded as they are.
-func TestSeedRulesFallBackToTheGlobalGoal(t *testing.T) {
+// What a new grab records: a manual grab gets the standard window, or the global goal
+// (live) while one is set; a known indexer's own values are recorded as they are, and
+// only an indexer switched to "use the global default" is recorded on it.
+func TestSeedRulesRecordWhereTheGoalCameFrom(t *testing.T) {
 	h := newLifecycleHarness(t)
-	if en, r, hrs := h.c.seedRules(h.ctx, "manual"); !en || r != 0 || hrs != indexer.DefaultSeedHours {
-		t.Errorf("no global goal: manual grab = %v/%v/%v, want the standard window", en, r, hrs)
+	type rule struct {
+		en    bool
+		r     float64
+		hrs   int
+		where string
+	}
+	rules := func(name string) rule {
+		en, r, hrs, where := h.c.seedRules(h.ctx, name)
+		return rule{en, r, hrs, where}
+	}
+	if got := rules("manual"); got != (rule{true, 0, indexer.DefaultSeedHours, seedRecDefault}) {
+		t.Errorf("no global goal: manual grab = %+v, want the standard window", got)
 	}
 	h.setGlobal(SeedDefault{Ratio: 1.5, Hours: 48})
-	if en, r, hrs := h.c.seedRules(h.ctx, "manual"); !en || r != 1.5 || hrs != 48 {
-		t.Errorf("global goal: manual grab = %v/%v/%v, want 1.5/48", en, r, hrs)
+	if got := rules("manual"); got != (rule{true, 0, 0, seedRecGlobal}) {
+		t.Errorf("global goal: manual grab = %+v, want it on the global goal", got)
 	}
-	// "Fake" exists (seeding off, as the harness made it): its own values, not the global.
-	if en, r, hrs := h.c.seedRules(h.ctx, "Fake"); en || r != 0 || hrs != 0 {
-		t.Errorf("known indexer = %v/%v/%v, want its own values", en, r, hrs)
+	// "Fake" exists (seeding off, as the harness made it): its own values.
+	if got := rules("Fake"); got != (rule{false, 0, 0, seedRecOwn}) {
+		t.Errorf("seeding-off indexer = %+v", got)
+	}
+	mk := func(name string, ix indexer.Indexer) {
+		ix.Name, ix.Kind, ix.URL, ix.Enabled = name, indexer.KindTorznab, "http://"+name, true
+		if _, err := h.c.indexers.Create(h.ctx, ix); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("Forever", indexer.Indexer{SeedEnabled: true})
+	mk("Own", indexer.Indexer{SeedEnabled: true, SeedRatio: 3})
+	mk("OnGlobal", indexer.Indexer{SeedEnabled: true, SeedUseGlobal: true})
+	if got := rules("Forever"); got != (rule{true, 0, 0, seedRecNone}) {
+		t.Errorf("0/0 indexer = %+v, want seed forever, not the global goal", got)
+	}
+	if got := rules("Own"); got != (rule{true, 3, 0, seedRecOwn}) {
+		t.Errorf("own-goal indexer = %+v", got)
+	}
+	if got := rules("OnGlobal"); got != (rule{true, 0, 0, seedRecGlobal}) {
+		t.Errorf("indexer on the global goal = %+v", got)
 	}
 	// A usenet download never seeds, global goal or not.
-	if _, en, _, _ := h.c.grabPolicy(h.ctx, "manual", "sab-nzo_1"); en {
+	if _, en, _, _, _ := h.c.grabPolicy(h.ctx, "manual", "sab-nzo_1"); en {
 		t.Error("a usenet grab was given a seed goal")
 	}
 }
