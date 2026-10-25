@@ -74,6 +74,19 @@ func TestProgressPublishesOnlyChanges(t *testing.T) {
 	}
 }
 
+// A download that isn't finished never goes out as 1.0, which the page would show as
+// "100%" (#73): progress is rounded down to the half percent, not to the nearest.
+func TestProgressNeverRoundsUpToDone(t *testing.T) {
+	for _, c := range []struct{ in, want float64 }{
+		{0.998, 0.995}, {0.99999, 0.995}, {0.996, 0.995}, {0.505, 0.505}, {0.5049, 0.5}, {0.2, 0.2},
+	} {
+		got := progressList([]Item{dl("a", c.in)})
+		if len(got) != 1 || got[0].Progress != c.want {
+			t.Errorf("progress %v went out as %+v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 // Nothing is read or published while nobody is connected.
 func TestRunProgressQuietWithoutListeners(t *testing.T) {
 	svc, fake, _ := snapshotFixture(t, "http://qb")

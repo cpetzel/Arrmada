@@ -142,6 +142,9 @@ test.describe("the Series list", () => {
     await page.goto("/series");
     await expect(page.getByRole("button", { name: /^Searching off 3$/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Searching on 0$/ })).toBeVisible();
+    // Unfinished shows are found with their searching off too (#82); Wanted has none.
+    await expect(page.getByRole("button", { name: /^Missing episodes 2$/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Wanted 0$/ })).toBeVisible();
     const hint = page.getByTestId("searching-off-hint");
     await expect(hint).toContainText("Every show here has searching off");
 

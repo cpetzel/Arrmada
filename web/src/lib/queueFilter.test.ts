@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityDownload } from "./api";
-import { inClient, isStalled, queueClients, showClientNames, stalledMinutes } from "./queueFilter";
+import { inClient, isStalled, queueClients, showClientNames, stalledMinutes, transferKey } from "./queueFilter";
 
 const NOW = 1_800_000_000; // unix seconds
 
@@ -56,5 +56,13 @@ describe("queueClients and inClient", () => {
     expect(inClient(rows, "")).toBe(rows);
     expect(inClient(rows, "nonsense")).toBe(rows);
     expect(inClient(rows, "9")).toEqual([]);
+  });
+});
+
+describe("transferKey", () => {
+  it("tells one torrent in two clients apart (#71)", () => {
+    expect(transferKey({ hash: "a", client_id: 1 })).not.toBe(transferKey({ hash: "a", client_id: 2 }));
+    expect(transferKey({ hash: "a", client_id: 1 })).toBe(transferKey({ hash: "a", client_id: 1 }));
+    expect(transferKey({ hash: "a" })).toBe("0:a");
   });
 });

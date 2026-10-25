@@ -383,6 +383,7 @@ function DiskGuardSection() {
               {status.volumes!.map((v) => (
                 <li key={v.path} className="break-all">
                   <span className="font-mono">{v.path}</span>
+                  {(v.clients?.length ?? 0) > 0 && <> ({v.clients!.join(", ")})</>}
                   {" — "}
                   {v.measurable ? `${v.used_pct.toFixed(1)}% full` : "can't be read"}
                   {v.override && <> (measured at <span className="font-mono">{v.measured_path}</span>)</>}

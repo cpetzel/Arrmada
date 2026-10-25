@@ -43,7 +43,8 @@ export function requestStage(rq: StagedRequest, queueKnown = true): RequestStage
   }
   const ready = rq.media_type === "book" ? "Ready" : "Ready to watch";
   const eps = tr?.total ? `${tr.have ?? 0} of ${tr.total} episodes` : "";
-  const pct = Math.round((tr?.progress ?? 0) * 100);
+  // Rounded down: 99.6% isn't "100%" while it's still downloading (#73).
+  const pct = Math.floor((tr?.progress ?? 0) * 100 + 1e-6);
   switch (tr?.stage) {
     case "available":
       return { badge: "Ready", tone: "good", detail: ready, detailTone: "var(--good-text)" };

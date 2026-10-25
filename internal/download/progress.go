@@ -22,8 +22,9 @@ type Publisher interface {
 	Publish(topic string, data any)
 }
 
-// ProgressItem is one unfinished download on queue.progress. Progress is rounded to half a
-// percent, so a bar that hasn't visibly moved doesn't cost a message.
+// ProgressItem is one unfinished download on queue.progress. Progress is rounded down to
+// half a percent, so a bar that hasn't visibly moved doesn't cost a message, and a download
+// at 99.8% never goes out as 1.0 — the page would read that as finished (#73).
 type ProgressItem struct {
 	Hash       string  `json:"hash"`
 	Progress   float64 `json:"progress"`
@@ -40,7 +41,7 @@ func progressList(items []Item) []ProgressItem {
 		}
 		out = append(out, ProgressItem{
 			Hash:       it.Hash,
-			Progress:   math.Round(it.Progress*200) / 200,
+			Progress:   math.Floor(it.Progress*200+1e-9) / 200,
 			ETASeconds: it.ETASeconds,
 			State:      it.Phase(),
 		})
