@@ -1,6 +1,6 @@
 import { req, type SeedSource } from "./api";
 
-// The global seed goal and its read-only check (Settings → Downloads → Seeding). Its own
+// The global seed goal and its read-only check (the Seeding card on Settings → Downloads). Its own
 // module, like plexApi.ts, so none of it lands in a requester's first download.
 
 /** What the next seed check will do with a finished torrent (internal/automation/seedgoal.go). */

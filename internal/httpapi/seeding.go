@@ -33,7 +33,7 @@ func seedGoalProblem(ratio *float64, hours *int) string {
 	return ""
 }
 
-// handleSeedCheck is the read-only seed check (Settings → Downloads → Seeding): every
+// handleSeedCheck is the read-only seed check (the Seeding card on Settings → Downloads): every
 // finished torrent with its ratio and seeding time against the goal that applies to it,
 // where that goal comes from, and what the next seed check will do with it. ?ratio= and
 // ?hours= stand in for the saved global goal, so the page can show what a value would do
