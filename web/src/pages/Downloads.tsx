@@ -16,7 +16,7 @@ import { searchJobLine } from "../lib/searchOutcome";
 import { wantedChip, wantedHref, wantedKey, wantedLine } from "../lib/wanted";
 import { STAGE, stageGroup, usenetStage, type QueueGroup } from "../lib/stages";
 import { isUsenetDownload, leftLine, usenetFailLine, usenetFailed } from "../lib/network";
-import { inClient, isStalled, queueClients, showClientNames, stalledMinutes } from "../lib/queueFilter";
+import { inClient, isStalled, queueClients, showClientNames, stalledMinutes, transferKey } from "../lib/queueFilter";
 import { CardActions, ItemChips, TransferPoster, TransferTitle } from "./activity/transfer";
 import { EmptyState, ErrorState, IconButton, Skeleton, StatusChip, useToast } from "../ui";
 
@@ -443,26 +443,26 @@ export function QueuePanel() {
       ) : view === "downloading" ? (
         shownDownloads.length === 0 ? <Empty>{problemsOnly ? "No download needs a look right now." : "Nothing downloading. Grab a release and it'll appear here."}</Empty> : (
           <div className="flex flex-col gap-2">
-            {shownDownloads.map((it) => <DownloadCard key={it.hash} it={it} guard={guard} busy={!!busy[it.hash]} act={act} onRemoved={note} onNote={note} showClient={showClients} searching={it.hash in failovers} onTryAnother={tryAnother} />)}
+            {shownDownloads.map((it) => <DownloadCard key={transferKey(it)} it={it} guard={guard} busy={!!busy[it.hash]} act={act} onRemoved={note} onNote={note} showClient={showClients} searching={it.hash in failovers} onTryAnother={tryAnother} />)}
           </div>
         )
       ) : view === "stalled" ? (
         shownStalled.length === 0 ? <Empty>Nothing has stalled. A download counts as stalled after half an hour with no progress.</Empty> : (
           <div className="flex flex-col gap-2">
-            {shownStalled.map((it) => <DownloadCard key={it.hash} it={it} guard={guard} busy={!!busy[it.hash]} act={act} onRemoved={note} onNote={note} showClient={showClients} searching={it.hash in failovers} onTryAnother={tryAnother} />)}
+            {shownStalled.map((it) => <DownloadCard key={transferKey(it)} it={it} guard={guard} busy={!!busy[it.hash]} act={act} onRemoved={note} onNote={note} showClient={showClients} searching={it.hash in failovers} onTryAnother={tryAnother} />)}
           </div>
         )
       ) : view === "finishing" ? (
         shownFinishing.length === 0 ? <Empty>{problemsOnly ? "No finished download needs a look right now." : "Nothing waiting to import. Finished downloads pass through here on their way into the library."}</Empty> : (
           <div className="flex flex-col gap-2">
-            {shownFinishing.map((it) => <FinishingCard key={it.hash} it={it} busy={!!busy[it.hash]} onRemoved={(m) => { note(m); refreshQueue(); }} showClient={showClients} />)}
+            {shownFinishing.map((it) => <FinishingCard key={transferKey(it)} it={it} busy={!!busy[it.hash]} onRemoved={(m) => { note(m); refreshQueue(); }} showClient={showClients} />)}
           </div>
         )
       ) : (
         shownSeeding.length === 0 ? <Empty>{problemsOnly ? "No seeding download needs a look right now." : "Nothing seeding right now."}</Empty> : (
           <div className="flex flex-col gap-2">
             <SeedingSummary items={shownSeeding} />
-            {shownSeeding.map((it) => <SeedingCard key={it.hash} it={it} guard={guard} busy={!!busy[it.hash]} act={act} onRemoved={note} showClient={showClients} />)}
+            {shownSeeding.map((it) => <SeedingCard key={transferKey(it)} it={it} guard={guard} busy={!!busy[it.hash]} act={act} onRemoved={note} showClient={showClients} />)}
           </div>
         )
       )}
