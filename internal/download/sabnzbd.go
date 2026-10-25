@@ -1072,6 +1072,19 @@ func (s *SABnzbd) DefaultSavePath(ctx context.Context, dc Client) (string, error
 	return st.Status.CompleteDir, nil
 }
 
+// IncompleteSavePath is SABnzbd's incomplete folder as SABnzbd names it — where a job is
+// written while it downloads, so the drive the disk guard has to judge it by.
+func (s *SABnzbd) IncompleteSavePath(ctx context.Context, dc Client) (string, error) {
+	st, err := s.fullStatus(ctx, dc)
+	if err != nil {
+		return "", err
+	}
+	if st.Status.DownloadDir == "" {
+		return "", errors.New("SABnzbd didn't say where it downloads to")
+	}
+	return st.Status.DownloadDir, nil
+}
+
 type sabCatConfig struct {
 	Config struct {
 		Categories []struct {

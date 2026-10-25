@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tristenlammi/arrmada/internal/convert"
-	"github.com/tristenlammi/arrmada/internal/pathguard"
 )
 
 // "Which torrent is this file?" had no answer anywhere in the app. The chain exists —
@@ -103,11 +102,12 @@ func (a *api) handleFileInfo(w http.ResponseWriter, r *http.Request) {
 	a.writeJSON(w, http.StatusOK, out)
 }
 
-// underLibraryRoot reports whether path sits inside a configured media root (the same
-// roots manual import may read from) or a recycle bin. Both sides are fully resolved, so
-// neither "/library-old" nor a symlink inside the library that points at /etc can pass.
+// underLibraryRoot reports whether path sits inside a folder manual import may read from
+// (withinImportRoots: the media and downloads folders, and the folders an admin mapped for
+// a download client) or a recycle bin. Both sides are fully resolved, so neither
+// "/library-old" nor a symlink inside the library that points at /etc can pass.
 func (a *api) underLibraryRoot(ctx context.Context, path string) bool {
-	return pathguard.Within(path, append(a.importRoots(ctx), a.recycleMode(ctx).Dirs...)...)
+	return a.withinImportRoots(ctx, path, a.recycleMode(ctx).Dirs...)
 }
 
 // fileSourceFor joins a library path back to the release it came from:

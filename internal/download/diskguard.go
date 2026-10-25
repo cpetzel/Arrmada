@@ -167,13 +167,16 @@ type watch struct {
 	// dirs is the downloads folders (paths), then — with more than one download client —
 	// each folder a client saves into that isn't inside one of those (GitHub #70).
 	dirs []string
-	// multi is more than one download client configured. Each download is then judged by
-	// the volume its own client writes to, and one the guard can't place is left alone:
-	// another client's full drive is no reason to stop it. With one client every download
-	// is the Downloads folder's when nothing says otherwise, as it always was.
+	// own is the downloads folders Arrmada was given (paths, cleaned): every other folder
+	// in dirs is a client's.
+	own map[string]bool
+	// multi is more than one download client switched on. A download positively placed in
+	// a client's own folder is then judged by that folder's volume; everything else is
+	// judged exactly as with one client — the Downloads folder's when nothing says
+	// otherwise — so no download the guard used to pause slips through.
 	multi bool
-	// home is, per client, the watched folder its downloads land in when they don't report
-	// a path of their own yet; a client missing here can't be placed that way.
+	// home is, per client, the watched folder its downloads are written to when they don't
+	// report a path of their own yet; a client missing here can't be placed that way.
 	home map[int64]string
 	// names is, per watched folder (cleaned), the clients saving into it, for the status;
 	// client is each client's name, for the log.
@@ -185,8 +188,11 @@ type watch struct {
 // folders alone and nothing is asked of the client, so a single-client setup behaves
 // exactly as before.
 func (g *DiskGuard) watching(ctx context.Context) watch {
-	w := watch{dirs: g.paths()}
-	if n, err := g.svc.ClientCount(ctx); err != nil || n < 2 {
+	w := watch{dirs: g.paths(), own: map[string]bool{}}
+	for _, d := range w.dirs {
+		w.own[filepath.Clean(d)] = true
+	}
+	if n, err := g.svc.EnabledClientCount(ctx); err != nil || n < 2 {
 		return w
 	}
 	w.multi = true
@@ -195,9 +201,8 @@ func (g *DiskGuard) watching(ctx context.Context) watch {
 	for _, f := range g.svc.ClientFolders(ctx, w.dirs) {
 		w.client[f.ClientID] = f.Client
 		// A whole filesystem is no one's downloads folder (and "/" reads as the container's
-		// own); a folder only the client named is watched once Arrmada can see it. A home
-		// folder is kept either way: unmeasurable, it holds nothing and releases nothing.
-		if filepath.Dir(f.Path) == f.Path || (f.Reported && !f.Home && (g.dirOK == nil || !g.dirOK(f.Path))) {
+		// own); a folder only the client named is watched once Arrmada can see it.
+		if filepath.Dir(f.Path) == f.Path || (f.Reported && (g.dirOK == nil || !g.dirOK(f.Path))) {
 			continue
 		}
 		folders = append(folders, f)
@@ -220,25 +225,38 @@ func (g *DiskGuard) watching(ctx context.Context) watch {
 }
 
 // place is the watched folder a download writes into: the one its content path is in,
-// else — with no path yet — where its client's downloads land. ok is false when that
-// can't be told with several clients (a path in none of the folders, or a client that
-// hasn't said where it saves); with one client such a download is the Downloads folder's,
-// as it always was.
-func (w watch) place(it Item) (string, bool) {
+// else — with no path yet — where its client's downloads are written. Anything else is
+// the Downloads folder's (dirs[0]), as it always was; placed is false then, with several
+// clients, so the guard can say once that it couldn't tell.
+func (w watch) place(it Item) (d string, placed bool) {
 	if c := strings.TrimSpace(it.ContentPath); c != "" && filepath.IsAbs(c) {
 		if d, ok := folderIn(c, w.dirs); ok {
 			return d, true
 		}
-		if w.multi {
-			return "", false
-		}
-		return w.dirs[0], true
+		return w.dirs[0], !w.multi
 	}
 	if !w.multi {
 		return w.dirs[0], true
 	}
-	d, ok := w.home[it.ClientID]
-	return d, ok
+	if d, ok := w.home[it.ClientID]; ok {
+		return d, true
+	}
+	return w.dirs[0], false
+}
+
+// judgedBy is the folder whose reading decides for a download placed in d: d itself when
+// it can be measured or is one of Arrmada's own downloads folders (an unmeasurable one of
+// those holds nothing and releases nothing, as ever), else — a client's folder that
+// can't be read — the Downloads folder. A client's folder never strands a download, nor
+// keeps one running that the Downloads folder's reading would pause.
+func (w watch) judgedBy(d string, use map[string]diskspace.Usage) string {
+	if d == "" {
+		return w.dirs[0]
+	}
+	if _, ok := use[d]; ok || w.own[filepath.Clean(d)] {
+		return d
+	}
+	return w.dirs[0]
 }
 
 // measureOverride is the saved "measure a different drive" path, or "" for none.
@@ -919,10 +937,11 @@ func (g *DiskGuard) releaseStrays(ctx context.Context, held, dirs []string, lim 
 // nothing and releases nothing, as with one folder.
 //
 // With several download clients (GitHub #70) the watch also holds each client's own
-// folders, and a download with no path yet counts as where its own client saves. One
-// that still can't be placed is left running whatever is full — it may well be writing
-// to a drive with room — and logged once. What the guard already holds is still released
-// by the folder it was held for.
+// folders, and a download with no path yet counts as where its own client writes. Only a
+// download positively placed in a client's folder that can be measured is judged by that
+// folder's volume; one that can't be placed, or is placed in a client's folder that can't
+// be read, is judged by the Downloads folder exactly as with one client (and the first is
+// logged once), so nothing the guard used to pause is let through.
 //
 // A held download is judged by the folder it was held for (recorded), else by where its
 // content is. One the queue doesn't list — its client is down — is released after the
@@ -975,10 +994,8 @@ func (g *DiskGuard) checkVolumes(ctx context.Context, held []string, w watch, mr
 		byHash[strings.ToLower(it.Hash)] = it
 	}
 	volumeOf := func(it Item) (string, diskspace.Usage, bool) {
-		d, placed := w.place(it)
-		if !placed {
-			return "", diskspace.Usage{}, false
-		}
+		d, _ := w.place(it)
+		d = w.judgedBy(d, use)
 		u, ok := use[d]
 		return d, u, ok
 	}
@@ -994,7 +1011,6 @@ func (g *DiskGuard) checkVolumes(ctx context.Context, held []string, w watch, mr
 		}
 		if _, placed := w.place(it); !placed {
 			g.unplaced(it, w, unknown)
-			continue
 		}
 		d, u, ok := volumeOf(it)
 		if !ok || !lim.full(u) {
@@ -1026,12 +1042,11 @@ func (g *DiskGuard) checkVolumes(ctx context.Context, held []string, w watch, mr
 	drained := func(h string, it *Item) bool {
 		d := g.recorded[h]
 		if d == "" && it != nil {
-			d, _, _ = volumeOf(*it)
+			d, _ = w.place(*it)
 		}
-		if d == "" {
-			d = dirs[0]
-		}
-		u, ok := use[d]
+		// A client's folder with no reading falls back to the Downloads folder's, so what's
+		// held is never stranded there.
+		u, ok := use[w.judgedBy(d, use)]
 		return ok && lim.drained(u)
 	}
 	unlisted := map[string]int{}
@@ -1076,9 +1091,9 @@ func (g *DiskGuard) checkVolumes(ctx context.Context, held []string, w watch, mr
 	}
 }
 
-// unplaced notes a download still pulling data that the guard can't place on any volume
-// (watch.place), logging it the first pass it's seen that way rather than every minute.
-// Called under mu; seen collects this pass's.
+// unplaced notes a download still pulling data that the guard can't place on a client's
+// volume (watch.place), so it's judged by the Downloads folder's: logged the first pass
+// it's seen that way rather than every minute. Called under mu; seen collects this pass's.
 func (g *DiskGuard) unplaced(it Item, w watch, seen map[string]bool) {
 	h := strings.ToLower(it.Hash)
 	seen[h] = true
@@ -1089,7 +1104,7 @@ func (g *DiskGuard) unplaced(it Item, w watch, seen map[string]bool) {
 		g.noteUnknown(it)
 		return
 	}
-	g.log.Info("disk guard: can't tell which drive this download is writing to, so it isn't paused for another drive being full — add a path mapping to its download client so Arrmada sees where it saves",
+	g.log.Info("disk guard: can't tell which drive this download is writing to, so it's judged by the Downloads folder's drive — add a path mapping to its download client so Arrmada sees where it saves",
 		"name", it.Name, "client", w.client[it.ClientID], "path", it.ContentPath)
 }
 

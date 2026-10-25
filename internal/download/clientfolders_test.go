@@ -48,8 +48,11 @@ func TestClientFolders(t *testing.T) {
 	s.registry.impls[KindSABnzbd] = sab
 	for _, c := range []Client{
 		{Name: "first", Kind: KindQbittorrent, URL: "http://a", Enabled: true},
-		{Name: "second", Kind: KindQbittorrent, URL: "http://b", Enabled: false,
+		{Name: "second", Kind: KindQbittorrent, URL: "http://b", Enabled: true,
 			PathMaps: PathMaps{{Remote: "/download", Local: "/downloads"}}},
+		// Switched off: none of its folders count.
+		{Name: "off", Kind: KindQbittorrent, URL: "http://c", Enabled: false,
+			PathMaps: PathMaps{{Remote: "/download", Local: "/off"}}},
 		{Name: "sab", Kind: KindSABnzbd, URL: "http://sab", Enabled: true,
 			PathMaps: PathMaps{{Remote: "/data/usenet", Local: "/usenet"}}},
 	} {
@@ -63,8 +66,8 @@ func TestClientFolders(t *testing.T) {
 		{Client: "first", Path: "/mnt/disk2/dl"},
 		{Client: "second", Path: "/downloads", Home: true},
 		{Client: "second", Path: "/mnt/disk2/dl"},
-		{Client: "sab", Path: "/usenet/complete", Home: true, Reported: true},
-		{Client: "sab", Path: "/usenet/tv", Reported: true},
+		{Client: "sab", Path: "/usenet/complete", Home: true, Reported: true, Remote: "/data/usenet/complete"},
+		{Client: "sab", Path: "/usenet/tv", Reported: true, Remote: "/data/usenet/tv"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v", got)
@@ -75,6 +78,27 @@ func TestClientFolders(t *testing.T) {
 		if g != want[i] {
 			t.Errorf("folder %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+	// Only what an admin mapped counts as a client's folder for import.
+	if m := s.MappedFolders(ctx); len(m) != 2 || m[0] != "/downloads" || m[1] != "/usenet" {
+		t.Errorf("mapped folders = %v, want the enabled clients' mapping targets", m)
+	}
+	if n, _ := s.EnabledClientCount(ctx); n != 3 {
+		t.Errorf("enabled clients = %d, want 3", n)
+	}
+}
+
+// SABnzbd's incomplete folder, when it gives one, is where its running jobs are written,
+// so that's its home; its completed folder is still one of its folders.
+func TestClientFoldersUsenetHomeIsTheIncompleteFolder(t *testing.T) {
+	s, ctx := folderService(t)
+	s.registry.impls[KindSABnzbd] = &savingFake{fakeClient: &fakeClient{}, save: "/usenet/complete", inc: "/usenet/incomplete"}
+	if _, err := s.repo.Create(ctx, Client{Name: "sab", Kind: KindSABnzbd, URL: "http://sab", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	got := s.ClientFolders(ctx, []string{"/download"})
+	if len(got) != 2 || got[0].Path != "/usenet/incomplete" || !got[0].Home || got[1].Path != "/usenet/complete" || got[1].Home {
+		t.Errorf("folders = %+v", got)
 	}
 }
 
