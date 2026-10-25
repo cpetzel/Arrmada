@@ -176,12 +176,13 @@ func (a *api) handleCreateIndexer(w http.ResponseWriter, r *http.Request) {
 	// minimum-seed-time rule. Editing an indexer respects whatever is sent, so 0/0 stays
 	// deliberately selectable.
 	//
-	// "Use the global default" is its own choice (seed_use_global). A new indexer that
-	// doesn't say starts on it while a global goal is set (Settings → Downloads) and sends
-	// no goal of its own; without a global goal it gets the time-only default as before.
+	// "Use the global default" is its own choice (seed_use_global), always honoured when
+	// sent. A new indexer that doesn't say and sends no goal of its own starts on it only
+	// while the global goal has a time (SafeForNew); otherwise it gets the time-only
+	// default as before.
 	seedRatio, seedHours := req.SeedRatio, req.SeedHours
 	useGlobal := req.SeedUseGlobal != nil && *req.SeedUseGlobal
-	if req.SeedUseGlobal == nil && seedRatio == 0 && seedHours == 0 && a.seedDefault(r.Context()).Set() {
+	if req.SeedUseGlobal == nil && seedRatio == 0 && seedHours == 0 && a.seedDefault(r.Context()).SafeForNew() {
 		useGlobal = true
 	}
 	if kind == indexer.KindNewznab {

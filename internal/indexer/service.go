@@ -50,9 +50,11 @@ type Service struct {
 	// stored caps and no categories of its own is searched in the media type's usual
 	// categories. nil = on, the setting's default.
 	defaultCats func(ctx context.Context) bool
-	// globalSeedGoal says whether a global seed goal is set (Settings → Downloads). A
-	// Prowlarr indexer added while one is starts on it (SeedUseGlobal). nil = none, so new
-	// rows get DefaultSeedHours as before. Rows that exist already are never switched.
+	// globalSeedGoal says whether a new indexer may start on the global seed goal
+	// (Settings → Downloads): one is set and it has a time, so a newly added private
+	// tracker can't be ended at a ratio before its minimum seeding time. A Prowlarr
+	// indexer added then starts on it (SeedUseGlobal). nil = no, so new rows get
+	// DefaultSeedHours as before. Rows that exist already are never switched.
 	globalSeedGoal func(ctx context.Context) bool
 	// aioProwlarr is where the all-in-one image's optional Prowlarr answers while it runs
 	// (SetBundledProwlarr); "" elsewhere.

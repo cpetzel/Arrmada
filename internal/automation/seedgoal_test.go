@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tristenlammi/arrmada/internal/download"
 	"github.com/tristenlammi/arrmada/internal/indexer"
 )
 
@@ -195,13 +196,16 @@ func TestSeedCleanupRemovesOneTorrentPerGrab(t *testing.T) {
 	}
 }
 
-// No more than ten torrents go in one pass; the rest go on the next.
+// No more than ten torrents go in one pass, whatever ends them: an indexer's own goal,
+// seeding off (removed once imported) or the global goal. The rest go on the next pass.
 func TestSeedCleanupIsCappedPerPass(t *testing.T) {
 	const limit, total = 10, 13
 	h := newLifecycleHarness(t)
+	h.setGlobal(SeedDefault{Hours: 1})
+	rules := []grabRule{{source: seedRecOwn, enabled: true, ratio: 1}, {source: seedRecOwn}, onGlobal}
 	for i := 0; i < total; i++ {
 		name := fmt.Sprintf("Show.S01E%02d.1080p.WEB-DL-GRP", i+1)
-		h.grabWith(t, name, hashFor(name), grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
+		h.grabWith(t, name, hashFor(name), grabStatusImported, rules[i%len(rules)])
 		h.seedTorrent(hashFor(name), name, 5, 1000)
 	}
 	rows, err := h.c.SeedCheckQueue(h.ctx, nil)
@@ -354,9 +358,15 @@ func TestSeedRulesRecordWhereTheGoalCameFrom(t *testing.T) {
 	if got := rules("manual"); got != (rule{true, 0, indexer.DefaultSeedHours, seedRecDefault}) {
 		t.Errorf("no global goal: manual grab = %+v, want the standard window", got)
 	}
+	// A ratio-only global goal could end a hand-added private torrent within hours: such
+	// a grab keeps the standard window.
+	h.setGlobal(SeedDefault{Ratio: 1})
+	if got := rules("manual"); got != (rule{true, 0, indexer.DefaultSeedHours, seedRecDefault}) {
+		t.Errorf("ratio-only global goal: manual grab = %+v, want the standard window", got)
+	}
 	h.setGlobal(SeedDefault{Ratio: 1.5, Hours: 48})
 	if got := rules("manual"); got != (rule{true, 0, 0, seedRecGlobal}) {
-		t.Errorf("global goal: manual grab = %+v, want it on the global goal", got)
+		t.Errorf("global goal with a time: manual grab = %+v, want it on the global goal", got)
 	}
 	// "Fake" exists (seeding off, as the harness made it): its own values.
 	if got := rules("Fake"); got != (rule{false, 0, 0, seedRecOwn}) {
@@ -383,5 +393,138 @@ func TestSeedRulesRecordWhereTheGoalCameFrom(t *testing.T) {
 	// A usenet download never seeds, global goal or not.
 	if _, en, _, _, _ := h.c.grabPolicy(h.ctx, "manual", "sab-nzo_1"); en {
 		t.Error("a usenet grab was given a seed goal")
+	}
+}
+
+// The matcher lets a grab act once per pass: a torrent listed twice (the same hash in two
+// clients) can't be removed twice by one grab.
+func TestSeedMatcherLetsAGrabActOnce(t *testing.T) {
+	g := []grab{{ID: 1, Title: "Show.S01", InfoHash: "abc"}}
+	a := download.Item{Hash: "abc", Name: "Show.S01"}
+	m := newSeedMatcher(g, []download.Item{a, a})
+	first := m.match(a)
+	if first == nil {
+		t.Fatal("no match for the grab's own hash")
+	}
+	m.use(first)
+	if again := m.match(a); again != nil {
+		t.Fatalf("a used grab matched again: %+v", again)
+	}
+}
+
+// End to end: one grab, its torrent listed twice. Only one removal.
+func TestSeedCleanupRemovesOneTorrentForTwoListings(t *testing.T) {
+	h := newLifecycleHarness(t)
+	name := "Show.S01.1080p.WEB-DL-GRP"
+	h.grabWith(t, name, hashFor(name), grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
+	h.seedTorrent(hashFor(name), name, 5, 1000)
+	h.seedTorrent(hashFor(name), name, 5, 1000)
+	queue, err := h.c.downloads.Queue(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queue) != 2 {
+		t.Skipf("the client read folds the two listings into %d", len(queue))
+	}
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != 1 {
+		t.Fatalf("one grab removed %d torrents: %+v", len(*h.removed), *h.removed)
+	}
+}
+
+// unplaceablePack writes a season pack with one file for an episode the show doesn't
+// have, and puts it in the client as a finished, well-seeded torrent.
+func (h *lifecycleHarness) unplaceablePack(t *testing.T, name string) string {
+	t.Helper()
+	dir := h.download(t, name, "Show.S01E01.1080p.WEB-DL-GRP.mkv", "Show.S01E02.1080p.WEB-DL-GRP.mkv", "Show.S01E09.1080p.WEB-DL-GRP.mkv")
+	defer h.c.downloads.InvalidateSnapshot()
+	h.qbit.mu.Lock()
+	defer h.qbit.mu.Unlock()
+	h.qbit.torrents = append(h.qbit.torrents, map[string]any{
+		"hash": hashFor(name), "name": name, "state": "uploading", "progress": 1.0, "amount_left": 0,
+		"size": 3 * 60 << 20, "completed": 3 * 60 << 20, "downloaded": 1 << 30, "uploaded": 5 << 30,
+		"seeding_time": 1000 * 3600, "category": seriesCategory, "content_path": dir,
+	})
+	return dir
+}
+
+func importUnmatchedOf(t *testing.T, c *Coordinator, id int64) int {
+	t.Helper()
+	var n int
+	if err := c.db.QueryRow(`SELECT import_unmatched FROM grabs WHERE id = ?`, id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Every series import path records the files it couldn't place on the grab, so seed
+// cleanup keeps the torrent rather than delete them: the import sweep, a review's Import
+// anyway, and a manual folder import.
+func TestEverySeriesImportRecordsUnmatchedFiles(t *testing.T) {
+	name := "Show.S01.1080p.WEB-DL-GRP"
+	check := func(t *testing.T, h *lifecycleHarness, gid int64) {
+		t.Helper()
+		if s := grabStatus(t, h.c, gid); s != grabStatusImported {
+			t.Fatalf("grab after the import = %q, want imported", s)
+		}
+		if n := importUnmatchedOf(t, h.c, gid); n != 1 {
+			t.Fatalf("import_unmatched = %d, want 1 (S01E09 has no episode)", n)
+		}
+		h.c.ManageSeeding(h.ctx)
+		if len(*h.removed) != 0 {
+			t.Fatalf("removed with its data although a file was left unplaced: %+v", *h.removed)
+		}
+	}
+	t.Run("sweep", func(t *testing.T) {
+		h := newLifecycleHarness(t)
+		gid := h.seriesGrab(t, name, hashFor(name))
+		h.unplaceablePack(t, name)
+		h.c.ImportSeriesDownloads(h.ctx)
+		check(t, h, gid)
+	})
+	t.Run("review import anyway", func(t *testing.T) {
+		h := newLifecycleHarness(t)
+		gid := h.seriesGrab(t, name, hashFor(name))
+		dir := h.unplaceablePack(t, name)
+		rid := h.hold(t, hashFor(name), name, dir)
+		if err := h.c.ImportReview(h.ctx, rid, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+		check(t, h, gid)
+	})
+	t.Run("manual folder import", func(t *testing.T) {
+		h := newLifecycleHarness(t)
+		gid := h.seriesGrab(t, name, hashFor(name))
+		dir := h.unplaceablePack(t, name)
+		if err := h.c.ManualImportSeries(h.ctx, h.seriesID, dir); err != nil {
+			t.Fatal(err)
+		}
+		check(t, h, gid)
+	})
+}
+
+// The seed check pairs an older grab with its torrent the way the next cleanup pass will
+// (AdoptTorrentHashes), so the preview matches what happens, and writes nothing doing so.
+func TestSeedCheckPairsHashlessGrabsWithoutWriting(t *testing.T) {
+	h := newLifecycleHarness(t)
+	listing := "Show S01 1080p WEB-DL DD+ GRP" // the indexer's prettified listing title
+	torrent := "Show.S01.1080p.WEB-DL.EAC3-GRP"
+	gid := h.grabWith(t, listing, "", grabStatusImported, grabRule{source: seedRecOwn, enabled: true, ratio: 1})
+	h.seedTorrent(hashFor(torrent), torrent, 5, 1000)
+
+	rows, err := h.c.SeedCheckQueue(h.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Outcome != SeedOutcomeRemove {
+		t.Fatalf("seed check = %+v, want the paired grab's removal", rows)
+	}
+	var hash string
+	if err := h.c.db.QueryRow(`SELECT info_hash FROM grabs WHERE id = ?`, gid).Scan(&hash); err != nil || hash != "" {
+		t.Fatalf("the check wrote a hash on the grab: %q (err %v)", hash, err)
+	}
+	h.c.ManageSeeding(h.ctx)
+	if len(*h.removed) != 1 {
+		t.Fatalf("the cleanup pass did something other than what the check said: %+v", *h.removed)
 	}
 }

@@ -38,6 +38,13 @@ type SeedDefault struct {
 // Set reports whether there is a global goal at all.
 func (d SeedDefault) Set() bool { return d.Ratio > 0 || d.Hours > 0 }
 
+// SafeForNew reports whether a grab or indexer that didn't choose may be put on the global
+// goal: only one with a time. A ratio-only goal can end a seed within hours, and a manual
+// torrent or a newly added tracker that used to get the standard 336 hours would be a
+// hit-and-run on a private tracker's minimum seeding time. Choosing "Global default" in
+// an indexer's seed rules is always honoured; this is only for the automatic default.
+func (d SeedDefault) SafeForNew() bool { return d.Hours > 0 }
+
 // ParseSeedDefault reads the stored global goal. Anything unreadable or out of bounds
 // reads as unset — never as some other goal, because a wrong goal removes torrents.
 func ParseSeedDefault(ratioRaw, hoursRaw string) SeedDefault {
@@ -197,13 +204,18 @@ type SeedCheckRow struct {
 // decision, one whose import left files unmatched keeps seeding, one grab removes one
 // torrent, and no more than maxSeedRemovalsPerPass go in one pass.
 func (c *Coordinator) SeedCheck(ctx context.Context, queue []download.Item, def *SeedDefault) ([]SeedCheckRow, error) {
-	cleanup, err := c.seedCleanupGrabs(ctx)
-	if err != nil {
-		return nil, err
-	}
 	live, err := c.liveGrabs(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// Pair hash-less grabs with their torrents the way the next cleanup pass will
+	// (AdoptTorrentHashes), in memory only: the preview writes nothing.
+	c.adoptHashes(ctx, live, queue, false)
+	var cleanup []grab
+	for _, g := range live {
+		if g.Status == grabStatusImported || g.Status == grabStatusDismissed { // seedCleanupWhere
+			cleanup = append(cleanup, g)
+		}
 	}
 	d := c.seedDefault(ctx)
 	if def != nil {

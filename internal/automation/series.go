@@ -1287,7 +1287,7 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 			c.markSeriesGrabImported(ctx, s.ID, it.Hash, it.Name) // flip THIS grab (not siblings) for seed cleanup
 			// Files it couldn't match stay only in the download: seed cleanup must not
 			// remove it with its data.
-			c.noteImportUnmatched(ctx, s.ID, it.Hash, unresolved)
+			c.noteImportUnmatched(ctx, it.Hash, it.Name, unresolved)
 			if imported > 0 {
 				c.log.Info("series: imported episodes", "series", s.Title, "count", imported, "release", it.Name)
 				c.series.AddEvent(ctx, s.ID, "imported", fmt.Sprintf("Imported %d episode%s from %s", imported, plural(imported), it.Name))

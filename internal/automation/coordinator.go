@@ -154,6 +154,9 @@ type Coordinator struct {
 	// seedDefaultFn reads the global seed goal (Settings → Downloads) that a grab whose
 	// indexer set no goal of its own falls back to (seedgoal.go). nil means none is set.
 	seedDefaultFn func(ctx context.Context) SeedDefault
+	// seedKeptLogged is the grabs (by id) seed cleanup has said it keeps for unmatched
+	// files, so the ten-minute pass says it once rather than every time.
+	seedKeptLogged sync.Map
 
 	// stallSeen is when this process first saw each pending grab's torrent gone from
 	// the client or in a hard error, so one read can't condemn it (stallevidence.go).
@@ -2485,6 +2488,10 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 		// Files its import couldn't match to an episode are only in the download, and
 		// removing it with its data would delete them: it keeps seeding.
 		if deleteData && g.ImportUnmatched > 0 {
+			if _, seen := c.seedKeptLogged.LoadOrStore(g.ID, true); !seen {
+				c.log.Info("automation: seed goal met, but its import left files unmatched — keeping it seeding so they aren't deleted with it",
+					"release", g.Title, "unmatched", g.ImportUnmatched, "reason", reason)
+			}
 			continue
 		}
 		if removed >= maxSeedRemovalsPerPass {

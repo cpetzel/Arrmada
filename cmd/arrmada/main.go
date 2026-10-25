@@ -749,9 +749,9 @@ func main() {
 	coordinator.SetSeedDefault(func(ctx context.Context) automation.SeedDefault {
 		return automation.ParseSeedDefault(settingsSvc.Get(ctx, automation.KeySeedRatio, ""), settingsSvc.Get(ctx, automation.KeySeedHours, ""))
 	})
-	// A Prowlarr indexer added while a global seed goal is set starts with none of its own.
+	// A Prowlarr indexer added while the global seed goal has a time starts on it.
 	indexers.SetGlobalSeedGoal(func(ctx context.Context) bool {
-		return automation.ParseSeedDefault(settingsSvc.Get(ctx, automation.KeySeedRatio, ""), settingsSvc.Get(ctx, automation.KeySeedHours, "")).Set()
+		return automation.ParseSeedDefault(settingsSvc.Get(ctx, automation.KeySeedRatio, ""), settingsSvc.Get(ctx, automation.KeySeedHours, "")).SafeForNew()
 	})
 	// How many upgrades one sweep may grab (Settings → Downloads), read at each sweep.
 	coordinator.SetUpgradeBudget(func(ctx context.Context) int {

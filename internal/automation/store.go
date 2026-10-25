@@ -334,7 +334,7 @@ func (c *Coordinator) grabPolicy(ctx context.Context, indexerName, key string) (
 // both cases the lookup misses. Returning seed-disabled made cleanup delete the torrent
 // AND its data the moment it imported, which is a hit-and-run on whatever private
 // tracker the file actually came from. Default to seeding: on the global seed goal when
-// one is set (Settings → Downloads), otherwise for the standard window. The user can
+// it has a time (Settings → Downloads), otherwise for the standard window. The user can
 // still stop or delete it from the Downloads page.
 //
 // A known indexer's own values are recorded as they are. Only an indexer switched to
@@ -361,7 +361,8 @@ func (c *Coordinator) seedRules(ctx context.Context, name string) (enabled bool,
 		}
 		return true, 0, 0, seedRecNone
 	}
-	if c.seedDefault(ctx).Set() {
+	// Only a global goal with a time takes the standard window's place (SafeForNew).
+	if c.seedDefault(ctx).SafeForNew() {
 		return true, 0, 0, seedRecGlobal
 	}
 	return true, 0, indexer.DefaultSeedHours, seedRecDefault
@@ -693,20 +694,39 @@ func (c *Coordinator) markSeriesGrabImported(ctx context.Context, seriesID int64
 	c.setSeriesGrabStatus(ctx, seriesID, infoHash, releaseName, grabStatusImported)
 }
 
-// noteImportUnmatched records on a series download's imported grab how many of its files
-// the import couldn't match to an episode (0 once a later import matched them all), so
-// seed cleanup keeps it seeding rather than delete those files with it. By hash only: a
-// legacy grab without one keeps 0, as before.
-func (c *Coordinator) noteImportUnmatched(ctx context.Context, seriesID int64, infoHash string, unmatched int) {
-	if infoHash == "" {
+// noteImportUnmatched records on a series download's grab how many of its files the
+// import couldn't match to an episode (0 once a later import matched them all), so seed
+// cleanup keeps it seeding rather than delete those files with it. Every series import
+// path calls it: the sweep, a review's Import anyway or reassign, a manual folder import.
+//
+// Any live grab of the download counts, whatever its status and whichever show it was
+// grabbed for (a reassign imports into another): by info hash, and by release name only
+// for grabs that have no hash, each written by its id. Erring wide here only ever keeps
+// a torrent seeding.
+func (c *Coordinator) noteImportUnmatched(ctx context.Context, infoHash, releaseName string, unmatched int) {
+	grabs, err := c.grabsWhere(ctx, liveWhere+` AND media_type = 'series'`)
+	if err != nil {
+		c.log.Warn("series import: couldn't note the unmatched files", "release", releaseName, "err", err)
+		return
+	}
+	want, wantHash := normRelease(releaseName), strings.ToLower(infoHash)
+	var ids []int64
+	for _, g := range grabs {
+		switch {
+		case g.InfoHash != "" && wantHash != "" && strings.ToLower(g.InfoHash) == wantHash:
+			ids = append(ids, g.ID)
+		case g.InfoHash == "" && want != "" && normRelease(g.Title) == want:
+			ids = append(ids, g.ID)
+		}
+	}
+	if len(ids) == 0 {
 		return
 	}
 	defer c.grabsChanged()
-	if _, err := c.db.ExecContext(ctx,
-		`UPDATE grabs SET import_unmatched = ? WHERE movie_id = ? AND media_type = 'series' AND status = ?
-		   AND info_hash != '' AND lower(info_hash) = lower(?)`,
-		unmatched, seriesID, grabStatusImported, infoHash); err != nil {
-		c.log.Warn("series import: couldn't note the unmatched files", "hash", infoHash, "err", err)
+	for _, id := range ids {
+		if _, err := c.db.ExecContext(ctx, `UPDATE grabs SET import_unmatched = ? WHERE id = ?`, unmatched, id); err != nil {
+			c.log.Warn("series import: couldn't note the unmatched files", "grab", id, "err", err)
+		}
 	}
 }
 
