@@ -120,6 +120,10 @@ func (a *api) handleCreateIndexer(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if msg := seedGoalProblem(&req.SeedRatio, &req.SeedHours); msg != "" {
+		a.writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	kind := indexer.Kind(req.Kind)
 	switch kind {
 	case indexer.KindNewznab:
@@ -168,12 +172,15 @@ func (a *api) handleCreateIndexer(w http.ResponseWriter, r *http.Request) {
 	// than a ratio) can never remove a torrent early and breach a private tracker's
 	// minimum-seed-time rule. Editing an indexer respects whatever is sent, so 0/0 stays
 	// deliberately selectable.
+	//
+	// With a global seed goal set (Settings → Downloads), 0/0 is "use the global goal",
+	// which is what an indexer added without a goal of its own should do — so it's kept.
 	seedRatio, seedHours := req.SeedRatio, req.SeedHours
 	if kind == indexer.KindNewznab {
 		// Usenet never seeds; a seed goal on a usenet indexer would only mislead.
 		seedEnabled, seedRatio, seedHours = false, 0, 0
 	}
-	if seedEnabled && seedRatio == 0 && seedHours == 0 {
+	if seedEnabled && seedRatio == 0 && seedHours == 0 && !a.seedDefault(r.Context()).Set() {
 		seedHours = indexer.DefaultSeedHours
 	}
 
@@ -238,6 +245,10 @@ func (a *api) handleUpdateIndexer(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" {
 		a.writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if msg := seedGoalProblem(&req.SeedRatio, &req.SeedHours); msg != "" {
+		a.writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	kind := indexer.Kind(req.Kind)

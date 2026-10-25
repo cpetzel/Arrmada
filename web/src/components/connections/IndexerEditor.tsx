@@ -4,6 +4,8 @@ import { indexerApi } from "../../lib/indexerApi";
 import { usenetIndexerLine } from "../../lib/indexerStatus";
 import { secretMoved } from "../../lib/sameEndpoint";
 import { useUnsavedGuard } from "../../lib/useUnsavedGuard";
+import { useOptionalSettings } from "../../lib/useSettings";
+import { describeGoal } from "../../lib/seedingApi";
 import { Field } from "../../ui/Field";
 import { Switch } from "../../ui/Switch";
 
@@ -212,11 +214,16 @@ function Segmented<T extends string>({ value, options, onChange }: { value: T; o
   );
 }
 
-export function SeedingRules({ enabled, ratio, time, unit, onEnabled, onRatio, onTime, onUnit }: {
+export function SeedingRules({ enabled, ratio, time, unit, creating, onEnabled, onRatio, onTime, onUnit }: {
   enabled: boolean; ratio: number; time: number; unit: "hours" | "days";
+  /** A new indexer: with both at 0 and no global goal, the server gives it the standard window. */
+  creating?: boolean;
   onEnabled: (v: boolean) => void; onRatio: (v: number) => void; onTime: (v: number) => void; onUnit: (v: "hours" | "days") => void;
 }) {
   const timeId = useId();
+  const shared = useOptionalSettings();
+  const blank = !(ratio > 0) && !(time > 0);
+  const blankMeans = seedBlankMeans(shared ? { ratio: shared.downloads_seed_ratio ?? 0, hours: shared.downloads_seed_hours ?? 0 } : null, creating);
   return (
     <div className="mt-3 rounded-lg p-3" style={{ background: "var(--panel)", border: "1px solid var(--line)" }}>
       <div className="flex items-center justify-between">
@@ -230,7 +237,7 @@ export function SeedingRules({ enabled, ratio, time, unit, onEnabled, onRatio, o
         <>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Labeled label="Seed ratio (0 = none)">
-              <input type="number" min={0} step={0.1} className={field} style={fieldStyle} value={ratio} onChange={(e) => onRatio(Math.max(0, Number(e.target.value)))} placeholder="e.g. 2.5" />
+              <input type="number" min={0} max={100} step={0.1} className={field} style={fieldStyle} value={ratio} onChange={(e) => onRatio(Math.min(100, Math.max(0, Number(e.target.value))))} placeholder="e.g. 2.5" />
             </Labeled>
             <Labeled label="Or after time (0 = none)" controlId={timeId}>
               <div className="flex items-center gap-2">
@@ -239,7 +246,8 @@ export function SeedingRules({ enabled, ratio, time, unit, onEnabled, onRatio, o
               </div>
             </Labeled>
           </div>
-          <p className="mt-2 text-xs text-ink-faint">Removed when either limit is hit (both 0 = seed forever). The library keeps its own copy, so removing the torrent never touches your media.</p>
+          <p className="mt-2 text-xs text-ink-faint">Removed when either limit is hit. The library keeps its own copy, so removing the torrent never touches your media.</p>
+          <p className="mt-1 text-xs" style={{ color: blank ? "var(--ink-dim)" : "var(--ink-faint)" }} data-testid="seed-blank-means">{blank ? "Both 0: " : "With both at 0: "}{blankMeans}</p>
         </>
       )}
     </div>
@@ -345,4 +353,14 @@ function MediaPills({ idx, onChange }: { idx: Indexer; onChange: () => void | Pr
       {error && <span role="alert" className="basis-full text-xs" style={{ color: "var(--reject-text)" }}>{error}</span>}
     </div>
   );
+}
+
+// seedBlankMeans says what an indexer with neither a ratio nor a time seeds to: the global
+// seed goal when one is set (Settings → Downloads), otherwise forever — or, for a new
+// indexer, the standard window the server gives it. global is null where the shared
+// settings aren't loaded (the setup wizard), when it can't be said.
+export function seedBlankMeans(global: { ratio: number; hours: number } | null, creating?: boolean): string {
+  if (global && (global.ratio > 0 || global.hours > 0)) return `uses the global default (${describeGoal(global.ratio, global.hours)}).`;
+  if (creating) return "seeds for the standard 14 days.";
+  return global ? "seeds until you remove it (no global default is set)." : "seeds until you remove it, unless a global default is set in Settings → Downloads.";
 }

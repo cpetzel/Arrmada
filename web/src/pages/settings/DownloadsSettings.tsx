@@ -14,10 +14,11 @@ import { systemApi } from "../../lib/systemApi";
 import { LINKS } from "../../lib/links";
 import { useAutoSave } from "../../lib/useAutoSave";
 import { useLoadedSettings, useSetting, useSettingGroup } from "../../lib/useSettings";
+import { SeedingSection } from "./SeedingSettings";
 
 // Settings → Downloads (admin only): the download clients and indexers live on Settings →
-// Connections; here are the guard rails around them — the disk guard, the stall timeout and the
-// recycle bin that deletes and replacements go through. Each field saves itself.
+// Connections; here are the guard rails around them — the disk guard, the global seed goal, the
+// stall timeout and the recycle bin that deletes and replacements go through. Each field saves itself.
 export function DownloadsSettings() {
   return (
     <div className="flex flex-col gap-6">
@@ -32,6 +33,7 @@ export function DownloadsSettings() {
       </Section>
       <NetworkSection />
       <DiskGuardSection />
+      <SeedingSection />
       <StallSection />
       <UpgradeBudgetSection />
       <RecycleBin />

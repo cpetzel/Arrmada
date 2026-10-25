@@ -324,17 +324,27 @@ func (c *Coordinator) grabPolicy(ctx context.Context, indexerName, key string) (
 // with indexer "manual", and an indexer can be renamed or removed after a grab — in
 // both cases the lookup misses. Returning seed-disabled made cleanup delete the torrent
 // AND its data the moment it imported, which is a hit-and-run on whatever private
-// tracker the file actually came from. Default to seeding for the standard window; the
-// user can still stop or delete it from the Downloads page.
+// tracker the file actually came from. Default to seeding: to the global seed goal when
+// one is set (Settings → Downloads), otherwise for the standard window. The user can
+// still stop or delete it from the Downloads page.
+//
+// A known indexer's own values are recorded as they are, 0/0 included: a grab whose
+// indexer set no goal picks up the global one when the seed is checked
+// (effectiveSeedGoal), so a global goal set later covers it too.
 func (c *Coordinator) seedRules(ctx context.Context, name string) (enabled bool, ratio float64, hours int) {
 	idxs, err := c.indexers.List(ctx)
 	if err != nil {
+		// The indexer may well exist with a longer goal than the global one: unread, it
+		// gets the standard window, as before there was a global goal.
 		return true, 0, indexer.DefaultSeedHours
 	}
 	for _, ix := range idxs {
 		if ix.Name == name {
 			return ix.SeedEnabled, ix.SeedRatio, ix.SeedHours
 		}
+	}
+	if def := c.seedDefault(ctx); def.Set() {
+		return true, def.Ratio, def.Hours
 	}
 	return true, 0, indexer.DefaultSeedHours
 }

@@ -151,6 +151,9 @@ type Coordinator struct {
 	// paused. Both are set once at startup; nil means DefaultStallMinutes / none held.
 	stallDefaultFn func(ctx context.Context) int
 	guardHeldFn    func(ctx context.Context) map[string]bool
+	// seedDefaultFn reads the global seed goal (Settings → Downloads) that a grab whose
+	// indexer set no goal of its own falls back to (seedgoal.go). nil means none is set.
+	seedDefaultFn func(ctx context.Context) SeedDefault
 
 	// stallSeen is when this process first saw each pending grab's torrent gone from
 	// the client or in a hard error, so one read can't condemn it (stallevidence.go).
@@ -2402,8 +2405,9 @@ func (c *Coordinator) DetectStalled(ctx context.Context) {
 	}
 }
 
-// ManageSeeding removes finished torrents once they hit their indexer's seed goal (ratio
-// or time). An imported one goes with its data — safe, the library keeps its own copy. A
+// ManageSeeding removes finished torrents once they hit their seed goal (ratio or time):
+// their indexer's, or the global one when the indexer set none (effectiveSeedGoal). An
+// imported one goes with its data — safe, the library keeps its own copy. A
 // dismissed one goes with its files kept: Arrmada never imported them, and the user said
 // they'd handle them, so they may be the only copy.
 func (c *Coordinator) ManageSeeding(ctx context.Context) {
@@ -2424,6 +2428,8 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 			grabs = refreshed
 		}
 	}
+	// The global goal, read once per pass: a change in Settings applies from the next one.
+	def := c.seedDefault(ctx)
 	for _, it := range queue {
 		usenet := it.Transport == download.TransportUsenet
 		if !it.Complete() {
@@ -2444,20 +2450,16 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 		// Seed policy is snapshotted on the grab (see recordGrab), so this works
 		// even if the originating indexer was later removed or renamed.
 		//   off → remove as soon as it's imported (no seeding).
-		//   on  → remove once it hits a ratio or seeding-time goal (both 0 = forever).
+		//   on  → remove once it hits a ratio or seeding-time goal; a grab whose indexer
+		//         set neither takes the global goal, and with none of that it seeds
+		//         forever (effectiveSeedGoal).
 		// A usenet job never seeds, whatever its row says (one recorded before the
 		// transport was known may say it does): it goes as soon as it's imported.
-		var over bool
 		ratio := it.SeedRatio()
-		if !g.SeedEnabled || usenet {
+		goal := effectiveSeedGoal(*g, def)
+		over, reason := seedGoalMet(goal, it)
+		if usenet {
 			over = true
-		} else {
-			// ratio < 0 means the client couldn't give us an honest number — see
-			// seedRatioOf. Then only the time goal may end the seed.
-			over = g.SeedRatio > 0 && ratio >= 0 && ratio >= g.SeedRatio
-			if !over && g.SeedHours > 0 {
-				over = it.SeedingTime >= int64(g.SeedHours)*3600
-			}
 		}
 		if !over {
 			continue
@@ -2482,15 +2484,14 @@ func (c *Coordinator) ManageSeeding(ctx context.Context) {
 		// The same torrent recorded again by a later re-grab that never closed: it left the
 		// client with this one, and left 'grabbed' it would read as a vanished download.
 		c.closeStaleTwins(ctx, *g, grabStatusSeeded)
-		reason := "seed goal met"
-		if !g.SeedEnabled {
-			reason = "seeding off — removed after import"
+		if usenet || reason == "" {
+			reason = "seed goal met"
 		}
 		what := "download removed"
 		if !deleteData {
 			what = "torrent removed, files kept in the downloads folder"
 		}
-		c.log.Info("automation: removed torrent", "release", g.Title, "indexer", g.Indexer, "reason", reason,
+		c.log.Info("automation: removed torrent", "release", g.Title, "indexer", g.Indexer, "reason", reason, "goal_source", goal.Source,
 			"delete_data", deleteData, "ratio", ratio, "uploaded_bytes", it.UploadedBytes, "seed_time_s", it.SeedingTime)
 		c.addMediaEvent(ctx, g, "seeded", g.Title+" — "+reason+", "+what)
 	}
@@ -2526,6 +2527,8 @@ type SeedPolicy struct {
 	Enabled bool    `json:"enabled"`
 	Ratio   float64 `json:"ratio"`
 	Hours   int     `json:"hours"`
+	// Source is where the goal comes from: indexer, global, none or off (seedgoal.go).
+	Source string `json:"source"`
 }
 
 // SeedPolicies returns the seed policy for every live grab (downloading or seeding), keyed
@@ -2540,9 +2543,12 @@ func (c *Coordinator) SeedPolicies(ctx context.Context) map[string]SeedPolicy {
 	if err != nil {
 		return nil
 	}
+	def := c.seedDefault(ctx)
 	out := make(map[string]SeedPolicy, len(grabs)*2)
 	for _, g := range grabs {
-		p := SeedPolicy{Enabled: g.SeedEnabled, Ratio: g.SeedRatio, Hours: g.SeedHours}
+		// The goal in effect, global fallback included, so the page shows what will
+		// actually end the seed rather than "seeds indefinitely" for an indexer left blank.
+		p := effectiveSeedGoal(g, def)
 		if g.InfoHash != "" {
 			out[strings.ToLower(g.InfoHash)] = p
 			continue

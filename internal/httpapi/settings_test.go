@@ -350,6 +350,8 @@ func TestUpdateSettingsSingleKey(t *testing.T) {
 		"downloads_disk_guard_pause_free_gb": `"50"`,
 		"downloads_stall_minutes":            `30`,
 		"upgrade_max_grabs_per_sweep":        `25`,
+		"downloads_seed_ratio":               `1.5`,
+		"downloads_seed_hours":               `72`,
 		"request_quota_days":                 `14`,
 		"request_quota_movies":               `3`,
 		"request_quota_seasons":              `2`,

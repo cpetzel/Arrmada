@@ -88,6 +88,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { label: "Search categories", keywords: "indexer categories category cat newznab torznab book audiobook music filter usual default", section: "downloads", anchor: "search-categories" },
   { label: "Usenet and torrents", keywords: "usenet torrent sabnzbd nzb newznab prefer preference network both best release wins", section: "downloads", anchor: "network" },
   { label: "Download disk guard", keywords: "disk full space free pause resume threshold percent drive cache", section: "downloads", anchor: "disk-guard" },
+  { label: "Seeding", keywords: "seed seeding ratio time hours days goal limit global default remove torrent tracker hit and run check", section: "downloads", anchor: "seeding" },
   { label: "Stalled downloads", keywords: "stall stuck timeout no progress replacement fail over hours", section: "downloads", anchor: "stalled-downloads" },
   { label: "Upgrades per sweep", keywords: "upgrade limit budget sweep quality profile replace better release grabs at once", section: "downloads", anchor: "upgrade-limit" },
   { label: "Recycle bin", keywords: "trash deleted restore empty retention size cap purge undo", section: "downloads", anchor: "recycle-bin" },

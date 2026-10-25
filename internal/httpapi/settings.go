@@ -113,6 +113,10 @@ func (a *api) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		// How many upgrades one upgrade sweep may grab (0 = no limit); the rest wait for
 		// the next sweep, so a profile edit can't queue the whole library at once.
 		"upgrade_max_grabs_per_sweep": automation.ParseUpgradeBudget(a.deps.Settings.Get(ctx, automation.KeyUpgradeBudget, "")),
+		// The global seed goal (0 = none): what a torrent seeds to when its indexer sets
+		// neither a ratio nor a time of its own. Both 0 is the behaviour from before.
+		"downloads_seed_ratio": a.seedDefault(ctx).Ratio,
+		"downloads_seed_hours": a.seedDefault(ctx).Hours,
 		// Request limits per person, per window of days (0 = unlimited; Settings → Users).
 		"request_quota_days": quota.Days, "request_quota_movies": quota.Movie,
 		"request_quota_seasons": quota.Season, "request_quota_books": quota.Book,
@@ -240,6 +244,8 @@ type settingsUpdate struct {
 	DiskGuardPauseFreeGB      *string   `json:"downloads_disk_guard_pause_free_gb"`
 	StallMinutes              *int      `json:"downloads_stall_minutes"`
 	UpgradeBudget             *int      `json:"upgrade_max_grabs_per_sweep"`
+	SeedRatio                 *float64  `json:"downloads_seed_ratio"`
+	SeedHours                 *int      `json:"downloads_seed_hours"`
 	QuotaDays                 *int      `json:"request_quota_days"`
 	QuotaMovies               *int      `json:"request_quota_movies"`
 	QuotaSeasons              *int      `json:"request_quota_seasons"`
@@ -307,6 +313,10 @@ func (a *api) adminSettingChange(ctx context.Context, req *settingsUpdate) strin
 		return "the drive the disk guard measures"
 	case strChanged(req.DiskGuardPauseFreeGB, st.Get(ctx, download.KeyDiskGuardPauseFree, "0")):
 		return "the disk guard's free-space limit"
+	case req.SeedRatio != nil && *req.SeedRatio != a.seedDefault(ctx).Ratio,
+		req.SeedHours != nil && *req.SeedHours != a.seedDefault(ctx).Hours:
+		// It decides when finished torrents are removed, data and all.
+		return "the global seed goal"
 	case quotaChanged(req, requests.GlobalLimits(func(key string) string { return st.Get(ctx, key, "") })):
 		return "the request limits"
 	case req.QualityRanking != nil && strings.TrimSpace(*req.QualityRanking) != a.qualityRanking(ctx):
@@ -405,6 +415,10 @@ func (a *api) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.NetworkPreference != nil && !quality.ValidNetwork(strings.TrimSpace(*req.NetworkPreference)) {
 		a.writeError(w, http.StatusBadRequest, "download_network_preference must be best, usenet or torrent")
+		return
+	}
+	if msg := seedGoalProblem(req.SeedRatio, req.SeedHours); msg != "" {
+		a.writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if req.UpgradeBudget != nil && (*req.UpgradeBudget < 0 || *req.UpgradeBudget > maxUpgradeBudget) {
@@ -610,6 +624,12 @@ func (a *api) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.UpgradeBudget != nil && !save(a.deps.Settings.Set(ctx, automation.KeyUpgradeBudget, strconv.Itoa(*req.UpgradeBudget))) {
+		return
+	}
+	if req.SeedRatio != nil && !save(a.deps.Settings.Set(ctx, automation.KeySeedRatio, strconv.FormatFloat(*req.SeedRatio, 'f', -1, 64))) {
+		return
+	}
+	if req.SeedHours != nil && !save(a.deps.Settings.Set(ctx, automation.KeySeedHours, strconv.Itoa(*req.SeedHours))) {
 		return
 	}
 	if req.BookLanguages != nil && !save(a.deps.Settings.Set(ctx, automation.KeyBookLanguages, bookLangs)) {

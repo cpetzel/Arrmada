@@ -274,6 +274,8 @@ func (a *api) registerRoutes(mux *router) {
 	mux.HandleFunc("POST /api/v1/apikeys/{id}/test", a.requireRole(auth.RoleAdmin, a.handleTestAPIKey))
 	mux.HandleFunc("GET /api/v1/settings", a.requireRole(auth.RoleManager, a.handleGetSettings))
 	mux.HandleFunc("PUT /api/v1/settings", a.requireRole(auth.RoleManager, a.handleUpdateSettings))
+	// The read-only seed check beside the global seed goal (Settings → Downloads, admin).
+	mux.HandleFunc("GET /api/v1/seeding/check", a.requireRole(auth.RoleAdmin, a.handleSeedCheck))
 	// Outgoing email (Send to Kindle): a mail login, so admin-only like the API keys.
 	mux.HandleFunc("GET /api/v1/settings/smtp", a.requireRole(auth.RoleAdmin, a.handleGetSMTP))
 	mux.HandleFunc("PUT /api/v1/settings/smtp", a.requireRole(auth.RoleAdmin, a.handleSetSMTP))

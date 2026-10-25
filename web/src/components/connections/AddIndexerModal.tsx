@@ -2,6 +2,7 @@ import { useState } from "react";
 import { type Indexer, type NewIndexer } from "../../lib/api";
 import { indexerApi } from "../../lib/indexerApi";
 import { useUnsavedGuard } from "../../lib/useUnsavedGuard";
+import { useOptionalSettings } from "../../lib/useSettings";
 import { DEFAULT_SEED_DAYS, presetsFor, type IndexerPreset } from "../../lib/indexerPresets";
 import { Button, Modal } from "../../ui";
 import { ALL_MEDIA, Labeled, MEDIA_TYPES, SeedingRules, TestLine, TIE_BREAK_HELP, field, fieldStyle, type TestState } from "./IndexerEditor";
@@ -77,7 +78,11 @@ function PresetForm({ preset, onBack, onAdded, onSaving }: {
   const [minSeeders, setMinSeeders] = useState(0);
   const [seedEnabled, setSeedEnabled] = useState(true);
   const [seedRatio, setSeedRatio] = useState(0);
-  const [seedTime, setSeedTime] = useState(DEFAULT_SEED_DAYS);
+  // With a global seed goal set (Settings → Downloads), a new indexer starts at 0/0, which
+  // uses it; without one it starts at the standard window, as before.
+  const shared = useOptionalSettings();
+  const globalGoal = Boolean(shared && ((shared.downloads_seed_ratio ?? 0) > 0 || (shared.downloads_seed_hours ?? 0) > 0));
+  const [seedTime, setSeedTime] = useState(globalGoal ? 0 : DEFAULT_SEED_DAYS);
   const [seedUnit, setSeedUnit] = useState<"hours" | "days">("days");
   const [test, setTest] = useState<TestState & { sig?: string }>({});
   const [error, setError] = useState<string | null>(null);
@@ -208,7 +213,7 @@ function PresetForm({ preset, onBack, onAdded, onSaving }: {
         })}
       </div>
 
-      {!preset.usenet && <SeedingRules enabled={seedEnabled} ratio={seedRatio} time={seedTime} unit={seedUnit} onEnabled={setSeedEnabled} onRatio={setSeedRatio} onTime={setSeedTime} onUnit={setSeedUnit} />}
+      {!preset.usenet && <SeedingRules creating enabled={seedEnabled} ratio={seedRatio} time={seedTime} unit={seedUnit} onEnabled={setSeedEnabled} onRatio={setSeedRatio} onTime={setSeedTime} onUnit={setSeedUnit} />}
       {preset.privateTracker && (
         <p className="mb-0 mt-2 text-xs text-ink-faint">
           A private tracker counts how long you seed. Keep these at least as long as its rules ask; {DEFAULT_SEED_DAYS} days covers most.

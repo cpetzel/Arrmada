@@ -521,3 +521,16 @@ func TestProwlarrIDFromURL(t *testing.T) {
 		}
 	}
 }
+
+// With a global seed goal set, a newly synced indexer starts with no goal of its own, so it
+// uses the global one; it still seeds (never Go's zero "remove on import").
+func TestProwlarrSyncLeavesNewRowsToTheGlobalSeedGoal(t *testing.T) {
+	f := newFakeProwlarr(t)
+	s, _, _ := healthService(t)
+	s.SetGlobalSeedGoal(func(context.Context) bool { return true })
+	f.sync(t, s)
+	tl := byProwlarrID(t, s)[1]
+	if !tl.SeedEnabled || tl.SeedHours != 0 || tl.SeedRatio != 0 {
+		t.Fatalf("with a global goal: %+v, want seeding on with no goal of its own", tl)
+	}
+}

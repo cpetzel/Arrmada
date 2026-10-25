@@ -23,6 +23,7 @@ vi.mock("../../lib/me", async (orig) => ({
 // the keys, so it gets a still store.
 vi.mock("../../lib/useSettings", () => ({
   useLoadedSettings: () => ({ s: { tmdb_region: "" } }),
+  useOptionalSettings: () => null,
   useSetting: () => ({ value: "", dirty: false, set: () => {}, commit: async () => true, revert: () => {}, retry: () => {}, status: "idle", error: null, canRetry: false }),
 }));
 vi.mock("../../lib/useLiveQuery", () => ({ useLiveRefresh: () => () => {} }));

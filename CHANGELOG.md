@@ -189,6 +189,21 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
+- **A global seed goal** (#78). Settings → Downloads → **Seeding** sets the ratio and
+  seeding time every torrent seeds to when its indexer doesn't set a goal of its own, so you
+  no longer have to set the same limits on each indexer. An indexer with its own ratio or
+  time keeps it (the whole goal: a ratio-only indexer never gets the global time added);
+  one with both at 0 uses the global goal, and the indexer form says so. A torrent is
+  removed at whichever limit it reaches first, exactly as an indexer's goal already worked:
+  only once Arrmada has imported it, with its data (the library keeps its copy), and never
+  a torrent Arrmada didn't grab or one you took over by dismissing it in Review. Both are 0
+  until you set them, which is how things worked before: nothing changes on update. A
+  **Check finished torrents** button under the fields lists each finished torrent's ratio
+  and seeding time against the goal that applies, where that goal comes from, and what the
+  next check will do — with the values in the fields, before you save them. It only reads;
+  nothing on it removes anything. The Seeding tab marks a torrent seeding to the global
+  goal, and a title's History says which goal ended a seed. Indexers synced from Prowlarr
+  are still added with the standard 14 days: set theirs to 0 to use the global goal.
 - **Put misplaced files back** (#56). Episode files that v0.3.0 and v0.3.1 imported into a
   folder named like a season right inside the TV folder (`<TV folder>/S13/Season 12/…`) are
   listed on their show's page, with a preview of where each goes. Nothing is ever replaced:
