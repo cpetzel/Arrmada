@@ -5,6 +5,7 @@ import { refreshSearches } from "../../components/LastSearch";
 import { api, type Episode, type FitItem, type SearchAttempt, type Series as SeriesT, type SubFileEntry } from "../../lib/api";
 import { seriesApi } from "../../lib/seriesApi";
 import { stillThumb } from "../../lib/img";
+import { downloadPercent } from "../../lib/percent";
 import { attemptLine, outcomeTone } from "../../lib/searchOutcome";
 import { SEARCHING_OFF_HINT, STATUS_LABEL, libraryStatus } from "../../lib/status";
 import { jobFailed, jobToast, useJob } from "../../lib/useJob";
@@ -29,7 +30,7 @@ export function episodeStatus(series: SeriesT, ep: Episode, seasonMonitored = tr
     if (st.label === STATUS_LABEL.searchingOff) return { label: st.label, tone: st.tone, title: SEARCHING_OFF_HINT };
     return { label: st.label, tone: st.tone };
   }
-  if (dl) return { label: `↓ ${Math.round(dl.progress * 100)}%`, tone: "accent" };
+  if (dl) return { label: `↓ ${downloadPercent(dl.progress)}`, tone: "accent" };
   return { label: "Unaired", tone: "faint" };
 }
 

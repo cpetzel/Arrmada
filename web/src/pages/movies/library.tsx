@@ -4,6 +4,7 @@ import { FitBadge, FIT_COLOR, bitrateColor, fitRank, hasIssue } from "../../comp
 import { shownTitle } from "../../lib/displayTitle";
 import { isMovieWanted, movieStatus } from "../../lib/movieStatus";
 import { STATUS_LABEL } from "../../lib/status";
+import { downloadPercent } from "../../lib/percent";
 import type { LibraryConfig } from "../../features/library/types";
 import { shortDate } from "../../features/library/format";
 import { POSTER_CHIP_BG, type MenuItem } from "../../ui";
@@ -56,7 +57,7 @@ function DownloadBar({ d }: { d: MovieDownload }) {
         <div className="h-1 flex-1 overflow-hidden rounded-full" style={{ background: "rgba(255,255,255,.25)" }}>
           <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "var(--accent)" }} />
         </div>
-        <span className="font-mono text-xs font-bold" style={{ color: "#fff" }}>{pct}%</span>
+        <span className="font-mono text-xs font-bold" style={{ color: "#fff" }}>{downloadPercent(d.progress)}</span>
       </div>
     </div>
   );

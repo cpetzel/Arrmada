@@ -17,6 +17,7 @@ import { wantedChip, wantedHref, wantedKey, wantedLine } from "../lib/wanted";
 import { STAGE, stageGroup, usenetStage, type QueueGroup } from "../lib/stages";
 import { isUsenetDownload, leftLine, usenetFailLine, usenetFailed } from "../lib/network";
 import { inClient, isStalled, queueClients, showClientNames, stalledMinutes, transferKey } from "../lib/queueFilter";
+import { downloadPercent } from "../lib/percent";
 import { CardActions, ItemChips, TransferPoster, TransferTitle } from "./activity/transfer";
 import { EmptyState, ErrorState, IconButton, Skeleton, StatusChip, useToast } from "../ui";
 
@@ -657,7 +658,7 @@ function DownloadCard({ it, guard, busy, act, onRemoved, onNote, showClient, sea
         <div className="h-1.5 flex-1 overflow-hidden rounded-full" style={{ background: "var(--line)" }}>
           <div className="h-full rounded-full" style={{ width: `${Math.round(it.progress * 100)}%`, background: paused || failed ? "var(--ink-faint)" : "var(--accent)" }} />
         </div>
-        <span className="w-10 text-right font-mono text-xs text-ink-dim">{Math.round(it.progress * 100)}%</span>
+        <span className="w-10 text-right font-mono text-xs text-ink-dim">{downloadPercent(it.progress)}</span>
       </div>
       {removing && <RemoveDownloadDialog it={it} onClose={() => setRemoving(false)} onDone={(r) => { setRemoving(false); onRemoved(removedMessage(r)); }} />}
     </div>

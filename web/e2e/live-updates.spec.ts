@@ -98,9 +98,9 @@ test.describe("live updates", () => {
     await api.quiet(1000); // settled: every first load is in
     const reads = () => api.callsTo("GET", "/api/v1/downloads").length;
     const before = reads();
-    await expect(page.getByText("42%")).toBeVisible(); // the fixture's Driftwood download
+    await expect(page.getByText("42.0%")).toBeVisible(); // the fixture's Driftwood download
     live.send("queue.progress", [{ hash: "E2E0000000000000000000000000000000000001", progress: 0.77, eta_seconds: 60, state: "downloading" }]);
-    await expect(page.getByText("77%")).toBeVisible();
+    await expect(page.getByText("77.0%")).toBeVisible();
     // The bar moved from the event alone.
     expect(reads()).toBe(before);
   });
