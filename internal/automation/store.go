@@ -699,7 +699,8 @@ func (c *Coordinator) markSeriesGrabImported(ctx context.Context, seriesID int64
 // delete those files with it. The count only ever rises: a later import of part of the
 // pack (one file by hand) matching everything it looked at says nothing about the files
 // it didn't, and clearing the mark would delete them. Every series import
-// path calls it: the sweep, a review's Import anyway or reassign, a manual folder import.
+// path calls it: the sweep, a review's Import anyway or reassign, Map files…, a manual
+// folder import — and a re-grab by hand carries the earlier grabs' mark onto the new one.
 //
 // Any live grab of the download counts, whatever its status and whichever show it was
 // grabbed for (a reassign imports into another): by info hash, and by release name only

@@ -1195,6 +1195,13 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 			if t := c.grabForce(ctx, it.Hash).Target; t.Season == 0 && t.Episode > 0 {
 				continue
 			}
+			// Nor one the user dismissed from Review: Dismiss records the download as
+			// handled, but the gap it left is still a gap, so it was re-processed, held
+			// again for the same reason, and alerted on again — the dismissal never stuck.
+			// They said they'd handle it; a re-grab by hand reopens it (reopenImportedRelease).
+			if c.lastReviewDismissed(ctx, it.Hash, s.ID) {
+				continue
+			}
 			c.log.Info("series import: re-processing an already-imported pack to fill missing episodes",
 				"series", s.Title, "release", it.Name, "season", parsed.Season)
 		}
@@ -1266,7 +1273,27 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 		// A release the user picked by hand imports regardless of what it scores against
 		// the current file — but only for the season or episode it was picked for. See
 		// importSeriesInto.
-		placed, matched, unresolved, importFailed := c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+		placed, matched, unresolved, importFailed, conflict := c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+		if conflict != "" && c.refreshForTitleConflict(ctx, s, it.Hash, it.Name) {
+			// The usual cause is an episode list from before the season came out; a fresh
+			// one may settle it. Nothing was placed by the first try, so it's simply rerun.
+			placed, matched, unresolved, importFailed, conflict = c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+		}
+		if conflict != "" {
+			// Its titles and numbers disagree, so nothing was placed. A person maps the
+			// files; retrying can't help until the metadata changes, and Review's import
+			// re-checks it then.
+			c.clearSeriesImportFail(it.Hash)
+			c.log.Warn("series import: episode titles and numbers still disagree — held for review",
+				"series", s.Title, "release", it.Name)
+			c.addReview(ctx, Review{
+				Hash: it.Hash, Name: it.Name, ContentPath: it.ContentPath, MediaType: "series", ReasonCode: ReasonTitleConflict,
+				ExpectedID: s.ID, ExpectedTitle: s.Title, ParsedTitle: parsed.Title,
+				SizeBytes: it.SizeBytes, Indexer: c.grabIndexer(ctx, it.Name, "series"),
+				Reason: conflict,
+			})
+			continue
+		}
 		imported := len(placed)
 		if importFailed > 0 {
 			// Some files resolved to wanted episodes but couldn't be placed (disk full,

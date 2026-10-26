@@ -15,7 +15,7 @@ import (
 // or on setGrabStatus called with a literal, anywhere in automation or requests outside
 // grabstatus.go.
 var (
-	rawGrabStatusRe = regexp.MustCompile(`status\s*(=|!=|<>)\s*'(grabbed|held|imported|dismissed|failed|removed|seeded|cancelled|orphaned)'|status\s+(NOT\s+)?IN\s*\(`)
+	rawGrabStatusRe = regexp.MustCompile(`status\s*(=|!=|<>)\s*'(grabbed|held|imported|dismissed|failed|removed|seeded|cancelled|orphaned|superseded)'|status\s+(NOT\s+)?IN\s*\(`)
 	rawSetStatusRe  = regexp.MustCompile(`setGrabStatus(ByHash)?\([^)]*"[a-z]+"\s*\)`)
 )
 

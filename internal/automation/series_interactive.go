@@ -498,8 +498,72 @@ func (c *Coordinator) grabForSeries(ctx context.Context, seriesID int64, indexer
 	if manual || scope != WholeShow {
 		c.markGrab(ctx, hash, manual, scope)
 	}
+	if manual && serr == nil {
+		c.reopenImportedRelease(ctx, seriesID, hash, title)
+	}
 	c.series.AddEvent(ctx, seriesID, "grabbed", title+" · "+indexerName)
 	return nil
+}
+
+// reopenImportedRelease lets a release the user grabs again by hand be imported again.
+//
+// The import sweep passes over a torrent already recorded as imported, and over one
+// blocklisted for the show. A re-grab of the same torrent keeps its info hash, so it was
+// handed to the client and then never looked at: Nobody Wants This S03, misplaced on its
+// first import, was re-processed a sweep later, placed nothing new, and was blocklisted
+// as "fully imported" — so grabbing it again by hand silently did nothing. The user picking
+// it again is the say-so: its import record and this show's blocklist entry for it go, and
+// the next sweep imports it like a fresh manual grab, quality gate skipped inside its scope.
+// Global blocklist entries (fakes, executables) stay.
+//
+// Only a show's import record is reopened: one written by the series import (no film, no
+// paths) for a torrent no other kind of grab knows. A film imported from the same hash is
+// never touched — and a torrent another kind of grab shares isn't reopened at all; it
+// can still be imported by hand.
+//
+// The torrent's earlier grabs are retired (superseded) first. Seed cleanup reads the grab
+// a torrent came from, and an old 'imported' row still said its data may go with it —
+// after this re-grab was held and dismissed, that deleted the only copies of the files the
+// user had taken over.
+func (c *Coordinator) reopenImportedRelease(ctx context.Context, seriesID int64, hash, title string) {
+	if hash == "" || c.db == nil {
+		return
+	}
+	const showImport = `lower(download_hash) = lower(?) AND movie_id = 0 AND source_path = ''
+		AND NOT EXISTS (SELECT 1 FROM grabs WHERE info_hash != '' AND lower(info_hash) = lower(?) AND media_type != 'series')`
+	var name string
+	err := c.db.QueryRowContext(ctx, `SELECT title FROM imports WHERE `+showImport+` LIMIT 1`, hash, hash).Scan(&name)
+	if err != nil {
+		return // never imported as a show's (or unreadable): a fresh grab, nothing to reopen
+	}
+	old, err := c.grabsWhere(ctx, seedCleanupWhere+` AND media_type = 'series' AND info_hash != '' AND lower(info_hash) = lower(?)`, hash)
+	if err != nil {
+		c.log.Warn("grab: couldn't read the earlier grabs of a release grabbed again by hand — leaving it as it was", "release", title, "err", err)
+		return
+	}
+	ids := make([]int64, 0, len(old))
+	unmatched := 0
+	for _, g := range old {
+		ids = append(ids, g.ID)
+		unmatched = max(unmatched, g.ImportUnmatched)
+	}
+	c.setGrabStatuses(ctx, ids, grabStatusSuperseded)
+	// Files an earlier import couldn't match are still only in the download. The mark that
+	// keeps it seeding moves to the new grab (it only ever rises), or retiring the old rows
+	// would let the new one's seed goal delete them.
+	c.noteImportUnmatched(ctx, hash, title, unmatched)
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM blocklist WHERE movie_id = ? AND media_type = 'series' AND norm_title IN (?, ?)`,
+		seriesID, normTitle(title), normTitle(name)); err != nil {
+		c.log.Warn("grab: couldn't lift the show's blocklist entry for a release grabbed again by hand", "release", title, "err", err)
+		return
+	}
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM imports WHERE `+showImport, hash, hash); err != nil {
+		c.log.Warn("grab: couldn't reopen an imported release grabbed again by hand", "release", title, "err", err)
+		return
+	}
+	c.log.Info("grab: release grabbed again by hand — it will be imported again on the user's say-so",
+		"release", title, "download", name, "earlier_grabs_retired", len(ids))
 }
 
 // RescanSeries reconciles a series' episode records with what's actually on disk —
@@ -784,7 +848,10 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return ferr
 		}
-		placedRefs, matched, unresolved, importFailed := c.importSeriesInto(ctx, s, path, forceAll)
+		placedRefs, matched, unresolved, importFailed, conflict := c.importSeriesInto(ctx, s, path, forceAll)
+		if conflict != "" {
+			return errors.New(conflict) // nothing placed: its titles and numbers disagree
+		}
 		placed := len(placedRefs)
 		if matched == 0 {
 			return fmt.Errorf("none of the video files in that folder could be matched to an episode of %q", s.Title)

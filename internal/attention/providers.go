@@ -189,6 +189,8 @@ func reviewReason(code string) string {
 		return "it matches nothing in the library"
 	case automation.ReasonNumbering:
 		return "its episode numbers couldn't be read"
+	case automation.ReasonTitleConflict:
+		return "the release's episode numbers and titles disagree"
 	case automation.ReasonImportFailed:
 		return "the import keeps failing"
 	case automation.ReasonNoMedia:

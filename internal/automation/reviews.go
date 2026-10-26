@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tristenlammi/arrmada/internal/extract"
 	"github.com/tristenlammi/arrmada/internal/library"
@@ -132,6 +133,10 @@ const (
 	ReasonUnmatched = "unmatched"
 	// ReasonNumbering: the right show, but no file's episode numbering could be read.
 	ReasonNumbering = "numbering"
+	// ReasonTitleConflict: the right show, but its files' episode titles and numbers
+	// disagree, so placing it would put a file on the wrong episode (titleConflict).
+	// Offers the same Map files… as ReasonNumbering.
+	ReasonTitleConflict = "title_conflict"
 	// ReasonImportFailed: the import itself keeps failing (a folder it can't write, a full disk).
 	ReasonImportFailed = "import_failed"
 	// ReasonNoMedia: nothing importable inside — still archived, or unreadable.
@@ -180,6 +185,37 @@ func (c *Coordinator) hasReview(ctx context.Context, hash string) bool {
 	var n int
 	_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM import_reviews WHERE hash = ? AND status = 'pending'`, hash).Scan(&n)
 	return n > 0
+}
+
+// lastReviewDismissed reports whether the latest review of this download for this show was
+// dismissed and nothing has happened to it since: the user took it over, so the import
+// sweep leaves it alone.
+//
+// A grab made after the dismissal ends it. Dismiss moves the download's grabs to
+// 'dismissed', so while the dismissal stands the newest grab of the hash says so; a re-grab
+// by hand adds a newer one, which is imported, held or still downloading — and an import
+// writes no review, so the dismissal would otherwise read as the last word for good and
+// stop that import's gaps ever being filled. Grabs, not timestamps, order the two: both
+// are stamped to the second, and a re-grab often lands within it.
+func (c *Coordinator) lastReviewDismissed(ctx context.Context, hash string, seriesID int64) bool {
+	if hash == "" {
+		return false
+	}
+	var resolution sql.NullString
+	err := c.db.QueryRowContext(ctx,
+		`SELECT resolution FROM import_reviews WHERE hash = ? AND media_type = 'series' AND expected_id = ?
+		 ORDER BY id DESC LIMIT 1`, hash, seriesID).Scan(&resolution)
+	if err != nil || resolution.String != ResolutionDismissed {
+		return false
+	}
+	var newest string
+	err = c.db.QueryRowContext(ctx,
+		`SELECT status FROM grabs WHERE media_type = 'series' AND info_hash != '' AND lower(info_hash) = lower(?)
+		 ORDER BY id DESC LIMIT 1`, hash).Scan(&newest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true // never grabbed by Arrmada: only the review speaks for it
+	}
+	return err == nil && newest == grabStatusDismissed
 }
 
 // How a review was settled, recorded on import_reviews.resolution.
@@ -771,7 +807,11 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 		}
-		placed, matched, unresolved, failed := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
+		placed, matched, unresolved, failed, conflict := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
+		if conflict != "" {
+			// Importing it anyway would still misplace a file; mapping by hand won't.
+			return fmt.Errorf("%w: %s", ErrNothingToImport, conflict)
+		}
 		n := len(placed)
 		if matched == 0 {
 			// Wrapped in ErrNothingToImport so the API answers 422 rather than 500: the
@@ -923,7 +963,11 @@ func (c *Coordinator) closeReviewImported(ctx context.Context, r Review) {
 //
 // placed lists the episodes that got a new file, so callers can act on exactly those
 // (the subtitles hook used to be handed only the series and queued the whole show).
-func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, contentPath string, force forceRule) (placed []series.EpisodeRef, matched, unresolved, failed int) {
+//
+// conflict is set, and nothing is placed, when a file's episode title moved it onto an
+// episode another file of the same download claims (titleConflict). The download needs
+// a person: callers hold it in Needs you with conflict as the reason.
+func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, contentPath string, force forceRule) (placed []series.EpisodeRef, matched, unresolved, failed int, conflict string) {
 	// Unpack any archives first (scene releases ship the episode inside a RAR set — this
 	// is the Unpackerr job). Recursive, so a season pack's per-episode subfolders unpack.
 	if fi, err := os.Stat(contentPath); err == nil && fi.IsDir() {
@@ -937,11 +981,11 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 	if err != nil {
 		c.log.Warn("series import: couldn't scan the download folder for videos",
 			"series", s.Title, "content_path", contentPath, "err", err)
-		return nil, 0, 0, 0
+		return nil, 0, 0, 0, ""
 	}
 	if len(videos) == 0 {
 		c.log.Warn("series import: no video files found in the download (all archives? nested oddly?)", "series", s.Title, "content_path", contentPath)
-		return nil, 0, 0, 0
+		return nil, 0, 0, 0, ""
 	}
 	c.log.Info("series import: scanning download", "series", s.Title, "videos", len(videos), "content_path", contentPath)
 	// Route episodes into the show's existing on-disk folder when it has one, so a
@@ -958,7 +1002,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 	if ferr != nil {
 		c.log.Warn("series import: not importing — no safe folder for the show",
 			"series", s.Title, "content_path", contentPath, "err", ferr)
-		return nil, 0, 0, len(videos)
+		return nil, 0, 0, len(videos), ""
 	}
 	// Quality lives on the RELEASE, not always on each file. Packs routinely name files
 	// "Show - 1x01 - Title.mkv" and put "1080p BDRip x265" only on the folder, so every
@@ -1002,6 +1046,10 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 		refreshUntrusted = rr.Fallback || rr.ModelChanged
 		return c.series.EpisodeExists(ctx, s.ID, ref.Season, ref.Episode)
 	}
+	// Every file is resolved before any is placed, so the download can be judged as a
+	// whole: a title that moves one file onto an episode another file of the same
+	// download claims is only visible once both are known (titleConflict).
+	var resolved []resolvedVideo
 	for _, v := range videos {
 		rel := inheritQuality(parser.Parse(filepath.Base(v.Path)), release)
 		// Alias numbering first, exactly as the search side resolves it. Without this a
@@ -1028,6 +1076,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 				"absolute", rel.AbsoluteEpisodes, "anime", s.IsAnime())
 			continue
 		}
+		numbered := refs
 		refs = c.correctRefsByTitle(ctx, s, filepath.Base(v.Path), refs)
 		c.warnAnimeTitleMismatch(ctx, s, filepath.Base(v.Path), refs)
 		// Phantom guard: only keep refs the metadata actually has. The anime resolver
@@ -1066,7 +1115,25 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 				"resolved_to", refsLabel(refs))
 			continue
 		}
-		refs = known
+		resolved = append(resolved, resolvedVideo{v: v, rel: rel, refs: known, numbered: numbered,
+			byTitle: !sameRefs(refs, numbered)})
+	}
+	if conflict = c.titleConflict(ctx, s, resolved); conflict != "" {
+		// Placing any of it would put at least one file on the wrong episode, and its
+		// sibling would then be skipped as "already has an equal-or-better file" — the
+		// slot filled moments earlier by the misplaced file. Nothing is placed; a person
+		// maps the files.
+		c.log.Warn("series import: episode titles and numbers disagree within the download — holding it, nothing placed",
+			"series", s.Title, "content_path", contentPath, "why", conflict)
+		return nil, 0, unresolved, failed, conflict
+	}
+	for _, rv := range resolved {
+		v, rel, refs := rv.v, rv.rel, rv.refs
+		if rv.byTitle {
+			c.log.Info("series import: placed by episode title, not the number in the filename — the release numbers episodes differently from the metadata",
+				"series", s.Title, "file", filepath.Base(v.Path), "title", parser.EpisodeTitleFrom(filepath.Base(v.Path)),
+				"season", rv.numbered[0].Season, "filename_said", refEpisodes(rv.numbered), "metadata_says", refEpisodes(refs))
+		}
 		matched += len(refs) // recognized — counts as handled even if we don't re-place it
 		// Quality gate, PER EPISODE. Gating the whole file on refs[0] alone let a
 		// multi-episode file downgrade its second episode (E01 missing → whole file
@@ -1167,7 +1234,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 			}
 		}
 	}
-	return placed, matched, unresolved, failed
+	return placed, matched, unresolved, failed, ""
 }
 
 // refsLabel renders episode refs as "S06E02 S06E03" for logs.
@@ -1525,15 +1592,171 @@ func (c *Coordinator) correctRefsByTitle(ctx context.Context, s series.Series, f
 	if refs[0].Episode == match {
 		return refs // already right
 	}
-
-	was := make([]int, 0, len(refs))
-	for _, r := range refs {
-		was = append(was, r.Episode)
-	}
-	c.log.Info("series import: placed by episode title, not the number in the filename — the release numbers episodes differently from the metadata",
-		"series", s.Title, "file", fileName, "title", fileTitle,
-		"season", season, "filename_said", was, "metadata_says", match)
+	// Logged by the import once it knows the move holds up across the whole download.
 	return []series.EpisodeRef{{Season: season, Episode: match}}
+}
+
+// resolvedVideo is one video of a series download with the episodes it will be placed on.
+// numbered is what its own numbering resolved to; byTitle says its episode title moved it
+// off that (correctRefsByTitle).
+type resolvedVideo struct {
+	v        library.FoundVideo
+	rel      parser.Release
+	refs     []series.EpisodeRef
+	numbered []series.EpisodeRef
+	byTitle  bool
+}
+
+// titleConflict reports, in words for Needs you, whether placing a download by its
+// episode titles would put two of its files on one episode. "" means it holds up.
+//
+// A title moves a file only on the evidence of the metadata's episode list, and that list
+// can be wrong: Nobody Wants This S03 dropped all at once while the metadata still had its
+// pre-release listing, so "S03E04 Brian's Wedding" moved onto E05 — whose own file, "S03E05
+// The Love Card", then found E05 taken and was skipped. Two episodes got the wrong file and
+// two got none. One
+// file can't show that the listing is stale; its siblings can. When a file moved by its
+// title lands on an episode another file of the download also claims, the title and the
+// numbers disagree and neither is safe to act on.
+//
+// Not a conflict: a pack shifted as a whole (every moved file lands where nothing else
+// does), and the second half of a two-part file. Parks and Recreation's "6x01 & 6x02 -
+// London" keeps both its numbers while TMDB counts London once, so "6x03" moves onto
+// episode 2 beside it — the shape title placement exists for, unchanged here. Two copies of
+// one episode aren't a title disagreement either, whether they keep their number or move
+// together by their title (a REPACK beside the original): the quality gate chooses between
+// them as before.
+func (c *Coordinator) titleConflict(ctx context.Context, s series.Series, files []resolvedVideo) string {
+	byRef := map[series.EpisodeRef][]int{}
+	var order []series.EpisodeRef
+	for i, f := range files {
+		for j, ref := range f.refs {
+			if j > 0 {
+				continue // a multi-episode file's later halves (see above)
+			}
+			if byRef[ref] == nil {
+				order = append(order, ref)
+			}
+			byRef[ref] = append(byRef[ref], i)
+		}
+	}
+	var clashes []string
+	for _, ref := range order {
+		claimants := byRef[ref]
+		if len(claimants) < 2 {
+			continue
+		}
+		moved := -1
+		for _, i := range claimants {
+			if files[i].byTitle {
+				moved = i
+				break
+			}
+		}
+		if moved < 0 {
+			continue // all by number: copies of one episode, for the gate
+		}
+		for _, i := range claimants {
+			// Another copy of the moved file (a REPACK or PROPER beside it, numbered the same)
+			// moved with it: one episode twice, which the quality gate chooses between.
+			if i != moved && !sameRefs(files[i].numbered, files[moved].numbered) {
+				clashes = append(clashes, c.describeTitleClash(ctx, s, ref, files[moved], files[i]))
+			}
+		}
+	}
+	if len(clashes) == 0 {
+		return ""
+	}
+	const shown = 3
+	more := ""
+	if len(clashes) > shown {
+		more = fmt.Sprintf(" (and %d more)", len(clashes)-shown)
+		clashes = clashes[:shown]
+	}
+	return fmt.Sprintf("The episode titles in this download's filenames disagree with the show's episode list, so its files can't be placed safely: %s%s. "+
+		"The episode list may be out of date — refresh the show, or map the files to episodes by hand.",
+		strings.Join(clashes, "; "), more)
+}
+
+// describeTitleClash says how two files of one download both came to claim ref: moved by
+// its title, other by its number (or title).
+func (c *Coordinator) describeTitleClash(ctx context.Context, s series.Series, ref series.EpisodeRef, moved, other resolvedVideo) string {
+	reading := func(f resolvedVideo) string {
+		name := filepath.Base(f.v.Path)
+		if t := parser.EpisodeTitleFrom(name); t != "" {
+			return fmt.Sprintf("%s (numbered %s, titled %q)", name, refsLabel(f.numbered), t)
+		}
+		return fmt.Sprintf("%s (numbered %s)", name, refsLabel(f.numbered))
+	}
+	how := "by its number"
+	if other.byTitle {
+		how = "by its title"
+	}
+	target := refsLabel([]series.EpisodeRef{ref})
+	if t := c.series.EpisodeTitle(ctx, s.ID, ref.Season, ref.Episode); t != "" {
+		target = fmt.Sprintf("%s %q", target, t)
+	}
+	return fmt.Sprintf("%s would go to %s by its title, which %s also claims %s", reading(moved), target, reading(other), how)
+}
+
+// titleConflictRefreshEvery is how often one download whose titles and numbers disagree may
+// have its show refreshed for it.
+const titleConflictRefreshEvery = time.Hour
+
+// refreshForTitleConflict refreshes a show's metadata once before its download is held for
+// a title disagreement, and reports whether it did — the import is then worth retrying.
+//
+// The disagreement is nearly always an episode list from before the season was out: Nobody
+// Wants This S03's listing was corrected later the same day. A fresh listing lets the pack
+// import as it is instead of waiting on a person. At most once an hour per download, so a
+// disagreement that a refresh doesn't settle never asks the metadata source every sweep.
+// It runs between the two imports, in no transaction, under the series module's own
+// per-show lock, the way an import's refresh for a not-yet-listed episode does.
+func (c *Coordinator) refreshForTitleConflict(ctx context.Context, s series.Series, hash, name string) bool {
+	now := c.clock()
+	c.unmatchedMu.Lock()
+	if last, ok := c.titleRefreshed[hash]; ok && now.Sub(last) < titleConflictRefreshEvery {
+		c.unmatchedMu.Unlock()
+		return false
+	}
+	if c.titleRefreshed == nil {
+		c.titleRefreshed = map[string]time.Time{}
+	}
+	c.titleRefreshed[hash] = now
+	c.unmatchedMu.Unlock()
+	c.log.Info("series import: episode titles and numbers disagree — refreshing the show's episode list before holding it",
+		"series", s.Title, "release", name)
+	_, rr, err := c.series.Refresh(ctx, s.ID, series.RefreshOptions{})
+	if err == nil {
+		err = rr.FetchErr // the source couldn't be read: the listing is as stale as it was
+	}
+	if err != nil {
+		c.log.Warn("series import: refresh failed — holding the download as it is", "series", s.Title, "err", err)
+		return false
+	}
+	return true
+}
+
+// sameRefs reports whether a and b are the same episodes in the same order.
+func sameRefs(a, b []series.EpisodeRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// refEpisodes is refs' episode numbers, for logs.
+func refEpisodes(refs []series.EpisodeRef) []int {
+	out := make([]int, len(refs))
+	for i, r := range refs {
+		out[i] = r.Episode
+	}
+	return out
 }
 
 // minPrefixTitleLen is how much of a title must be present before a PREFIX counts as a

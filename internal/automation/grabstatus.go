@@ -6,6 +6,7 @@ package automation
 //	   │  └───► held ──► imported | dismissed | failed   (Review)
 //	   └──────► failed | removed | cancelled | orphaned
 //	dismissed ──► seeded                     (removed at its goal, files kept)
+//	imported | dismissed ──► superseded      (the same torrent grabbed again by hand)
 //
 // Every query that filters grabs by status goes through the sets below rather than typing
 // the words again: the table drives removal decisions, and a status missed in one hand-typed
@@ -30,6 +31,11 @@ const (
 	grabStatusCancelled = "cancelled"
 	// grabStatusOrphaned: the media was deleted but its torrent was left in the client.
 	grabStatusOrphaned = "orphaned"
+	// grabStatusSuperseded: an imported or dismissed grab whose torrent the user grabbed
+	// again by hand. The new grab decides what happens to the torrent from then on; this
+	// one is out of seed cleanup, so its old 'imported' can't delete files the new grab
+	// left in the download (reopenImportedRelease).
+	grabStatusSuperseded = "superseded"
 )
 
 // The status sets, as SQL fragments to AND into a WHERE clause.
