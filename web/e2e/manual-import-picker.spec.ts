@@ -77,7 +77,7 @@ test.describe("manual import picker", () => {
     await expect(dialog.getByText("Not managed")).toBeVisible();
     await dialog.getByRole("button", { name: "Use Frank.Herbert.Children.of.Dune.EPUB" }).click();
     await expect(source).toHaveText("/downloads/Frank.Herbert.Children.of.Dune.EPUB");
-    await expect.poll(() => listed.at(-1)).toBe("/downloads/Frank.Herbert.Children.of.Dune.EPUB");
+    await expect.poll(() => listed[listed.length - 1]).toBe("/downloads/Frank.Herbert.Children.of.Dune.EPUB");
     await expect(dialog.getByRole("button", { name: "Using Frank.Herbert.Children.of.Dune.EPUB" })).toBeDisabled();
 
     // The browser: the roots, then into Downloads by keyboard, with counts and a filter.
@@ -104,7 +104,7 @@ test.describe("manual import picker", () => {
     await expect(dialog.getByText("loose.epub")).toBeVisible();
     await dialog.getByRole("button", { name: "Use this folder" }).click();
     await expect(source).toHaveText("/downloads");
-    await expect.poll(() => listed.at(-1)).toBe("/downloads");
+    await expect.poll(() => listed[listed.length - 1]).toBe("/downloads");
     await expect(dialog.getByRole("tablist")).toHaveCount(0); // the picker closes on a pick
 
     // The search across the downloads folders.
@@ -114,7 +114,7 @@ test.describe("manual import picker", () => {
     await page.keyboard.press("Enter");
     await expect(dialog.getByText("Downloads / old/Children.of.Dune.Audiobook")).toBeVisible();
     await dialog.getByRole("button", { name: "Use Children.of.Dune.Audiobook" }).click();
-    await expect.poll(() => listed.at(-1)).toBe("/downloads/old/Children.of.Dune.Audiobook");
+    await expect.poll(() => listed[listed.length - 1]).toBe("/downloads/old/Children.of.Dune.Audiobook");
 
     // A typed path outside the roots: the server's refusal shows, nothing is listed.
     await dialog.getByRole("button", { name: "Choose a folder…" }).click();
