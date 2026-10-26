@@ -24,15 +24,27 @@ var (
 // library, as they resolve now. ARRMADA_LIBRARY_DIR isn't one of them: on a documented
 // install it's the managed Docker volume, not a share anyone picked.
 func (a *api) importRoots(ctx context.Context) []string {
-	var roots []string
-	rs := a.roots()
-	for _, r := range rs.All(ctx) {
+	list := a.importRootList(ctx)
+	roots := make([]string, 0, len(list))
+	for _, r := range list {
 		roots = append(roots, r.Path)
 	}
+	return roots
+}
+
+// importRootList is importRoots with each folder's name, for the folder browser's top
+// level. It is the one list: importRoots is built from it, so the browser can never offer
+// a folder an import would then refuse, or the other way round.
+func (a *api) importRootList(ctx context.Context) []libroots.Root {
+	rs := a.roots()
+	roots := rs.All(ctx)
 	// A library folder's downloads folder that was cleared, replaced or removed with its
 	// folder: the torrents already saved there keep seeding there, and Needs you and
 	// Import into… must still import them. Each was vetted when it was set.
-	return append(roots, rs.FormerDownloads(ctx)...)
+	for _, p := range rs.FormerDownloads(ctx) {
+		roots = append(roots, libroots.Root{Name: "former-downloads", Path: p})
+	}
+	return roots
 }
 
 // importListTimeout bounds one manual-import listing. The walks also stop at
@@ -78,11 +90,26 @@ func (a *api) checkImportPath(ctx context.Context, p string) (string, error) {
 	if err != nil {
 		return "", errImportPathOutside
 	}
-	if libroots.InDataDir(clean, a.deps.Config.DataDir) {
-		return "", errImportPathDataDir
-	}
-	if !pathguard.Within(clean, a.importRoots(ctx)...) {
-		return "", errImportPathOutside
+	if err := a.importGuard(ctx)(clean); err != nil {
+		return "", err
 	}
 	return clean, nil
+}
+
+// importGuard is checkImportPath's test for an already cleaned, absolute path, with the
+// roots read once: the folder browser and search vet every entry they show with it, and
+// reading the roots per entry would mean a settings read for each one. The data folder
+// is refused first, then anything that isn't (once fully resolved) inside a root.
+func (a *api) importGuard(ctx context.Context) func(clean string) error {
+	roots := a.importRoots(ctx)
+	dataDir := a.deps.Config.DataDir
+	return func(clean string) error {
+		if libroots.InDataDir(clean, dataDir) {
+			return errImportPathDataDir
+		}
+		if !pathguard.Within(clean, roots...) {
+			return errImportPathOutside
+		}
+		return nil
+	}
 }

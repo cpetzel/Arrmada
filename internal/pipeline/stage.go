@@ -75,11 +75,12 @@ const BeingChecked = "Being checked"
 
 // Review reason codes (automation.Reason*), repeated here so the package stands alone.
 const (
-	reviewMismatch     = "mismatch"
-	reviewUnmatched    = "unmatched"
-	reviewNumbering    = "numbering"
-	reviewImportFailed = "import_failed"
-	reviewNoMedia      = "no_media"
+	reviewMismatch      = "mismatch"
+	reviewUnmatched     = "unmatched"
+	reviewNumbering     = "numbering"
+	reviewTitleConflict = "title_conflict"
+	reviewImportFailed  = "import_failed"
+	reviewNoMedia       = "no_media"
 )
 
 // Review is a pending review of a finished download.
@@ -234,6 +235,8 @@ func reviewWhy(r *Review) string {
 		return "Held for review: it matches nothing in the library"
 	case reviewNumbering:
 		return "Held for review: its episode numbers couldn't be read"
+	case reviewTitleConflict:
+		return "Held for review: its episode numbers and titles disagree"
 	case reviewImportFailed:
 		return "Held for review: the import keeps failing"
 	case reviewNoMedia:

@@ -167,7 +167,7 @@ func TestRevESeasonFolderInTheTVFolder(t *testing.T) {
 	}
 	const name = "Show.S01E02.1080p.WEB-DL-GRP"
 	dl := h.download(t, name, name+".mkv")
-	if placed, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
+	if placed, _, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
 		t.Errorf("imported %v", placed)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(tv, "Season 1")); len(entries) != 1 {
@@ -188,7 +188,7 @@ func TestRevESeasonFolderJoinedWhateverItsName(t *testing.T) {
 			s, _ := h.c.series.Get(h.ctx, h.seriesID)
 			const rel = "Show.S01E02.1080p.WEB-DL-GRP"
 			dl := h.download(t, rel, rel+".mkv")
-			if _, _, _, failed := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 {
+			if _, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 {
 				t.Fatalf("import failed")
 			}
 			if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); filepath.Dir(cur.Path) != filepath.Join(tv, "Show", name) {
@@ -205,7 +205,7 @@ func TestRevESeasonFolderJoinedWhateverItsName(t *testing.T) {
 		s, _ := h.c.series.Get(h.ctx, h.seriesID)
 		const rel = "Show.S01E02.1080p.WEB-DL-GRP"
 		dl := h.download(t, rel, rel+".mkv")
-		if _, _, _, failed := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 {
+		if _, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 {
 			t.Fatalf("import failed")
 		}
 		if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); filepath.Dir(cur.Path) != filepath.Join(tv, "Star Trek", "S01") {
@@ -220,7 +220,7 @@ func TestRevESeasonFolderJoinedWhateverItsName(t *testing.T) {
 		s, _ := h.c.series.Get(h.ctx, h.seriesID)
 		const rel = "Show.S01E02.1080p.WEB-DL-GRP"
 		dl := h.download(t, rel, rel+".mkv")
-		if placed, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
+		if placed, _, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
 			t.Errorf("imported %v while S01 is away", placed)
 		}
 		noDir(t, filepath.Join(tv, "Show", "Season 1"), "a parallel season folder")

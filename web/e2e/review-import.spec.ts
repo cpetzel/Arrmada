@@ -123,4 +123,17 @@ test.describe("manager", () => {
     await expect(card.getByRole("button", { name: "Import anyway" })).toBeDisabled();
     expect(api.callsTo("POST", "/api/v1/reviews/1/import")).toHaveLength(0);
   });
+
+  test("a pack whose episode titles and numbers disagree says so and offers Map files…", async ({ page }) => {
+    const reason = "The episode titles in this download's filenames disagree with the show's episode list, so its files can't be placed safely: Fixture.Show.S01E04.Brians.Wedding.mkv (numbered S01E04, titled \"Brians Wedding\") would go to S01E05 by its title";
+    await page.route("**/api/v1/reviews", (route) => route.fulfill({
+      json: { reviews: reviews.reviews.map((r) => (r.id === 2 ? { ...r, reason_code: "title_conflict", reason } : r)) },
+    }));
+    await page.goto("/activity/needs-you");
+    const card = page.getByTestId("review-card").filter({ hasText: "Fixture.Show.S01" });
+    await expect(card.getByText("Titles disagree")).toBeVisible();
+    await expect(card).toContainText("numbered S01E04, titled \"Brians Wedding\"");
+    await expect(card.getByRole("button", { name: "Map files…" })).toBeEnabled();
+    await expect(card.getByRole("button", { name: "Import anyway" })).toHaveCount(0);
+  });
 });

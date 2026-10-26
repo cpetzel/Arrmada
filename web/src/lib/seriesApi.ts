@@ -1,4 +1,4 @@
-import { req, type BlockEntry, type DeletePreview, type JobRef, type ManualImportList, type RenameSkip, type SceneOverride, type SeriesImportCandidate, type SeriesNumbering, type SeriesRenameItem } from "./api";
+import { req, type BlockEntry, type DeletePreview, type JobRef, type RenameSkip, type SceneOverride, type SeriesNumbering, type SeriesRenameItem } from "./api";
 
 /** One episode file outside its show's folder, and what putting it back does with it:
  * move it into the show's season folder; recycle it (the folder already has this episode,
@@ -26,8 +26,6 @@ export interface MonitorReply { monitored: boolean; monitor_new_seasons: boolean
 // deletes). They live here rather than in api.ts so they only download with the staff
 // pages that use them, not with a requester's first load.
 export const seriesApi = {
-  seriesManualImportList: (id: number) =>
-    req<ManualImportList<SeriesImportCandidate>>(`/api/v1/series/${id}/manualimport`),
   seriesManualImport: (id: number, path: string) =>
     req<{ status: string; background?: boolean } & JobRef>(`/api/v1/series/${id}/manualimport`, { method: "POST", body: JSON.stringify({ path }) }),
   seriesRenamePreview: (id: number) =>

@@ -1996,7 +1996,7 @@ func (s *Service) ManualImportCandidates(ctx context.Context, dir string, maxRes
 			return nil
 		}
 		fi, e := d.Info()
-		if e != nil || fi.Size() < 50<<20 { // skip < 50 MB (samples)
+		if e != nil || !library.ListedMovieVideo(p, fi.Size()) { // skip < 50 MB (samples)
 			return nil
 		}
 		if maxResults > 0 && len(out) >= maxResults {

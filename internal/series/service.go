@@ -581,6 +581,10 @@ type RefreshResult struct {
 	// on its own account (reading the stored listing, planning, the rebuild) rather than
 	// because the plan changed. The refresh carried on additively either way.
 	NumberingErr error
+	// FetchErr is why the metadata source couldn't be read at all: nothing was refreshed.
+	// Refresh itself still answers without an error (the stored show is unchanged and
+	// usable), so a caller that needs fresh data checks this.
+	FetchErr error
 }
 
 // Refresh re-pulls metadata for a series, adding any newly-announced seasons or episodes.
@@ -637,6 +641,7 @@ func (s *Service) refresh(ctx context.Context, id int64, opts RefreshOptions) (S
 		}
 	} else {
 		s.log.Warn("series: refresh metadata failed", "series", sr.Title, "err", derr)
+		res.FetchErr = derr
 	}
 	got, err := s.Get(ctx, id)
 	return got, res, err

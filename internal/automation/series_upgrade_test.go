@@ -233,7 +233,7 @@ func TestUpgradeSeasonPackReplacesOnlyWhatItBeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	placed, _, _, failed := u.h.c.importSeriesInto(u.h.ctx, s, dl, u.h.c.grabForce(u.h.ctx, hashFor(pack)))
+	placed, _, _, failed, _ := u.h.c.importSeriesInto(u.h.ctx, s, dl, u.h.c.grabForce(u.h.ctx, hashFor(pack)))
 	if failed != 0 {
 		t.Fatalf("%d files failed to place", failed)
 	}

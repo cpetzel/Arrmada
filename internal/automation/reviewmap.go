@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tristenlammi/arrmada/internal/library"
 	"github.com/tristenlammi/arrmada/internal/parser"
 	"github.com/tristenlammi/arrmada/internal/pathguard"
 	"github.com/tristenlammi/arrmada/internal/series"
@@ -207,6 +208,9 @@ func (c *Coordinator) ApplyReviewMap(ctx context.Context, p ReviewMapPlan) (int,
 			placed = append(placed, series.EpisodeRef{Season: f.season, Episode: ep})
 		}
 	}
+	// The episode files the person left unmapped stay only in the download: seed cleanup
+	// must keep it seeding rather than delete them with it. A pack mapped in full notes 0.
+	c.noteImportUnmatched(ctx, r.Hash, r.Name, unmappedVideos(r.ContentPath, p.files))
 	n := len(placed)
 	if n > 0 {
 		c.series.AddEvent(ctx, s.ID, "imported", fmt.Sprintf("Imported %d episode%s from review (mapped by hand): %s", n, plural(n), r.Name))
@@ -222,6 +226,27 @@ func (c *Coordinator) ApplyReviewMap(ctx context.Context, p ReviewMapPlan) (int,
 	}
 	c.closeReviewImported(ctx, r)
 	return n, c.resolveReview(ctx, r.ID, ResolutionMapped)
+}
+
+// unmappedVideos counts the download's episode videos — what the import itself would have
+// considered: no samples, nothing too small to be an episode — that the mapping left out.
+// An unreadable download counts as one file left over, which only ever keeps it seeding.
+func unmappedVideos(contentPath string, mapped []plannedFile) int {
+	videos, err := library.FindVideos(contentPath)
+	if err != nil {
+		return 1
+	}
+	done := make(map[string]bool, len(mapped))
+	for _, f := range mapped {
+		done[filepath.Clean(f.path)] = true
+	}
+	n := 0
+	for _, v := range videos {
+		if !done[filepath.Clean(v.Path)] {
+			n++
+		}
+	}
+	return n
 }
 
 // ImportReviewMapped is PlanReviewMap then ApplyReviewMap.
