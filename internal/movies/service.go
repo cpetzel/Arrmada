@@ -46,6 +46,7 @@ type LibraryPrefs interface {
 // Service is the Movies module's application logic.
 type Service struct {
 	repo     *Repo
+	resolved resolveCache // recorded paths' link resolutions, shared by other-files looks
 	meta     metadata.MovieProvider
 	log      *slog.Logger
 	root     string            // library root, for rescan/rename/manual-import (see libRoot)
@@ -1859,7 +1860,7 @@ func (s *Service) rescan(ctx context.Context, m *Movie) (adopted bool) {
 			return false
 		}
 	}
-	found, ok := s.adoptableVideo(ctx, s.movieFolder(*m))
+	found, ok := s.adoptableVideo(ctx, *m)
 	if !ok {
 		return false // the records couldn't be read: change nothing
 	}
@@ -1900,26 +1901,47 @@ func (s *Service) rescan(ctx context.Context, m *Movie) (adopted bool) {
 	return adopted
 }
 
-// adoptableVideo is the biggest video under folder (samples and anything under 50 MB
-// left out, as FindVideo does) that no track of any film records, as written or through a
-// link; "" when there's none. ok is false when the records couldn't be read: then the
-// rescan changes nothing at all.
-func (s *Service) adoptableVideo(ctx context.Context, folder string) (path string, ok bool) {
-	vids, err := library.FindVideos(folder)
-	if err != nil || len(vids) == 0 {
+// adoptableVideo is the video a rescan may record as m's default when its recorded file is
+// gone: the biggest under the film's folder (two folders down) that the other-files list
+// would show — so never a sample, a trailer, featurette or anything in an extras folder,
+// nothing in Arrmada's hidden folders (the recycle bin, Convert's hold), nothing in a
+// folder named as another film, and no file a track of any film records, as written,
+// through a link, or as a hardlink of a recorded file in the folder. m's own gone default
+// isn't counted as recorded: a case-only rename of it ("Heat (1995).mkv" →
+// "heat (1995).mkv") is the same film's file.
+//
+// A film loose in a Movies, library or downloads folder has no folder of its own: nothing
+// is adopted ("" — the record is cleared, as when its folder holds no video), because the
+// biggest video there is any other film's. ok is false when the records couldn't be read:
+// then the rescan changes nothing at all.
+func (s *Service) adoptableVideo(ctx context.Context, m Movie) (path string, ok bool) {
+	dir := filepath.Clean(s.movieFolder(m))
+	if s.looseIn(dir) {
 		return "", true
 	}
-	pass, err := s.newOtherFilesPass(ctx)
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return "", true
+	}
+	pass, err := s.newOtherFilesPass(ctx, m.MovieFilePath)
 	if err != nil {
-		s.log.Warn("rescan: couldn't read the recorded files — changing nothing", "folder", folder, "err", err)
+		s.log.Warn("rescan: couldn't read the recorded files — changing nothing", "folder", dir, "err", err)
 		return "", false
 	}
-	best, size := "", int64(0)
-	for _, v := range vids {
-		if v.Size > size && !pass.recordedAs(v.Path) {
-			best, size = v.Path, v.Size
-		}
+	var recorded []string
+	for _, i := range pass.under[pathKey(dir)] {
+		recorded = append(recorded, pass.others[i])
 	}
+	recInfo := statAll(recorded)
+	best, size := "", int64(0)
+	s.walkFolderVideos(m, dir, otherFilesDepth, func(full, rel string, fi os.FileInfo) {
+		if fi.Size() <= size || pass.recorded[fileKey(full)] || otherFileSkip(rel, fi.Size()) != "" || sameAsAny(fi, recInfo) {
+			return
+		}
+		if pass.recordedAs(full) {
+			return
+		}
+		best, size = full, fi.Size()
+	})
 	return best, true
 }
 

@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tristenlammi/arrmada/internal/library"
@@ -120,24 +122,85 @@ func otherFileSkip(rel string, size int64) string {
 // comparisons on a 10,000-film library, eating into the scan's time budget. Instead each
 // record is filed under every folder above it, once (under; realUnder with links
 // resolved), and a folder's question is one map lookup.
+//
+// Two keys: pathKey (lower-cased) for folder questions, where treating "Heat" and "heat"
+// as one folder errs towards "shared" — the careful answer; fileKey (the file system's own
+// case rule) for "is this file recorded?", where on Linux "heat (1995).mkv" is not the
+// recorded "Heat (1995).mkv" and must be free to be adopted.
 type otherFilesPass struct {
-	recorded map[string]bool // pathKey of every recorded file
+	recorded map[string]bool // fileKey of every recorded file
 	others   []string        // every recorded file, as recorded
 	keys     []string        // pathKey of others[i]
 	probe    *linkProbe
+	cache    *resolveCache // resolutions kept between passes (nil: none)
 
 	under map[string][]int32 // folder pathKey → the records in or under it, as written
 
 	// Filled once, the first time links matter (index): every record resolved.
 	indexed    bool
-	real       map[string]bool    // resolved pathKey of every record
+	real       map[string]bool    // fileKey of every record, links resolved
 	realUnder  map[string][]int32 // under, with links resolved
 	unresolved []int32            // records that couldn't be resolved
 
-	looked int // records examined by recordedIntoExcept (tests bound it)
+	looked   int // records examined by recordedIntoExcept (tests bound it)
+	resolved int // records resolved on disk, not from the cache (tests bound it)
 }
 
-func (s *Service) newOtherFilesPass(ctx context.Context) (*otherFilesPass, error) {
+// resolveCache keeps each record's resolution (links followed) for a short while, so the
+// film page's list, a Refresh and the next look don't each Lstat every recorded path in
+// the library again. Only resolutions are kept: which files are recorded is read fresh
+// from the database for every pass, so a file recorded a second ago is never missed.
+type resolveCache struct {
+	mu  sync.Mutex
+	ttl time.Duration // 0: resolveTTL
+	m   map[string]cachedResolution
+}
+
+type cachedResolution struct {
+	key string // the cleaned path with links resolved ("" when it couldn't be resolved)
+	at  time.Time
+}
+
+// resolveTTL is how long a record's resolution is trusted. Links in a library change
+// rarely, and a stale answer here only decides whether a folder reads as shared.
+const resolveTTL = 2 * time.Minute
+
+func (c *resolveCache) get(path string, now time.Time) (string, bool, bool) {
+	if c == nil {
+		return "", false, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ttl := c.ttl
+	if ttl == 0 {
+		ttl = resolveTTL
+	}
+	r, ok := c.m[path]
+	if !ok || now.Sub(r.at) > ttl {
+		return "", false, false
+	}
+	return r.key, r.key != "", true
+}
+
+func (c *resolveCache) put(path, key string, now time.Time) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = map[string]cachedResolution{}
+	}
+	if len(c.m) > 200_000 { // a bound, not a policy: start again
+		c.m = map[string]cachedResolution{}
+	}
+	c.m[path] = cachedResolution{key: key, at: now}
+}
+
+// newOtherFilesPass reads every recorded file. except, when set, is left out: a film's
+// recorded default that rescan knows is gone from disk, so a case-only rename of it
+// ("Heat (1995).mkv" → "heat (1995).mkv") isn't mistaken for a recorded file.
+func (s *Service) newOtherFilesPass(ctx context.Context, except ...string) (*otherFilesPass, error) {
 	rps, err := s.repo.RecordedPaths(ctx)
 	if err != nil {
 		return nil, err
@@ -146,9 +209,18 @@ func (s *Service) newOtherFilesPass(ctx context.Context) (*otherFilesPass, error
 		recorded: make(map[string]bool, len(rps)),
 		under:    make(map[string][]int32, len(rps)*4),
 		probe:    newLinkProbe(nil),
+		cache:    &s.resolved,
+	}
+	skip := map[string]bool{}
+	for _, x := range except {
+		if x != "" {
+			skip[filepath.Clean(x)] = true
+		}
 	}
 	for _, rp := range rps {
-		p.note(rp.path)
+		if !skip[filepath.Clean(rp.path)] {
+			p.note(rp.path)
+		}
 	}
 	return p, nil
 }
@@ -167,15 +239,14 @@ func fileUnder(m map[string][]int32, key string, i int32) {
 
 // note adds a recorded file (and, during a scan, one the scan just recorded).
 func (p *otherFilesPass) note(path string) {
-	if path == "" || p.recorded[pathKey(path)] {
+	if path == "" || p.recorded[fileKey(path)] {
 		return
 	}
-	k := pathKey(path)
 	i := int32(len(p.others))
-	p.recorded[k] = true
+	p.recorded[fileKey(path)] = true
 	p.others = append(p.others, path)
-	p.keys = append(p.keys, k)
-	fileUnder(p.under, k, i)
+	p.keys = append(p.keys, pathKey(path))
+	fileUnder(p.under, pathKey(path), i)
 	if p.indexed {
 		p.indexOne(i)
 	}
@@ -195,29 +266,54 @@ func (p *otherFilesPass) index() {
 }
 
 func (p *otherFilesPass) indexOne(i int32) {
-	ro, err := p.probe.resolvePath(p.others[i])
-	if err != nil {
+	now := time.Now()
+	path := p.others[i]
+	key, ok, cached := p.cache.get(path, now)
+	if !cached {
+		p.resolved++
+		if ro, err := p.probe.resolvePath(path); err == nil {
+			key, ok = filepath.Clean(ro), true
+		} else {
+			key, ok = "", false
+		}
+		p.cache.put(path, key, now)
+	}
+	if !ok {
 		p.unresolved = append(p.unresolved, i)
 		return
 	}
-	rk := pathKey(ro)
-	p.real[rk] = true
-	fileUnder(p.realUnder, rk, i)
+	p.real[fileKey(key)] = true
+	fileUnder(p.realUnder, pathKey(key), i)
 }
 
 // recordedAs reports whether some film records the file at path: as written, or through
 // a link (the two resolve to one place). A path that can't be resolved counts as recorded:
 // it's left off the list rather than guessed at.
 func (p *otherFilesPass) recordedAs(path string) bool {
-	if p.recorded[pathKey(path)] {
+	if p.recorded[fileKey(path)] {
 		return true
 	}
 	p.index()
 	r, err := p.probe.resolvePath(path)
-	return err != nil || p.real[pathKey(r)]
+	return err != nil || p.real[fileKey(r)]
 }
 
+// pathKey is how folder questions compare paths: cleaned and lower-cased, so two
+// spellings of one folder are never taken for two (refuse rather than guess).
 func pathKey(p string) string { return strings.ToLower(filepath.Clean(p)) }
+
+// foldsCase is whether this system's library file systems are usually case-insensitive.
+var foldsCase = runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+
+// fileKey is how "is this file recorded?" compares paths: cleaned, and lower-cased only
+// where the file system ignores case. On Linux "heat.mkv" beside a recorded "Heat.mkv"
+// is another file.
+func fileKey(p string) string {
+	if foldsCase {
+		return pathKey(p)
+	}
+	return filepath.Clean(p)
+}
 
 // firstNotOwn is the first of the records ids that isn't the film's own, or "".
 func (p *otherFilesPass) firstNotOwn(ids []int32, own map[string]bool) string {
@@ -264,19 +360,18 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 		return OtherFiles{}, false
 	}
 	dir := filepath.Clean(filepath.Dir(m.MovieFilePath))
-	for _, r := range s.protectedDirs() {
-		if strings.EqualFold(filepath.Clean(r), dir) {
-			return OtherFiles{}, false // loose files in a Movies or downloads folder: not the film's folder
-		}
+	if s.looseIn(dir) {
+		return OtherFiles{}, false // loose files in a Movies or downloads folder: not the film's folder
 	}
 	if s.movieRootOf(dir) == "" {
 		return OtherFiles{}, false
 	}
-	own := map[string]bool{pathKey(m.MovieFilePath): true}
+	own := map[string]bool{pathKey(m.MovieFilePath): true}     // for the folder question
+	ownFile := map[string]bool{fileKey(m.MovieFilePath): true} // for "is it the film's?"
 	ownPaths := []string{m.MovieFilePath}
 	for _, v := range versions {
-		if v.FilePath != "" && !own[pathKey(v.FilePath)] {
-			own[pathKey(v.FilePath)] = true
+		if v.FilePath != "" && !ownFile[fileKey(v.FilePath)] {
+			own[pathKey(v.FilePath)], ownFile[fileKey(v.FilePath)] = true, true
 			ownPaths = append(ownPaths, v.FilePath)
 		}
 	}
@@ -287,13 +382,49 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 	}
 	// The film's own files by identity too: a hardlink of one under another name is the
 	// same file, not another one.
-	var ownInfo []os.FileInfo
-	for _, p := range ownPaths {
-		if fi, err := os.Stat(p); err == nil {
-			ownInfo = append(ownInfo, fi)
+	ownInfo := statAll(ownPaths)
+	out := OtherFiles{Folder: dir, Shared: shared, Files: []OtherFile{}, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+	out.Truncated = s.walkFolderVideos(m, dir, depth, func(full, rel string, fi os.FileInfo) {
+		if ownFile[fileKey(full)] || pass.recorded[fileKey(full)] || otherFileSkip(rel, fi.Size()) != "" || sameAsAny(fi, ownInfo) {
+			return
+		}
+		// Last, as it can mean resolving every record once: recorded through a link.
+		if pass.recordedAs(full) {
+			return
+		}
+		out.Count++
+		if len(out.Files) >= otherFilesMaxListed {
+			out.Truncated = true
+			return
+		}
+		name := filepath.Base(full)
+		out.Files = append(out.Files, OtherFile{
+			Name: name, RelPath: filepath.ToSlash(rel), Path: full, SizeBytes: fi.Size(),
+			Resolution: string(parser.Parse(name).StatedResolution()),
+		})
+	}) || out.Truncated
+	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].RelPath < out.Files[j].RelPath })
+	return out, true
+}
+
+// looseIn reports whether dir is itself a Movies, library or downloads folder: a film
+// whose file sits loose in one has no folder of its own.
+func (s *Service) looseIn(dir string) bool {
+	dir = filepath.Clean(dir)
+	for _, r := range s.protectedDirs() {
+		if strings.EqualFold(filepath.Clean(r), dir) {
+			return true
 		}
 	}
-	out := OtherFiles{Folder: dir, Shared: shared, Files: []OtherFile{}, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+	return false
+}
+
+// walkFolderVideos calls fn for every regular video file under dir, down to depth
+// folders, with its path relative to dir. Arrmada's hidden folders (the recycle bin,
+// Convert's hold) and a system's are left out, and so is a folder named as another film
+// ("Alien (1979)/Aliens (1986)"); links aren't followed. It stops after
+// otherFilesMaxEntries entries and then reports true.
+func (s *Service) walkFolderVideos(m Movie, dir string, depth int, fn func(full, rel string, fi os.FileInfo)) (truncated bool) {
 	seen := 0
 	var walk func(d, rel string, level int)
 	walk = func(d, rel string, level int) {
@@ -302,17 +433,16 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 			return
 		}
 		for _, e := range entries {
+			if truncated {
+				return
+			}
 			if seen++; seen > otherFilesMaxEntries {
-				out.Truncated = true
+				truncated = true
 				return
 			}
 			name := e.Name()
 			full, r := filepath.Join(d, name), filepath.Join(rel, name)
 			if e.IsDir() {
-				// Arrmada's hidden folders (the recycle bin, Convert's originals) and a
-				// system's are never the film's; links aren't followed (IsDir is false).
-				// Nor a folder named as another film ("Alien (1979)/Aliens (1986)"): its
-				// videos are that film's, not this one's other files.
 				if level < depth && !library.SkipScanDir(name) && !s.anotherFilmsFolder(m, name) {
 					walk(full, r, level+1)
 				}
@@ -321,44 +451,32 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 			if !e.Type().IsRegular() || !library.IsVideoFile(name) {
 				continue
 			}
-			if own[pathKey(full)] || pass.recorded[pathKey(full)] {
-				continue
+			if fi, err := e.Info(); err == nil {
+				fn(full, r, fi)
 			}
-			fi, err := e.Info()
-			if err != nil {
-				continue
-			}
-			if otherFileSkip(r, fi.Size()) != "" {
-				continue
-			}
-			sameAsOwn := false
-			for _, oi := range ownInfo {
-				if os.SameFile(fi, oi) {
-					sameAsOwn = true
-					break
-				}
-			}
-			if sameAsOwn {
-				continue
-			}
-			// Last, as it can mean resolving every record once: recorded through a link.
-			if pass.recordedAs(full) {
-				continue
-			}
-			out.Count++
-			if len(out.Files) >= otherFilesMaxListed {
-				out.Truncated = true
-				continue
-			}
-			out.Files = append(out.Files, OtherFile{
-				Name: name, RelPath: filepath.ToSlash(r), Path: full, SizeBytes: fi.Size(),
-				Resolution: string(parser.Parse(name).StatedResolution()),
-			})
 		}
 	}
 	walk(dir, "", 0)
-	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].RelPath < out.Files[j].RelPath })
-	return out, true
+	return truncated
+}
+
+func statAll(paths []string) []os.FileInfo {
+	var out []os.FileInfo
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil {
+			out = append(out, fi)
+		}
+	}
+	return out
+}
+
+func sameAsAny(fi os.FileInfo, infos []os.FileInfo) bool {
+	for _, oi := range infos {
+		if os.SameFile(fi, oi) {
+			return true
+		}
+	}
+	return false
 }
 
 // anotherFilmsFolder reports whether a folder called name, inside film m's folder, is
