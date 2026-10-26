@@ -2,6 +2,7 @@ package movies
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -102,5 +103,41 @@ func BenchmarkOtherFilesPassLookup(b *testing.B) {
 	for k := 0; k < b.N; k++ {
 		x := paths[k%n]
 		p.recordedIntoExcept(filepath.Dir(x), map[string]bool{pathKey(x): true})
+	}
+}
+
+// A file adopted as a version in a folder two films share, then a delete with files: the
+// deleted film's files (the adopted one included) go to the bin, the other film's stay —
+// whichever film is deleted.
+func TestAdoptInSharedFolderThenDeleteWithFiles(t *testing.T) {
+	for _, gone := range []string{"Heat", "Ronin"} {
+		t.Run("delete "+gone, func(t *testing.T) {
+			e := newOtherEnv(t)
+			heatFile := e.file(t, "Movies/Heat (1995)/Heat (1995).mkv", otherBig)
+			roninFile := e.file(t, "Movies/Heat (1995)/Ronin (1998).mkv", otherBig)
+			extra := e.file(t, "Movies/Heat (1995)/Collateral (2004).mkv", otherBig)
+			heat := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995).mkv")
+			ronin := e.film(t, 2, "Ronin", 1998, "Movies/Heat (1995)/Ronin (1998).mkv")
+			if _, err := e.svc.AddOtherFileAsVersion(e.ctx, heat.ID, extra, "Kept copy", "hd", ""); err != nil {
+				t.Fatal(err)
+			}
+			id, keep, goneFiles := heat.ID, []string{roninFile}, []string{heatFile, extra}
+			if gone == "Ronin" {
+				id, keep, goneFiles = ronin.ID, []string{heatFile, extra}, []string{roninFile}
+			}
+			if err := e.svc.Delete(e.ctx, id, true); err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range keep {
+				if _, err := os.Stat(p); err != nil {
+					t.Errorf("%s must survive: %v", filepath.Base(p), err)
+				}
+			}
+			for _, p := range goneFiles {
+				if _, err := os.Stat(p); !os.IsNotExist(err) {
+					t.Errorf("%s should have gone to the bin (err %v)", filepath.Base(p), err)
+				}
+			}
+		})
 	}
 }
