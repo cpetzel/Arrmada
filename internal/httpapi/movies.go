@@ -531,6 +531,9 @@ func (a *api) handleGetMovie(w http.ResponseWriter, r *http.Request) {
 		search = a.deps.Automation.MovieSearchState(r.Context(), m)
 	}
 	m.Acquisition = a.movieAcquisition(r.Context(), &m, acqs, byHash, queue)
+	// The videos in its folder Arrmada doesn't use, as last found: the page's chip, read
+	// without touching the disk (the chip's list looks again).
+	m.OtherFiles = a.deps.Movies.StoredOtherFiles(r.Context(), m)
 	m.Extra = apiMovieExtra(m.Extra) // display_title and display_overview carry what pages need
 	a.writeJSON(w, http.StatusOK, struct {
 		movies.Movie

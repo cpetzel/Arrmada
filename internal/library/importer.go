@@ -2028,6 +2028,9 @@ func isVideo(p string) bool {
 // IsVideoFile reports whether p has a video file's extension.
 func IsVideoFile(p string) bool { return isVideo(p) }
 
+// IsSampleName reports whether a file's name marks it as a sample clip (see isSampleName).
+func IsSampleName(path string) bool { return isSampleName(path) }
+
 // isSampleName reports whether a file is a sample clip. "sample" must appear as a
 // whole token (bounded by the separators in a filename), NOT merely as a substring —
 // otherwise a legit episode like "Chuck Versus the Nacho Sampler" is wrongly skipped.

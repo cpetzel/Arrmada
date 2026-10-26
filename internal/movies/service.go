@@ -573,6 +573,13 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 	for _, m := range existing {
 		byTMDB[m.TMDBID] = m
 	}
+	// The other videos in each film's folder are noted as the scan reaches the folder
+	// (otherfiles.go). Without the records to check against, the scan goes on without.
+	others, err := s.newOtherFilesPass(ctx)
+	if err != nil {
+		s.log.Warn("library scan: couldn't read the recorded files — not noting other files this time", "err", err)
+		others = nil
+	}
 	// Every path any track holds: a file already recorded is never attached twice or
 	// reported as a duplicate of itself.
 	owned := map[string]bool{}
@@ -678,6 +685,7 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 			switch {
 			case owned[filepath.Clean(video)]:
 				res.Skipped++
+				s.noteOtherFilesInScan(ctx, others, m, tracks[m.ID])
 			case !m.HasFile:
 				// A folder started is finished, even if the scan is stopped meanwhile.
 				if err := s.attachExisting(context.WithoutCancel(ctx), m, video, "Attached during library scan: "); err != nil {
@@ -690,8 +698,13 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 				byTMDB[match.TMDBID] = m
 				owned[filepath.Clean(video)] = true
 				res.Attached++
+				if others != nil {
+					others.note(video)
+				}
+				s.noteOtherFilesInScan(ctx, others, m, tracks[m.ID])
 			default:
 				res.Duplicates = append(res.Duplicates, ScanDuplicate{MovieID: m.ID, Title: m.Title, Folder: name, Path: video})
+				s.noteOtherFilesInScan(ctx, others, m, tracks[m.ID])
 			}
 			continue
 		}
@@ -705,6 +718,10 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 		byTMDB[match.TMDBID] = created
 		owned[filepath.Clean(video)] = true
 		res.Imported++
+		if others != nil {
+			others.note(video)
+		}
+		s.noteOtherFilesInScan(ctx, others, created, []Version{})
 	}
 	if err := ctx.Err(); err != nil {
 		// Stopped part-way (a cancel, the time budget, shutdown): keep what it did find,
@@ -1819,6 +1836,10 @@ func (s *Service) Refresh(ctx context.Context, id int64) (Movie, error) {
 	// unless the rescan just adopted it, which read it already.
 	if m.HasFile && m.MovieFilePath != "" && !adopted {
 		_ = s.setDefaultFile(ctx, id, m.MovieFilePath)
+	}
+	// 4. The other videos in its folder, looked at again (otherfiles.go).
+	if _, oerr := s.refreshOtherFiles(ctx, nil, m, nil); oerr != nil {
+		s.log.Warn("refresh: couldn't note the other files in the film's folder", "movie", m.Title, "err", oerr)
 	}
 	_ = s.repo.AddEvent(ctx, id, "refreshed", "Refreshed metadata and rescanned disk")
 	return s.repo.Get(ctx, id)

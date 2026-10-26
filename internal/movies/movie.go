@@ -73,6 +73,10 @@ type Movie struct {
 	// Acquisition is computed on the detail endpoint only: the facts the page's Acquisition
 	// card states, so it never promises what the sweeps won't do.
 	Acquisition *Acquisition `json:"acquisition,omitempty"`
+	// OtherFiles is attached on the detail endpoint only: the videos in the film's folder
+	// that Arrmada doesn't use, as the last scan, refresh or look at the list found them
+	// (nil when none has looked yet).
+	OtherFiles *OtherFiles `json:"other_files,omitempty"`
 }
 
 // Acquisition is what Arrmada will do about a movie, from the same facts the sweeps act on.
@@ -141,6 +145,10 @@ type MovieSummary struct {
 	VoteAverage     float64 `json:"vote_average,omitempty"`
 	SizeBytes       int64   `json:"size_bytes,omitempty"`
 	LibraryFolderID int64   `json:"library_folder_id,omitempty"` // its Movies folder (0: the default): the library filters by it
+	// OtherFiles is how many videos in the film's folder Arrmada doesn't use, as the last
+	// library scan or refresh found them (otherfiles.go). Read from the database: the list
+	// never looks at the disk.
+	OtherFiles int `json:"other_files,omitempty"`
 	// Media is the default file's cached media facts (nil without a file or before it was
 	// read).
 	Media *SummaryMedia `json:"media,omitempty"`

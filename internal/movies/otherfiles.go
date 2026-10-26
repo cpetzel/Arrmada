@@ -1,0 +1,500 @@
+package movies
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/tristenlammi/arrmada/internal/library"
+	"github.com/tristenlammi/arrmada/internal/parser"
+)
+
+// Other files are the videos in a film's folder that Arrmada doesn't use: another cut, an
+// old copy kept by hand, a second film someone left in the folder. Arrmada only notes
+// them — a library scan or a refresh looks, the movies list shows how many, and the film's
+// page lists them. Nothing here moves, renames or deletes a file. The one thing the page
+// can do with one is record it, where it is, as an extra version of the film
+// (AddOtherFileAsVersion).
+//
+// What doesn't count, so the list is only what the owner would want to know about:
+//   - the film's own files (every track's), and any file another film records;
+//   - samples: "sample" in the name or a folder named Sample(s), or under 50 MB;
+//   - Plex and Jellyfin local extras: a name ending "-trailer", "-featurette",
+//     "-behindthescenes", "-deleted", "-interview", "-scene", "-short", "-other" (or with
+//     "." or "_" before it), and anything in an extras folder (Extras, Featurettes,
+//     Trailers, Behind The Scenes, Deleted Scenes, Interviews, Scenes, Shorts, Other,
+//     Specials);
+//   - anything that isn't a video, and Arrmada's own hidden folders.
+//
+// A folder that isn't provably the film's own (ownFolder, recordedInto: the rules a move
+// or a delete uses) may be a collection folder or a whole Movies folder of loose files, so
+// other films' files would show up as this one's. There only the folder's own top level
+// is looked at, and only files no film in the library records count. A Movies folder
+// itself, or a file outside every Movies folder, isn't looked at at all.
+
+// OtherFile is one video in a film's folder that Arrmada doesn't use.
+type OtherFile struct {
+	Name       string `json:"name"`
+	RelPath    string `json:"rel_path"` // from the film's folder, with forward slashes
+	Path       string `json:"path"`
+	SizeBytes  int64  `json:"size_bytes"`
+	Resolution string `json:"resolution,omitempty"` // from the name, or read from the file when the list is opened
+	Probed     bool   `json:"probed,omitempty"`     // Resolution was read from the file
+}
+
+// OtherFiles is what was found in a film's folder.
+type OtherFiles struct {
+	Count     int         `json:"count"`
+	Files     []OtherFile `json:"files"`
+	Folder    string      `json:"folder,omitempty"`
+	Shared    bool        `json:"shared,omitempty"`    // not provably the film's own folder (see above)
+	Truncated bool        `json:"truncated,omitempty"` // the folder was too big to look through, or Files holds only the first few
+	CheckedAt string      `json:"checked_at,omitempty"`
+}
+
+const (
+	// otherFilesDepth is how many folders below a film's own folder are looked in
+	// ("Film (2001)/Cuts/Extended/x.mkv" is two).
+	otherFilesDepth = 2
+	// otherFilesMaxEntries bounds one folder's look: a film's folder with more entries
+	// than this is something else (a whole library in one folder), and stops there.
+	otherFilesMaxEntries = 2000
+	// otherFilesMaxListed is how many are kept by name; Count goes on counting.
+	otherFilesMaxListed = 50
+	// otherFilesMaxProbes is how many files without a resolution in the name are read
+	// when the list is opened.
+	otherFilesMaxProbes = 4
+)
+
+// extrasFolderRe is a Plex/Jellyfin local-extras folder, by name.
+var extrasFolderRe = regexp.MustCompile(`(?i)^(?:extras?|featurettes?|trailers?|behind the scenes|behindthescenes|deleted scenes|deletedscenes|interviews?|scenes|shorts?|others?|specials?|bonus)$`)
+
+// extrasSuffixes are Plex/Jellyfin local-extras name endings ("Heat (1995)-trailer.mkv").
+var extrasSuffixes = []string{"trailer", "featurette", "behindthescenes", "deleted", "deletedscene", "interview", "scene", "short", "other", "clip", "extra"}
+
+// otherFileSkip says why a video at rel (relative to the film's folder, OS separators)
+// of size bytes isn't one of the film's other files, or "" when it is one. It judges the
+// name alone: the film's own files and other films' records are checked by the caller.
+func otherFileSkip(rel string, size int64) string {
+	name := filepath.Base(rel)
+	if !library.IsVideoFile(name) {
+		return "not a video"
+	}
+	if dir := filepath.Dir(rel); dir != "." {
+		for _, part := range strings.Split(dir, string(filepath.Separator)) {
+			p := strings.TrimSpace(part)
+			if extrasFolderRe.MatchString(p) {
+				return "in an extras folder"
+			}
+			if l := strings.ToLower(p); l == "sample" || l == "samples" {
+				return "a sample"
+			}
+		}
+	}
+	if library.IsSampleName(name) || size < library.MinEpisodeVideoSize {
+		return "a sample"
+	}
+	stem := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+	for _, suf := range extrasSuffixes {
+		for _, sep := range []string{"-", ".", "_"} {
+			if strings.HasSuffix(stem, sep+suf) {
+				return "an extra (" + suf + ")"
+			}
+		}
+	}
+	return ""
+}
+
+// otherFilesPass is what one look through the library shares: every recorded file (so a
+// file another film records is never this one's other file) and one linkProbe over them.
+type otherFilesPass struct {
+	recorded map[string]bool // lower-cased clean paths of every recorded file
+	probe    *linkProbe
+}
+
+func (s *Service) newOtherFilesPass(ctx context.Context) (*otherFilesPass, error) {
+	rps, err := s.repo.RecordedPaths(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p := &otherFilesPass{recorded: make(map[string]bool, len(rps))}
+	paths := make([]string, 0, len(rps))
+	for _, rp := range rps {
+		p.recorded[pathKey(rp.path)] = true
+		paths = append(paths, rp.path)
+	}
+	p.probe = newLinkProbe(paths)
+	return p, nil
+}
+
+// note adds a file recorded during the pass (a scan's import).
+func (p *otherFilesPass) note(path string) {
+	if path == "" || p.recorded[pathKey(path)] {
+		return
+	}
+	p.recorded[pathKey(path)] = true
+	p.probe.others = append(p.probe.others, path)
+}
+
+func pathKey(p string) string { return strings.ToLower(filepath.Clean(p)) }
+
+// recordedIntoExcept is linkProbe.recordedInto skipping the film's own records (own, by
+// pathKey): another film's recorded file in or under dir, or "".
+func (p *linkProbe) recordedIntoExcept(dir string, own map[string]bool) string {
+	clean := filepath.Clean(dir)
+	realDir, derr := p.resolvePath(clean)
+	for _, o := range p.others {
+		if own[pathKey(o)] {
+			continue
+		}
+		if pathInside(o, clean) {
+			return o
+		}
+		if derr != nil {
+			return o
+		}
+		ro, err := p.resolvePath(o)
+		if err != nil || pathInside(ro, realDir) {
+			return o
+		}
+	}
+	return ""
+}
+
+// findOtherFiles looks through movie m's folder (the default file's) for its other files.
+// ok is false when the folder isn't looked at (no file, a Movies folder itself, outside
+// every Movies folder).
+func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Version) (OtherFiles, bool) {
+	if !m.HasFile || m.MovieFilePath == "" {
+		return OtherFiles{}, false
+	}
+	dir := filepath.Clean(filepath.Dir(m.MovieFilePath))
+	for _, r := range s.protectedDirs() {
+		if strings.EqualFold(filepath.Clean(r), dir) {
+			return OtherFiles{}, false // loose files in a Movies or downloads folder: not the film's folder
+		}
+	}
+	if s.movieRootOf(dir) == "" {
+		return OtherFiles{}, false
+	}
+	own := map[string]bool{pathKey(m.MovieFilePath): true}
+	ownPaths := []string{m.MovieFilePath}
+	for _, v := range versions {
+		if v.FilePath != "" && !own[pathKey(v.FilePath)] {
+			own[pathKey(v.FilePath)] = true
+			ownPaths = append(ownPaths, v.FilePath)
+		}
+	}
+	shared := s.ownFolder(m, dir) != "" || pass.probe.recordedIntoExcept(dir, own) != ""
+	depth := otherFilesDepth
+	if shared {
+		depth = 0
+	}
+	// The film's own files by identity too: a hardlink of one under another name is the
+	// same file, not another one.
+	var ownInfo []os.FileInfo
+	for _, p := range ownPaths {
+		if fi, err := os.Stat(p); err == nil {
+			ownInfo = append(ownInfo, fi)
+		}
+	}
+	out := OtherFiles{Folder: dir, Shared: shared, Files: []OtherFile{}, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+	seen := 0
+	var walk func(d, rel string, level int)
+	walk = func(d, rel string, level int) {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if seen++; seen > otherFilesMaxEntries {
+				out.Truncated = true
+				return
+			}
+			name := e.Name()
+			full, r := filepath.Join(d, name), filepath.Join(rel, name)
+			if e.IsDir() {
+				// Arrmada's hidden folders (the recycle bin, Convert's originals) and a
+				// system's are never the film's; links aren't followed (IsDir is false).
+				if level < depth && !library.SkipScanDir(name) {
+					walk(full, r, level+1)
+				}
+				continue
+			}
+			if !e.Type().IsRegular() || !library.IsVideoFile(name) {
+				continue
+			}
+			if own[pathKey(full)] || pass.recorded[pathKey(full)] {
+				continue
+			}
+			fi, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if otherFileSkip(r, fi.Size()) != "" {
+				continue
+			}
+			sameAsOwn := false
+			for _, oi := range ownInfo {
+				if os.SameFile(fi, oi) {
+					sameAsOwn = true
+					break
+				}
+			}
+			if sameAsOwn {
+				continue
+			}
+			out.Count++
+			if len(out.Files) >= otherFilesMaxListed {
+				out.Truncated = true
+				continue
+			}
+			out.Files = append(out.Files, OtherFile{
+				Name: name, RelPath: filepath.ToSlash(r), Path: full, SizeBytes: fi.Size(),
+				Resolution: string(parser.Parse(name).StatedResolution()),
+			})
+		}
+	}
+	walk(dir, "", 0)
+	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].RelPath < out.Files[j].RelPath })
+	return out, true
+}
+
+// refreshOtherFiles looks again at one film's folder and stores what it found (nothing is
+// stored, and any old row goes, when the folder isn't looked at). pass may be nil.
+func (s *Service) refreshOtherFiles(ctx context.Context, pass *otherFilesPass, m Movie, versions []Version) (OtherFiles, error) {
+	if pass == nil {
+		var err error
+		if pass, err = s.newOtherFilesPass(ctx); err != nil {
+			return OtherFiles{}, err
+		}
+	}
+	if versions == nil {
+		vs, err := s.repo.ListVersions(ctx, m.ID)
+		if err != nil {
+			return OtherFiles{}, err
+		}
+		versions = vs
+	}
+	of, ok := s.findOtherFiles(pass, m, versions)
+	if !ok {
+		return OtherFiles{Files: []OtherFile{}}, s.repo.clearOtherFiles(ctx, m.ID)
+	}
+	return of, s.repo.setOtherFiles(ctx, m.ID, of)
+}
+
+// OtherFilesLive is the detail list: the film's folder looked at now (and stored), with
+// the resolution read from up to a few files whose names don't say it.
+func (s *Service) OtherFilesLive(ctx context.Context, id int64) (OtherFiles, error) {
+	m, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return OtherFiles{}, err
+	}
+	of, err := s.refreshOtherFiles(ctx, nil, m, nil)
+	if err != nil {
+		return OtherFiles{}, err
+	}
+	probes := 0
+	for i := range of.Files {
+		f := &of.Files[i]
+		if f.Resolution != "" || probes >= otherFilesMaxProbes || ctx.Err() != nil {
+			continue
+		}
+		probes++
+		if mi, err := s.probeFile(f.Path); err == nil && mi.Resolution != "" {
+			f.Resolution, f.Probed = mi.Resolution, true
+		}
+	}
+	return of, nil
+}
+
+// StoredOtherFiles is what the last look at the film's folder found (nil when it has no
+// file or hasn't been looked at): the detail page's chip, without touching the disk.
+func (s *Service) StoredOtherFiles(ctx context.Context, m Movie) *OtherFiles {
+	if !m.HasFile {
+		return nil
+	}
+	of, ok, err := s.repo.otherFiles(ctx, m.ID)
+	if err != nil || !ok {
+		return nil
+	}
+	of.Folder = filepath.Dir(m.MovieFilePath)
+	return &of
+}
+
+// noteOtherFilesInScan is the library scan's look at a film's folder, right after the scan
+// decided the folder is the film's. A failure is logged; the scan goes on.
+func (s *Service) noteOtherFilesInScan(ctx context.Context, pass *otherFilesPass, m Movie, versions []Version) {
+	if pass == nil || ctx.Err() != nil {
+		return
+	}
+	if _, err := s.refreshOtherFiles(ctx, pass, m, versions); err != nil {
+		s.log.Warn("library scan: couldn't note the other files in a film's folder", "title", m.Title, "err", err)
+	}
+}
+
+// ErrNotOtherFile is a path that isn't one of the film's other files (any more).
+var ErrNotOtherFile = errors.New("that file isn't one of this film's other files — look at the list again")
+
+// ErrVersionHasFile is an other file aimed at a version that already has a file: recording
+// it there would replace that file, and this never replaces anything.
+var ErrVersionHasFile = errors.New("that version already has a file — choose a version without one, or add a new one")
+
+// AddOtherFileAsVersion records one of the film's other files, where it is and under its
+// own name, as an extra version's file. versionID > 0 is an existing extra version, which
+// must have no file; 0 adds a new one (label, profile, edition), unmonitored so no upgrade
+// ever replaces the file. The file isn't moved, renamed, linked or copied: this is the
+// library scan's attach (attachExisting), for a version. Renaming it to the version's name
+// is left to Rename, which previews first.
+func (s *Service) AddOtherFileAsVersion(ctx context.Context, id, versionID int64, path, label, profile, edition string) (Version, error) {
+	m, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return Version{}, err
+	}
+	// Only a file the folder holds now, by the same rules the list shows.
+	of, err := s.refreshOtherFiles(ctx, nil, m, nil)
+	if err != nil {
+		return Version{}, err
+	}
+	var file OtherFile
+	found := false
+	for _, f := range of.Files {
+		if filepath.Clean(f.Path) == filepath.Clean(path) {
+			file, found = f, true
+			break
+		}
+	}
+	if !found {
+		return Version{}, ErrNotOtherFile
+	}
+	created := false
+	var v Version
+	if versionID > 0 {
+		var owner int64
+		v, owner, err = s.repo.GetVersion(ctx, versionID)
+		if err != nil || owner != id {
+			return Version{}, ErrVersionNotFound
+		}
+		if v.HasFile || v.FilePath != "" {
+			return Version{}, ErrVersionHasFile
+		}
+	} else {
+		if strings.TrimSpace(label) == "" {
+			label = defaultOtherLabel(file)
+		}
+		if v, err = s.AddVersion(ctx, id, strings.TrimSpace(label), profile, edition, false); err != nil {
+			return Version{}, err
+		}
+		created = true
+	}
+	// Read once before the transaction (a probe can take seconds).
+	media := s.probeTrack(file.Path)
+	if media == nil || media.Missing {
+		if created {
+			_ = s.repo.DeleteVersion(ctx, v.ID)
+		}
+		return Version{}, ErrNotOtherFile
+	}
+	err = s.repo.inTx(ctx, func(_ *sql.Tx, r *Repo) error {
+		// Re-check inside the transaction: an import may have landed on the version since.
+		cur, owner, err := r.GetVersion(ctx, v.ID)
+		if err != nil || owner != id {
+			return ErrVersionNotFound
+		}
+		if cur.HasFile || cur.FilePath != "" {
+			return ErrVersionHasFile
+		}
+		if err := r.SetVersionFile(ctx, v.ID, file.Path, media.SizeBytes, mediaJSONOf(media)); err != nil {
+			return err
+		}
+		if err := r.SetVersionSourceRelease(ctx, v.ID, ""); err != nil {
+			return err
+		}
+		if err := r.ClearConvertedFrom(ctx, id, v.ID); err != nil {
+			return err
+		}
+		_ = r.AddEvent(ctx, id, "detected", fmt.Sprintf("Recorded %s as the %s version (left where it was)", file.RelPath, cur.Label))
+		return nil
+	})
+	if err != nil {
+		if created {
+			_ = s.repo.DeleteVersion(ctx, v.ID)
+		}
+		return Version{}, err
+	}
+	s.log.Info("recorded a file in the film's folder as a version", "title", m.Title, "path", file.Path, "version", v.Label)
+	// For the page only: no title, so no "Imported" alert for a file that was already there.
+	s.publish("movie.downloaded", map[string]any{"id": id, "version_id": v.ID, "path": file.Path, "source": "scan"})
+	if _, err := s.refreshOtherFiles(ctx, nil, m, nil); err != nil {
+		s.log.Warn("couldn't note the film's other files again", "title", m.Title, "err", err)
+	}
+	out, _, err := s.repo.GetVersion(ctx, v.ID)
+	if err != nil {
+		return v, nil
+	}
+	return out, nil
+}
+
+// defaultOtherLabel names a new version after its file's resolution ("2160p"), else "Other copy".
+func defaultOtherLabel(f OtherFile) string {
+	if r := parser.Parse(f.Name); r.Edition != "" {
+		return r.Edition
+	}
+	if f.Resolution != "" {
+		return f.Resolution
+	}
+	return "Other copy"
+}
+
+// setOtherFiles stores what a look at a film's folder found.
+func (r *Repo) setOtherFiles(ctx context.Context, id int64, of OtherFiles) error {
+	files := of.Files
+	if files == nil {
+		files = []OtherFile{}
+	}
+	b, err := json.Marshal(files)
+	if err != nil {
+		return err
+	}
+	_, err = r.q().ExecContext(ctx, `INSERT INTO movie_other_files (movie_id, file_count, files_json, shared, truncated, checked_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(movie_id) DO UPDATE SET file_count = excluded.file_count, files_json = excluded.files_json,
+			shared = excluded.shared, truncated = excluded.truncated, checked_at = excluded.checked_at`,
+		id, of.Count, string(b), boolToInt(of.Shared), boolToInt(of.Truncated), of.CheckedAt)
+	return err
+}
+
+func (r *Repo) clearOtherFiles(ctx context.Context, id int64) error {
+	_, err := r.q().ExecContext(ctx, `DELETE FROM movie_other_files WHERE movie_id = ?`, id)
+	return err
+}
+
+// otherFiles is the stored look at a film's folder (ok false when there's none).
+func (r *Repo) otherFiles(ctx context.Context, id int64) (OtherFiles, bool, error) {
+	var (
+		of             OtherFiles
+		filesJSON      string
+		shared, truncd int
+	)
+	err := r.q().QueryRowContext(ctx, `SELECT file_count, files_json, shared, truncated, checked_at
+		FROM movie_other_files WHERE movie_id = ?`, id).Scan(&of.Count, &filesJSON, &shared, &truncd, &of.CheckedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OtherFiles{}, false, nil
+	}
+	if err != nil {
+		return OtherFiles{}, false, err
+	}
+	of.Shared, of.Truncated = shared != 0, truncd != 0
+	if json.Unmarshal([]byte(filesJSON), &of.Files) != nil || of.Files == nil {
+		of.Files = []OtherFile{}
+	}
+	return of, true, nil
+}
