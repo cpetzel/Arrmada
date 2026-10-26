@@ -57,6 +57,21 @@ func IsAudiobookFile(p string) bool { return isAudiobook(p) }
 // IsBookFile reports whether a path is an ebook or audiobook file, by its extension.
 func IsBookFile(p string) bool { return isBookFile(p) }
 
+// The manual-import listings' tests for one file, so anything that counts or previews
+// what a listing will show (the folder picker) counts exactly the same files.
+//
+// ListedMovieVideo is a movie listing's: a video at least MinEpisodeVideoSize.
+func ListedMovieVideo(p string, size int64) bool { return isVideo(p) && size >= MinEpisodeVideoSize }
+
+// ListedEpisodeVideo is FindVideos': a movie listing's file that isn't a sample by name.
+func ListedEpisodeVideo(p string, size int64) bool {
+	return ListedMovieVideo(p, size) && !isSampleName(p)
+}
+
+// ListedBookFile is FindBookFiles': an ebook or audiobook file that isn't a sample. Book
+// files have no size floor.
+func ListedBookFile(p string, _ int64) bool { return isBookFile(p) && !isSampleName(p) }
+
 // FoundFile is a media file discovered on disk (path + size). Shared by video, ebook,
 // and audiobook discovery.
 type FoundFile = FoundVideo
@@ -135,10 +150,7 @@ func FindBookFilesCtx(ctx context.Context, contentPath string, maxResults, maxVi
 		if err == nil && d.IsDir() && p != contentPath && SkipScanDir(d.Name()) {
 			return filepath.SkipDir
 		}
-		if err != nil || d.IsDir() || !isBookFile(p) {
-			return nil
-		}
-		if isSampleName(p) {
+		if err != nil || d.IsDir() || !ListedBookFile(p, 0) {
 			return nil
 		}
 		if fi, e := d.Info(); e == nil {
@@ -1189,10 +1201,7 @@ func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisit
 			return nil
 		}
 		fi, e := d.Info()
-		if e != nil || fi.Size() < MinEpisodeVideoSize {
-			return nil
-		}
-		if isSampleName(p) {
+		if e != nil || !ListedEpisodeVideo(p, fi.Size()) {
 			return nil
 		}
 		if lim.full() {
