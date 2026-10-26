@@ -23,6 +23,8 @@ import { Button, ConfirmDialog, IconButton, Menu, Modal, StatusChip, useToast, t
 import { Switch } from "../ui/Switch";
 import { Page } from "../ui/Page";
 import { lazyPage } from "../lib/lazyPage";
+import { ImportSourcePicker } from "../components/ImportSourcePicker";
+import { manualImportApi } from "../lib/manualImportApi";
 
 // Send to Kindle for the ebook, to the signed-in person's own Kindle — the same lazy
 // module My shelf uses (the first-time sheet, the address kept on the Me page).
@@ -587,9 +589,12 @@ function ManualImportModal({ book, onClose, onImported }: { book: Book; onClose:
   const versions = book.audio_versions ?? [];
   const [target, setTarget] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  // Where to look: null is the downloads folder; the picker can point anywhere inside the
+  // downloads and library folders.
+  const [source, setSource] = useState<string | null>(null);
 
-  const load = () => api.bookManualImportList(book.id).then((r) => { setCands(r.candidates); setNotice(importListNotice(r)); }).catch((e: Error) => setError(e.message));
-  useEffect(() => { load(); }, [book.id]);
+  const load = () => manualImportApi.list<BookImportCandidate>("books", book.id, source).then((r) => { setCands(r.candidates); setNotice(importListNotice(r)); }).catch((e: Error) => { setCands([]); setError(e.message); });
+  useEffect(() => { setCands(null); setError(null); setNotice(null); load(); }, [book.id, source]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doImport = async (path: string, edition: string) => {
     setImporting(path); setError(null);
@@ -612,13 +617,14 @@ function ManualImportModal({ book, onClose, onImported }: { book: Book; onClose:
             </select>
           </label>
         )}
+        <ImportSourcePicker kind="books" id={book.id} path={source} onPick={setSource} disabled={importing !== null} />
         {error && <div className="mb-2 text-sm" style={{ color: "var(--reject-text)" }}>{error}</div>}
         {notice && <div className="mb-2 text-sm text-ink-faint">{notice}</div>}
         <div className="thin-scroll max-h-[52vh] overflow-y-auto">
           {cands === null ? (
             <div className="p-6 text-center text-base text-ink-dim">Scanning…</div>
           ) : cands.length === 0 ? (
-            <div className="p-6 text-center text-base text-ink-dim">No ebook or audiobook files found in the downloads folder.</div>
+            <div className="p-6 text-center text-base text-ink-dim">{error ? "" : `No ebook or audiobook files found in ${source ? "this folder" : "the downloads folder"}.`}</div>
           ) : (
             cands.map((c) => (
               <button key={c.path} onClick={() => doImport(c.path, c.edition)} disabled={importing !== null} className="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition-colors hover:bg-[var(--panel-2)]">
