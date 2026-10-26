@@ -87,6 +87,11 @@ func TestMovieOtherFilesEndpoints(t *testing.T) {
 	if rec := do("POST", "/api/v1/movies/1/other-files/version", string(body)); rec.Code != http.StatusConflict {
 		t.Fatalf("a trailer as a version: %d %s, want 409", rec.Code, rec.Body)
 	}
+	// Never into an existing version: the body takes no version_id.
+	body, _ = json.Marshal(map[string]any{"path": extra, "version_id": 3})
+	if rec := do("POST", "/api/v1/movies/1/other-files/version", string(body)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("with a version_id: %d %s, want 400", rec.Code, rec.Body)
+	}
 	body, _ = json.Marshal(map[string]any{"path": extra, "label": "4K copy"})
 	rec = do("POST", "/api/v1/movies/1/other-files/version", string(body))
 	if rec.Code != http.StatusCreated {

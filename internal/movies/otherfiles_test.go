@@ -297,10 +297,10 @@ func TestAddOtherFileAsVersionRecordsInPlace(t *testing.T) {
 	m := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv")
 	before := listTree(t, filepath.Join(e.base, "Movies"))
 
-	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, 0, filepath.Join(e.base, "Movies/Heat (1995)/nope.mkv"), "", "hd", ""); !errors.Is(err, ErrNotOtherFile) {
+	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, filepath.Join(e.base, "Movies/Heat (1995)/nope.mkv"), "", "hd", ""); !errors.Is(err, ErrNotOtherFile) {
 		t.Fatalf("a path that isn't an other file: err = %v, want ErrNotOtherFile", err)
 	}
-	v, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, 0, extra, "", "hd", "")
+	v, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, extra, "", "hd", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestAddOtherFileAsVersionRecordsInPlace(t *testing.T) {
 		t.Fatalf("other files after = %v (%v), want none", relNames(of), err)
 	}
 	// Again: it's the version's file now, not an other file.
-	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, 0, extra, "", "hd", ""); !errors.Is(err, ErrNotOtherFile) {
+	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, extra, "", "hd", ""); !errors.Is(err, ErrNotOtherFile) {
 		t.Fatalf("again: err = %v, want ErrNotOtherFile", err)
 	}
 	if vs, _ := e.svc.repo.ListVersions(e.ctx, m.ID); len(vs) != 1 {
@@ -326,44 +326,55 @@ func TestAddOtherFileAsVersionRecordsInPlace(t *testing.T) {
 	}
 }
 
-// Into an existing version: only one with no file, so nothing is ever replaced.
-func TestAddOtherFileIntoExistingVersion(t *testing.T) {
+// A file gone between the list and the click leaves no version behind.
+func TestAddOtherFileGoneBeforeRecording(t *testing.T) {
 	e := newOtherEnv(t)
 	e.file(t, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv", otherBig)
 	extra := e.file(t, "Movies/Heat (1995)/Heat (1995) Extended.mkv", otherBig)
-	held := e.file(t, "Movies/Heat (1995)/Heat (1995) 4K.mkv", otherBig)
 	m := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv")
-	full, err := e.svc.repo.CreateVersion(e.ctx, m.ID, Version{Label: "4K", QualityProfile: "uhd", Monitored: true})
+	// The walk finds it; the read just before recording finds it gone.
+	e.svc.SetFileAccess(func(string) (mediainfo.Info, error) { return mediainfo.Info{}, errors.New("no probe") },
+		func(p string) (os.FileInfo, error) {
+			if p == extra {
+				return nil, os.ErrNotExist
+			}
+			return os.Stat(p)
+		})
+	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, extra, "", "hd", ""); !errors.Is(err, ErrNotOtherFile) {
+		t.Fatalf("err = %v, want ErrNotOtherFile", err)
+	}
+	if vs, _ := e.svc.repo.ListVersions(e.ctx, m.ID); len(vs) != 0 {
+		t.Fatalf("versions = %+v, want none left behind", vs)
+	}
+}
+
+// Another track recording the file between the list and the transaction (a second click,
+// another tab): the transaction refuses, and the version made for it goes again.
+func TestAddOtherFileRecordedMeanwhileRollsBack(t *testing.T) {
+	e := newOtherEnv(t)
+	e.file(t, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv", otherBig)
+	extra := e.file(t, "Movies/Heat (1995)/Heat (1995) Extended.mkv", otherBig)
+	m := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv")
+	other, err := e.svc.repo.CreateVersion(e.ctx, m.ID, Version{Label: "Other tab", QualityProfile: "hd"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.svc.repo.SetVersionFile(e.ctx, full.ID, held, otherBig, ""); err != nil {
-		t.Fatal(err)
+	// The read just before recording is where the other tab's click lands.
+	e.svc.SetFileAccess(func(string) (mediainfo.Info, error) { return mediainfo.Info{}, errors.New("no probe") },
+		func(p string) (os.FileInfo, error) {
+			if p == extra {
+				if err := e.svc.repo.SetVersionFile(e.ctx, other.ID, extra, otherBig, ""); err != nil {
+					t.Error(err)
+				}
+			}
+			return os.Stat(p)
+		})
+	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, extra, "Extended", "hd", ""); !errors.Is(err, ErrNotOtherFile) {
+		t.Fatalf("err = %v, want ErrNotOtherFile", err)
 	}
-	empty, err := e.svc.repo.CreateVersion(e.ctx, m.ID, Version{Label: "Extended", QualityProfile: "hd", Monitored: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, full.ID, extra, "", "", ""); !errors.Is(err, ErrVersionHasFile) {
-		t.Fatalf("into a version with a file: err = %v, want ErrVersionHasFile", err)
-	}
-	other, err := e.svc.repo.Create(e.ctx, Movie{TMDBID: 9, Title: "Ronin", Year: 1998})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ov, _ := e.svc.repo.CreateVersion(e.ctx, other.ID, Version{Label: "x", QualityProfile: "hd"})
-	if _, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, ov.ID, extra, "", "", ""); !errors.Is(err, ErrVersionNotFound) {
-		t.Fatalf("another film's version: err = %v, want ErrVersionNotFound", err)
-	}
-	v, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, empty.ID, extra, "", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.ID != empty.ID || v.FilePath != extra || !v.Monitored {
-		t.Fatalf("version = %+v, want Extended with the file, still monitored", v)
-	}
-	if _, err := os.Stat(held); err != nil {
-		t.Fatalf("the 4K version's file: %v", err)
+	vs, _ := e.svc.repo.ListVersions(e.ctx, m.ID)
+	if len(vs) != 1 || vs[0].ID != other.ID {
+		t.Fatalf("versions = %+v, want only the other tab's", vs)
 	}
 }
 

@@ -398,17 +398,18 @@ func (s *Service) noteOtherFilesInScan(ctx context.Context, pass *otherFilesPass
 // ErrNotOtherFile is a path that isn't one of the film's other files (any more).
 var ErrNotOtherFile = errors.New("that file isn't one of this film's other files — look at the list again")
 
-// ErrVersionHasFile is an other file aimed at a version that already has a file: recording
-// it there would replace that file, and this never replaces anything.
-var ErrVersionHasFile = errors.New("that version already has a file — choose a version without one, or add a new one")
+// ErrVersionHasFile is a new version that gained a file before the other file could be
+// recorded on it (a grab landing at that moment): recording it would replace that file.
+var ErrVersionHasFile = errors.New("the new version got a file of its own meanwhile — nothing was recorded")
 
 // AddOtherFileAsVersion records one of the film's other files, where it is and under its
-// own name, as an extra version's file. versionID > 0 is an existing extra version, which
-// must have no file; 0 adds a new one (label, profile, edition), unmonitored so no upgrade
-// ever replaces the file. The file isn't moved, renamed, linked or copied: this is the
-// library scan's attach (attachExisting), for a version. Renaming it to the version's name
-// is left to Rename, which previews first.
-func (s *Service) AddOtherFileAsVersion(ctx context.Context, id, versionID int64, path, label, profile, edition string) (Version, error) {
+// own name, as the file of a NEW extra version (label, profile, edition), unmonitored so
+// no upgrade or search ever replaces it. Never an existing version: one may be monitored
+// or have a grab in flight, which would replace (recycle) the hand-kept file. The file
+// isn't moved, renamed, linked or copied: this is the library scan's attach
+// (attachExisting), for a version. Renaming it to the version's name is left to Rename,
+// which previews first.
+func (s *Service) AddOtherFileAsVersion(ctx context.Context, id int64, path, label, profile, edition string) (Version, error) {
 	m, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return Version{}, err
@@ -429,33 +430,18 @@ func (s *Service) AddOtherFileAsVersion(ctx context.Context, id, versionID int64
 	if !found {
 		return Version{}, ErrNotOtherFile
 	}
-	created := false
-	var v Version
-	if versionID > 0 {
-		var owner int64
-		v, owner, err = s.repo.GetVersion(ctx, versionID)
-		if err != nil || owner != id {
-			return Version{}, ErrVersionNotFound
-		}
-		if v.HasFile || v.FilePath != "" {
-			return Version{}, ErrVersionHasFile
-		}
-	} else {
-		if strings.TrimSpace(label) == "" {
-			label = defaultOtherLabel(file)
-		}
-		if v, err = s.AddVersion(ctx, id, strings.TrimSpace(label), profile, edition, false); err != nil {
-			return Version{}, err
-		}
-		created = true
-	}
-	// Read once before the transaction (a probe can take seconds).
+	// Read once, before anything is written (a probe can take seconds, and a file gone
+	// meanwhile leaves no version behind).
 	media := s.probeTrack(file.Path)
 	if media == nil || media.Missing {
-		if created {
-			_ = s.repo.DeleteVersion(ctx, v.ID)
-		}
 		return Version{}, ErrNotOtherFile
+	}
+	if strings.TrimSpace(label) == "" {
+		label = defaultOtherLabel(file)
+	}
+	v, err := s.AddVersion(ctx, id, strings.TrimSpace(label), profile, edition, false)
+	if err != nil {
+		return Version{}, err
 	}
 	err = s.repo.inTx(ctx, func(_ *sql.Tx, r *Repo) error {
 		// Re-check inside the transaction: an import may have landed on the version since.
@@ -486,8 +472,13 @@ func (s *Service) AddOtherFileAsVersion(ctx context.Context, id, versionID int64
 		return nil
 	})
 	if err != nil {
-		if created {
-			_ = s.repo.DeleteVersion(ctx, v.ID)
+		// The version was made for this file alone: it goes with the failure — unless
+		// something recorded a file on it meanwhile, which then keeps its version.
+		if errors.Is(err, ErrVersionHasFile) {
+			return Version{}, err
+		}
+		if derr := s.repo.DeleteVersion(ctx, v.ID); derr != nil {
+			s.log.Warn("couldn't remove the version made for an other file", "version", v.ID, "err", derr)
 		}
 		return Version{}, err
 	}
