@@ -4295,7 +4295,8 @@ export interface ReviewImportStarted extends JobRef {
 // The music matcher adds its own (MUS-31): a doubtful best fit, two editions that fit
 // almost equally, too few of an album's tracks, tags naming another album's recordings, and
 // AcoustID disagreeing with the tags.
-export type ReviewReason = "mismatch" | "unmatched" | "numbering" | "import_failed" | "no_media"
+// title_conflict: a show's files whose episode titles and numbers disagree within the pack.
+export type ReviewReason = "mismatch" | "unmatched" | "numbering" | "title_conflict" | "import_failed" | "no_media"
   | "low_confidence" | "close_editions" | "partial" | "tag_conflict" | "fingerprint_conflict";
 
 // One file inside a held download, with what its name says about episode numbering.

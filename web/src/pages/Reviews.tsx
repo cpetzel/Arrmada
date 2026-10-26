@@ -19,6 +19,7 @@ const REASON: Record<ReviewReason, { label: string; tone: Tone }> = {
   mismatch: { label: "Doesn't match", tone: "avoid" },
   unmatched: { label: "Not linked", tone: "faint" },
   numbering: { label: "Numbering", tone: "accent" },
+  title_conflict: { label: "Titles disagree", tone: "accent" },
   import_failed: { label: "Import failing", tone: "reject" },
   no_media: { label: "Nothing to import", tone: "reject" },
   // The music matcher's (MUS-31): it says in words why underneath.
@@ -224,7 +225,8 @@ export function ReviewsPanel({ compact = false }: { compact?: boolean } = {}) {
       <div className="max-w-[960px]">
         {!compact && <p className="mb-5 max-w-[72ch] text-base text-ink-dim">
           Finished downloads Arrmada held back instead of importing. Each says why: the content doesn't match what it was
-          grabbed for, it isn't linked to anything in your library, its files' episode numbering couldn't be read, its import
+          grabbed for, it isn't linked to anything in your library, its files' episode numbering couldn't be read or disagrees
+          with their episode titles, its import
           keeps failing (a folder Arrmada can't write to, a full disk), or there's nothing importable inside. Pick what to do —
           only the actions that can work for that reason are offered.
         </p>}
@@ -444,7 +446,7 @@ function ReviewCard({ r, busy: acting, importJob, importError, onImportDone, sel
             {r.hash && <button onClick={onRemove} disabled={busy} className={btn} style={danger}>Remove download</button>}
           </>
         )}
-        {r.reason_code === "numbering" && (
+        {(r.reason_code === "numbering" || r.reason_code === "title_conflict") && (
           <>
             {r.media_type === "series" && <button onClick={onMap} disabled={busy} className={btn} style={primary}>Map files…</button>}
             <button onClick={onReassign} disabled={busy} className={btn} style={accent}>Choose different show…</button>
