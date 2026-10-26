@@ -1847,11 +1847,24 @@ func (s *Service) Refresh(ctx context.Context, id int64) (Movie, error) {
 
 // rescan reconciles a movie's file record against its library folder in place, reporting
 // whether it adopted (and so read) a file.
+//
+// A recorded default file that is still on disk is kept, whatever else the folder holds:
+// a bigger video beside it may be an extra version's file or another film's. Only when
+// the recorded file is gone (or none is recorded) does it look for a replacement, and
+// then never one a track of any film records (adoptableVideo). A recorded file that
+// can't be looked at (a flaky mount, permissions) is left as it is.
 func (s *Service) rescan(ctx context.Context, m *Movie) (adopted bool) {
-	folder := s.movieFolder(*m)
-	found, _, err := library.FindVideo(folder)
+	if m.HasFile && m.MovieFilePath != "" {
+		if _, err := s.statFile(m.MovieFilePath); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return false
+		}
+	}
+	found, ok := s.adoptableVideo(ctx, s.movieFolder(*m))
+	if !ok {
+		return false // the records couldn't be read: change nothing
+	}
 	switch {
-	case err == nil && found != "":
+	case found != "":
 		if found != m.MovieFilePath {
 			old := m.MovieFilePath
 			if err := s.adoptDefaultFile(ctx, *m, found); err != nil {
@@ -1885,6 +1898,29 @@ func (s *Service) rescan(ctx context.Context, m *Movie) (adopted bool) {
 		}
 	}
 	return adopted
+}
+
+// adoptableVideo is the biggest video under folder (samples and anything under 50 MB
+// left out, as FindVideo does) that no track of any film records, as written or through a
+// link; "" when there's none. ok is false when the records couldn't be read: then the
+// rescan changes nothing at all.
+func (s *Service) adoptableVideo(ctx context.Context, folder string) (path string, ok bool) {
+	vids, err := library.FindVideos(folder)
+	if err != nil || len(vids) == 0 {
+		return "", true
+	}
+	pass, err := s.newOtherFilesPass(ctx)
+	if err != nil {
+		s.log.Warn("rescan: couldn't read the recorded files — changing nothing", "folder", folder, "err", err)
+		return "", false
+	}
+	best, size := "", int64(0)
+	for _, v := range vids {
+		if v.Size > size && !pass.recordedAs(v.Path) {
+			best, size = v.Path, v.Size
+		}
+	}
+	return best, true
 }
 
 // movieFolder is the library directory for a movie: the tracked file's folder if
