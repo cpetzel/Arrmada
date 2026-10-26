@@ -417,6 +417,19 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **A season pack whose episode titles disagree with the show's episode list waits in Needs
+  you instead of landing on the wrong episodes.** A show's episode list can be out of date
+  when a whole season is released at once. Moving a file to the episode its title names
+  then put it on an episode another file in the same pack was numbered for, and that file
+  was skipped as already imported. Two episodes ended up with the wrong file and two with
+  none. Now nothing from that pack is imported. Needs you names the files that disagree and
+  what each one's number and title say, and **Map files…** lets you place them by hand,
+  starting from their filenames. Packs whose whole numbering is shifted from the episode
+  list (Parks and Recreation's two-part "London") still import by title as before.
+- **Grabbing an already-imported release again by hand imports it again.** It used to be
+  added to the download client and then ignored, because Arrmada had recorded it as
+  imported and often blocklisted it for the show. The new grab now clears both, so the
+  release imports like any release you pick yourself.
 - **The Activity search shows only what matches** (#71). With the same qBittorrent added
   twice, every torrent was listed once per client under one hash, and a search left
   unrelated cards on screen and added copies each time you retyped. Cards are now told

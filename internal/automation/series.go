@@ -1266,7 +1266,20 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 		// A release the user picked by hand imports regardless of what it scores against
 		// the current file — but only for the season or episode it was picked for. See
 		// importSeriesInto.
-		placed, matched, unresolved, importFailed := c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+		placed, matched, unresolved, importFailed, conflict := c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+		if conflict != "" {
+			// Its titles and numbers disagree, so nothing was placed. A person maps the
+			// files; retrying can't help until the metadata changes, and Review's import
+			// re-checks it then.
+			c.clearSeriesImportFail(it.Hash)
+			c.addReview(ctx, Review{
+				Hash: it.Hash, Name: it.Name, ContentPath: it.ContentPath, MediaType: "series", ReasonCode: ReasonNumbering,
+				ExpectedID: s.ID, ExpectedTitle: s.Title, ParsedTitle: parsed.Title,
+				SizeBytes: it.SizeBytes, Indexer: c.grabIndexer(ctx, it.Name, "series"),
+				Reason: conflict,
+			})
+			continue
+		}
 		imported := len(placed)
 		if importFailed > 0 {
 			// Some files resolved to wanted episodes but couldn't be placed (disk full,
