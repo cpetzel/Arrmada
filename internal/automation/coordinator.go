@@ -130,6 +130,10 @@ type Coordinator struct {
 	// under one of its names in another language (seriesKnownAs), so a seeding download
 	// isn't re-checked every sweep. Also guarded by unmatchedMu, and pruned the same way.
 	knownNames map[string]int64
+	// titleRefreshed is when a series download whose episode titles and numbers disagreed
+	// last had its show refreshed for it (refreshForTitleConflict), by torrent hash. Also
+	// guarded by unmatchedMu, and pruned the same way.
+	titleRefreshed map[string]time.Time
 	// musicRetry holds back a music download whose import failed for a reason of ours (the
 	// recycle bin refusing, a placement error), keyed by torrent hash: how many times in a
 	// row, and when to try again. Guarded by unmatchedMu.
@@ -2552,8 +2556,11 @@ func newSeedMatcher(grabs []grab, queue []download.Item) *seedMatcher {
 
 func (m *seedMatcher) match(it download.Item) *grab {
 	if it.Hash != "" {
+		// The newest grab of the torrent speaks for it (grabs come oldest first): a torrent
+		// grabbed again is governed by what became of the later grab — dismissed keeps its
+		// files — not by an earlier 'imported'.
 		want := strings.ToLower(it.Hash)
-		for i := range m.grabs {
+		for i := len(m.grabs) - 1; i >= 0; i-- {
 			g := &m.grabs[i]
 			if g.InfoHash != "" && strings.ToLower(g.InfoHash) == want && !m.used[g.ID] {
 				return g
@@ -2928,6 +2935,11 @@ func (c *Coordinator) pruneUnmatched(active map[string]bool) {
 	for h := range c.knownNames {
 		if !active[h] {
 			delete(c.knownNames, h)
+		}
+	}
+	for h := range c.titleRefreshed {
+		if !active[h] {
+			delete(c.titleRefreshed, h)
 		}
 	}
 }

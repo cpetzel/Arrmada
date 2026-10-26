@@ -1,6 +1,7 @@
 package automation
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -8,9 +9,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tristenlammi/arrmada/internal/library"
+	"github.com/tristenlammi/arrmada/internal/metadata"
 	"github.com/tristenlammi/arrmada/internal/parser"
 	"github.com/tristenlammi/arrmada/internal/series"
 )
@@ -93,9 +96,10 @@ var shiftedShow = layoutShow{title: "Shifted Show", year: 2020, season: 1, title
 type titleLayoutCase struct {
 	name      string
 	show      layoutShow
-	download  string   // the torrent's name; "" for a single-file torrent (its one file)
-	files     []string // the download's videos
-	manual    bool     // grabbed by hand for the season: the quality gate is skipped
+	download  string         // the torrent's name; "" for a single-file torrent (its one file)
+	files     []string       // the download's videos
+	manual    bool           // grabbed by hand for the season: the quality gate is skipped
+	fresh     map[int]string // the metadata source's listing when it differs from the library's
 	was, want string
 }
 
@@ -205,6 +209,79 @@ var titleLayoutCases = []titleLayoutCase{
 		was:  "1:1 2:2 3:- blocklisted",
 		want: "1:1 2:2 3:- blocklisted",
 	},
+	{
+		// The metadata source already has the corrected listing; the library's is the
+		// pre-release one. The disagreement refreshes the show, and the pack then imports
+		// by its numbers, every title now agreeing.
+		name: "Nobody Wants This S03 pack, stale library listing, source corrected",
+		show: nwtShow(nwtStale), fresh: nwtFixed, download: nwtPack, files: nwtFiles,
+		was:  "1:1 2:2 3:3 4:- 5:4 6:6 7:- 8:7 9:9 10:10 blocklisted",
+		want: "1:1 2:2 3:3 4:4 5:5 6:6 7:7 8:8 9:9 10:10",
+	},
+	{
+		name: "Nobody Wants This S03 pack, stale library listing, source corrected, grabbed by hand",
+		show: nwtShow(nwtStale), fresh: nwtFixed, download: nwtPack, files: nwtFiles, manual: true,
+		was:  "1:1 2:2 3:3 4:- 5:5 6:6 7:- 8:8 9:9 10:10",
+		want: "1:1 2:2 3:3 4:4 5:5 6:6 7:7 8:8 9:9 10:10",
+	},
+	{
+		// Two copies of one episode that move together by their title: not a disagreement.
+		name: "Parks and Recreation S06 with a REPACK of 6x05",
+		show: parksShow, download: "Parks.and.Recreation.S06.1080p.WEB-DL.x264-GRP", files: []string{
+			"Parks and Recreation - 6x01 & 6x02 - London.mkv",
+			"Parks and Recreation - 6x03 - The Pawnee-Eagleton Tip-Off Classic.mkv",
+			"Parks and Recreation - 6x04 - Doppelgängers.mkv",
+			"Parks and Recreation - 6x05 - Gin It Up!.mkv",
+			"Parks and Recreation - 6x06 - Filibuster.mkv",
+			"Parks and Recreation - 6x05 - Gin It Up! REPACK.mkv",
+		},
+		was:  "1:1+2 2:1+2 3:4 4:5 5:6",
+		want: "1:1+2 2:1+2 3:4 4:5 5:6",
+	},
+	{
+		name: "whole pack numbered one ahead, with a PROPER beside E03",
+		show: shiftedShow, download: "Shifted.Show.S01.1080p.WEB-DL.x264-GRP", files: []string{
+			"Shifted.Show.S01E02.Alpha.Begins.Here.1080p.WEB-DL.x264-GRP.mkv",
+			"Shifted.Show.S01E03.Bravo.Comes.Next.1080p.WEB-DL.x264-GRP.mkv",
+			"Shifted.Show.S01E04.Charlie.Finishes.It.1080p.WEB-DL.x264-GRP.mkv",
+			"Shifted.Show.S01E03.Bravo.Comes.Next.PROPER.1080p.WEB-DL.x264-GRP.mkv",
+		},
+		was:  "1:2 2:3 3:4",
+		want: "1:2 2:3 3:4",
+	},
+	{
+		// A two-parter the release splits and the metadata merges, matched by a title
+		// prefix: E02's "Part 2" moves onto E01 beside E01's own file. Before, Part 2 was
+		// skipped in silence; now it's held — the two files really do claim one episode,
+		// and only a person can say the merged episode is both.
+		name: "two-parter split by the release, merged in the metadata",
+		show: layoutShow{title: "Long Show", year: 2020, season: 1, titles: map[int]string{
+			1: "The Long Goodbye Begins", 2: "Second Story Here", 3: "Third Story Here"}},
+		download: "Long.Show.S01.1080p.WEB-DL.x264-GRP", files: []string{
+			"Long.Show.S01E01.The.Long.Goodbye.Begins.Part.1.1080p.WEB-DL.x264-GRP.mkv",
+			"Long.Show.S01E02.The.Long.Goodbye.Begins.Part.2.1080p.WEB-DL.x264-GRP.mkv",
+			"Long.Show.S01E03.Second.Story.Here.1080p.WEB-DL.x264-GRP.mkv",
+			"Long.Show.S01E04.Third.Story.Here.1080p.WEB-DL.x264-GRP.mkv",
+		},
+		was:  "1:1 2:3 3:4",
+		want: "held 1:- 2:- 3:-",
+	},
+	{
+		// An episode number the season doesn't have, titled like an episode another file
+		// claims by its number. Before, the stray E09 was skipped in silence; now the
+		// disagreement is held for a person.
+		name: "out-of-range number moved by title onto a claimed episode",
+		show: layoutShow{title: "Oor Show", year: 2020, season: 1, titles: map[int]string{
+			1: "Alpha Episode Name", 2: "Bravo Episode Name", 3: "Charlie Episode Name"}},
+		download: "Oor.Show.S01.1080p.WEB-DL.x264-GRP", files: []string{
+			"Oor.Show.S01E01.Alpha.Episode.Name.1080p.WEB-DL.x264-GRP.mkv",
+			"Oor.Show.S01E02.Bravo.Episode.Name.1080p.WEB-DL.x264-GRP.mkv",
+			"Oor.Show.S01E03.Charlie.Episode.Name.1080p.WEB-DL.x264-GRP.mkv",
+			"Oor.Show.S01E09.Charlie.Episode.Name.1080p.WEB-DL.x264-GRP.mkv",
+		},
+		was:  "1:1 2:2 3:3",
+		want: "held 1:- 2:- 3:-",
+	},
 }
 
 func TestTitlePlacementLayoutMatrix(t *testing.T) {
@@ -232,6 +309,12 @@ func runTitleLayoutCase(t *testing.T, tc titleLayoutCase) string {
 	h := newStallHarness(t)
 	h.c.imp = library.NewImporter(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	id := seedTitledSeason(t, h, tc.show)
+	if tc.fresh != nil {
+		// The metadata source has the corrected listing; the library still has the old.
+		fresh := tc.show
+		fresh.titles = tc.fresh
+		serveListing(t, h, fresh)
+	}
 	hash, name, _ := dropDownload(t, h, tc.download, tc.files)
 	if tc.manual {
 		h.c.recordSeriesGrab(h.ctx, id, name, "Fake", "", hash)
@@ -260,7 +343,50 @@ func seedTitledSeason(t *testing.T, h *stallHarness, sh layoutShow) int64 {
 	if err := repo.InsertSeasons(h.ctx, sr.ID, []series.Season{season}); err != nil {
 		t.Fatal(err)
 	}
+	serveListing(t, h, sh) // the metadata source agrees with the library until a test says otherwise
 	return sr.ID
+}
+
+// listingMeta is a metadata source answering one show's listing, counting the asks.
+type listingMeta struct {
+	mu    sync.Mutex
+	d     metadata.SeriesDetails
+	calls int
+}
+
+func (m *listingMeta) Available() bool { return true }
+func (m *listingMeta) SearchSeries(context.Context, string) ([]metadata.SeriesResult, error) {
+	return nil, nil
+}
+func (m *listingMeta) GetSeries(context.Context, int) (*metadata.SeriesDetails, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	cp := m.d
+	return &cp, nil
+}
+
+func (m *listingMeta) asked() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+// serveListing points the coordinator's series module at a metadata source whose listing
+// for the show is sh.
+func serveListing(t *testing.T, h *stallHarness, sh layoutShow) *listingMeta {
+	sd := metadata.SeasonDetails{SeasonNumber: sh.season}
+	for n := 1; n <= len(sh.titles); n++ {
+		sd.Episodes = append(sd.Episodes, metadata.EpisodeDetails{EpisodeNumber: n, Title: sh.titles[n], AirDate: "2025-10-23", Runtime: 30})
+	}
+	m := &listingMeta{d: metadata.SeriesDetails{
+		SeriesResult:    metadata.SeriesResult{TMDBID: 77, Title: sh.title, Year: sh.year},
+		Status:          "Ended",
+		NumberingSource: "tmdb",
+		Seasons:         []metadata.SeasonDetails{sd},
+	}}
+	h.c.series = series.NewService(h.c.db, m, t.TempDir(), h.c.log)
+	return m
 }
 
 // dropDownload writes a finished torrent's videos (each a distinct size, so the library

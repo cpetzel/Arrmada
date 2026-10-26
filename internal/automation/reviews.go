@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tristenlammi/arrmada/internal/extract"
 	"github.com/tristenlammi/arrmada/internal/library"
@@ -132,6 +133,10 @@ const (
 	ReasonUnmatched = "unmatched"
 	// ReasonNumbering: the right show, but no file's episode numbering could be read.
 	ReasonNumbering = "numbering"
+	// ReasonTitleConflict: the right show, but its files' episode titles and numbers
+	// disagree, so placing it would put a file on the wrong episode (titleConflict).
+	// Offers the same Map files… as ReasonNumbering.
+	ReasonTitleConflict = "title_conflict"
 	// ReasonImportFailed: the import itself keeps failing (a folder it can't write, a full disk).
 	ReasonImportFailed = "import_failed"
 	// ReasonNoMedia: nothing importable inside — still archived, or unreadable.
@@ -180,6 +185,19 @@ func (c *Coordinator) hasReview(ctx context.Context, hash string) bool {
 	var n int
 	_ = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM import_reviews WHERE hash = ? AND status = 'pending'`, hash).Scan(&n)
 	return n > 0
+}
+
+// lastReviewDismissed reports whether the latest review of this download for this show was
+// dismissed: the user took it over, so the import sweep leaves it alone.
+func (c *Coordinator) lastReviewDismissed(ctx context.Context, hash string, seriesID int64) bool {
+	if hash == "" {
+		return false
+	}
+	var resolution sql.NullString
+	err := c.db.QueryRowContext(ctx,
+		`SELECT resolution FROM import_reviews WHERE hash = ? AND media_type = 'series' AND expected_id = ?
+		 ORDER BY id DESC LIMIT 1`, hash, seriesID).Scan(&resolution)
+	return err == nil && resolution.String == ResolutionDismissed
 }
 
 // How a review was settled, recorded on import_reviews.resolution.
@@ -1587,8 +1605,9 @@ type resolvedVideo struct {
 // does), and the second half of a two-part file. Parks and Recreation's "6x01 & 6x02 -
 // London" keeps both its numbers while TMDB counts London once, so "6x03" moves onto
 // episode 2 beside it — the shape title placement exists for, unchanged here. Two copies of
-// one episode by their numbers aren't a title disagreement either; the quality gate
-// chooses between them as before.
+// one episode aren't a title disagreement either, whether they keep their number or move
+// together by their title (a REPACK beside the original): the quality gate chooses between
+// them as before.
 func (c *Coordinator) titleConflict(ctx context.Context, s series.Series, files []resolvedVideo) string {
 	byRef := map[series.EpisodeRef][]int{}
 	var order []series.EpisodeRef
@@ -1620,7 +1639,9 @@ func (c *Coordinator) titleConflict(ctx context.Context, s series.Series, files 
 			continue // all by number: copies of one episode, for the gate
 		}
 		for _, i := range claimants {
-			if i != moved {
+			// Another copy of the moved file (a REPACK or PROPER beside it, numbered the same)
+			// moved with it: one episode twice, which the quality gate chooses between.
+			if i != moved && !sameRefs(files[i].numbered, files[moved].numbered) {
 				clashes = append(clashes, c.describeTitleClash(ctx, s, ref, files[moved], files[i]))
 			}
 		}
@@ -1658,6 +1679,40 @@ func (c *Coordinator) describeTitleClash(ctx context.Context, s series.Series, r
 		target = fmt.Sprintf("%s %q", target, t)
 	}
 	return fmt.Sprintf("%s would go to %s by its title, which %s also claims %s", reading(moved), target, reading(other), how)
+}
+
+// titleConflictRefreshEvery is how often one download whose titles and numbers disagree may
+// have its show refreshed for it.
+const titleConflictRefreshEvery = time.Hour
+
+// refreshForTitleConflict refreshes a show's metadata once before its download is held for
+// a title disagreement, and reports whether it did — the import is then worth retrying.
+//
+// The disagreement is nearly always an episode list from before the season was out: Nobody
+// Wants This S03's listing was corrected later the same day. A fresh listing lets the pack
+// import as it is instead of waiting on a person. At most once an hour per download, so a
+// disagreement that a refresh doesn't settle never asks the metadata source every sweep.
+// It runs between the two imports, in no transaction, under the series module's own
+// per-show lock, the way an import's refresh for a not-yet-listed episode does.
+func (c *Coordinator) refreshForTitleConflict(ctx context.Context, s series.Series, hash, name string) bool {
+	now := c.clock()
+	c.unmatchedMu.Lock()
+	if last, ok := c.titleRefreshed[hash]; ok && now.Sub(last) < titleConflictRefreshEvery {
+		c.unmatchedMu.Unlock()
+		return false
+	}
+	if c.titleRefreshed == nil {
+		c.titleRefreshed = map[string]time.Time{}
+	}
+	c.titleRefreshed[hash] = now
+	c.unmatchedMu.Unlock()
+	c.log.Info("series import: episode titles and numbers disagree — refreshing the show's episode list before holding it",
+		"series", s.Title, "release", name)
+	if _, _, err := c.series.Refresh(ctx, s.ID, series.RefreshOptions{}); err != nil {
+		c.log.Warn("series import: refresh failed — holding the download as it is", "series", s.Title, "err", err)
+		return false
+	}
+	return true
 }
 
 // sameRefs reports whether a and b are the same episodes in the same order.

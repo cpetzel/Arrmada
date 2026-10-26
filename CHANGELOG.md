@@ -422,14 +422,21 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   when a whole season is released at once. Moving a file to the episode its title names
   then put it on an episode another file in the same pack was numbered for, and that file
   was skipped as already imported. Two episodes ended up with the wrong file and two with
-  none. Now nothing from that pack is imported. Needs you names the files that disagree and
-  what each one's number and title say, and **Map files…** lets you place them by hand,
-  starting from their filenames. Packs whose whole numbering is shifted from the episode
-  list (Parks and Recreation's two-part "London") still import by title as before.
+  none. Now Arrmada first refreshes the show's episode list, and if that settles it the
+  pack imports as normal. If it doesn't, nothing from the pack is imported. Needs you shows
+  it as **Titles disagree**, names the files that disagree and what each one's number and
+  title say, and **Map files…** lets you place them by hand, starting from their
+  filenames. Packs whose whole numbering is shifted from the episode list (Parks and
+  Recreation's two-part "London"), and a REPACK or PROPER beside the file it replaces,
+  still import by title as before.
+- **Dismissing a held season pack sticks.** If the season still had missing episodes, the
+  pack was checked again, held again and alerted on again.
 - **Grabbing an already-imported release again by hand imports it again.** It used to be
   added to the download client and then ignored, because Arrmada had recorded it as
   imported and often blocklisted it for the show. The new grab now clears both, so the
-  release imports like any release you pick yourself.
+  release imports like any release you pick yourself. The earlier grab no longer counts
+  for seed cleanup, so if you dismiss the new grab in Needs you, its files are kept when
+  the torrent is removed at its seed goal.
 - **The Activity search shows only what matches** (#71). With the same qBittorrent added
   twice, every torrent was listed once per client under one hash, and a search left
   unrelated cards on screen and added copies each time you retyped. Cards are now told

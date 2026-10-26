@@ -1,12 +1,15 @@
 package automation
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tristenlammi/arrmada/internal/download"
 	"github.com/tristenlammi/arrmada/internal/library"
 	"github.com/tristenlammi/arrmada/internal/series"
 )
@@ -32,8 +35,8 @@ func TestTitleConflictHeldThenMappedByHand(t *testing.T) {
 		t.Fatalf("reviews = %+v, want the pack held", reviews)
 	}
 	r := reviews[0]
-	if r.ReasonCode != ReasonNumbering || r.ExpectedID != id {
-		t.Errorf("held as %q for %d, want a numbering review for the show (it offers Map files…)", r.ReasonCode, r.ExpectedID)
+	if r.ReasonCode != ReasonTitleConflict || r.ExpectedID != id {
+		t.Errorf("held as %q for %d, want a title-conflict review for the show (it offers Map files…)", r.ReasonCode, r.ExpectedID)
 	}
 	for _, want := range []string{
 		nwtFiles[3] + ` (numbered S03E04, titled "Brians Wedding")`,
@@ -175,6 +178,9 @@ func TestTitleConflictRule(t *testing.T) {
 		{"whole pack shifted", []resolvedVideo{file("a", ref(2), ref(1)), file("b", ref(3), ref(2))}, false},
 		{"two copies by number", []resolvedVideo{file("a", ref(1), ref(1)), file("b", ref(1), ref(1))}, false},
 		{"one file moved alone", []resolvedVideo{file("a", ref(4), ref(5))}, false},
+		{"two copies moved together", []resolvedVideo{file("a", ref(4), ref(3)), file("a.REPACK", ref(4), ref(3))}, false},
+		{"two copies moved together onto a sibling's number", []resolvedVideo{file("a", ref(4), ref(3)), file("a.REPACK", ref(4), ref(3)), file("b", ref(3), ref(3))}, true},
+		{"a copy of the sibling, and a mover", []resolvedVideo{file("b", ref(3), ref(3)), file("a", ref(4), ref(3)), file("b.PROPER", ref(3), ref(3))}, true},
 	} {
 		got := h.c.titleConflict(h.ctx, s, c.files) != ""
 		if got != c.clash {
@@ -199,4 +205,176 @@ func filledEpisodes(t *testing.T, h *stallHarness, id int64) int {
 		}
 	}
 	return n
+}
+
+// newTitleHarness is the stall harness with an importer and a show whose library listing is
+// sh, the metadata source agreeing with it.
+func newTitleHarness(t *testing.T, sh layoutShow) (*stallHarness, int64) {
+	t.Helper()
+	h := newStallHarness(t)
+	h.c.imp = library.NewImporter(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return h, seedTitledSeason(t, h, sh)
+}
+
+// When the metadata source already has the corrected listing, the disagreement refreshes
+// the show once and the pack imports by its numbers, with nothing held.
+func TestTitleConflictRefreshSettlesIt(t *testing.T) {
+	h, id := newTitleHarness(t, nwtShow(nwtStale))
+	meta := serveListing(t, h, nwtShow(nwtFixed))
+	hash, _, _ := dropDownload(t, h, nwtPack, nwtFiles)
+	h.c.ImportSeriesDownloads(h.ctx)
+	if reviews, _ := h.c.ListReviews(h.ctx); len(reviews) != 0 {
+		t.Fatalf("held after the refresh settled it: %+v", reviews)
+	}
+	if got := describeSeason(t, h, id, 3, hash, nwtFiles); got != "1:1 2:2 3:3 4:4 5:5 6:6 7:7 8:8 9:9 10:10" {
+		t.Errorf("after the refresh: %s", got)
+	}
+	if n := meta.asked(); n != 1 {
+		t.Errorf("metadata asked %d times, want once", n)
+	}
+}
+
+// When the source still has the stale listing the pack is held after the one refresh, and a
+// download refreshes its show at most once an hour.
+func TestTitleConflictPersistsAfterRefreshIsHeld(t *testing.T) {
+	h, id := newTitleHarness(t, nwtShow(nwtStale))
+	meta := serveListing(t, h, nwtShow(nwtStale))
+	hash, name, _ := dropDownload(t, h, nwtPack, nwtFiles)
+	h.c.ImportSeriesDownloads(h.ctx)
+	reviews, _ := h.c.ListReviews(h.ctx)
+	if len(reviews) != 1 || reviews[0].ReasonCode != ReasonTitleConflict {
+		t.Fatalf("reviews = %+v, want the pack held for its titles", reviews)
+	}
+	if got := filledEpisodes(t, h, id); got != 0 {
+		t.Errorf("%d episodes have files", got)
+	}
+	if n := meta.asked(); n != 1 {
+		t.Fatalf("metadata asked %d times, want once", n)
+	}
+	s, _ := h.c.series.Get(h.ctx, id)
+	if h.c.refreshForTitleConflict(h.ctx, s, hash, name) {
+		t.Error("refreshed again within the hour")
+	}
+	h.later(61 * time.Minute)
+	if !h.c.refreshForTitleConflict(h.ctx, s, hash, name) || meta.asked() != 2 {
+		t.Errorf("no refresh an hour later (asked %d)", meta.asked())
+	}
+}
+
+// A held download the user dismissed stays dismissed: the sweep's re-process of a pack
+// whose season still has gaps leaves it alone — for a title conflict, and for a pack none
+// of whose files could be numbered.
+func TestDismissedHoldStaysDismissed(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files []string
+		code  string
+	}{
+		{"titles and numbers disagree", nwtFiles, ReasonTitleConflict},
+		{"no file could be numbered", []string{"nwt-bonus-one.mkv", "nwt-bonus-two.mkv"}, ReasonNumbering},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newTitleHarness(t, nwtShow(nwtStale))
+			dropDownload(t, h, nwtPack, tc.files)
+			h.c.ImportSeriesDownloads(h.ctx)
+			reviews, _ := h.c.ListReviews(h.ctx)
+			if len(reviews) != 1 || reviews[0].ReasonCode != tc.code {
+				t.Fatalf("premise: reviews = %+v, want one %s hold", reviews, tc.code)
+			}
+			if err := h.c.DismissReview(h.ctx, reviews[0].ID); err != nil {
+				t.Fatal(err)
+			}
+			h.c.ImportSeriesDownloads(h.ctx)
+			h.c.ImportSeriesDownloads(h.ctx)
+			if again, _ := h.c.ListReviews(h.ctx); len(again) != 0 {
+				t.Errorf("held again after it was dismissed: %+v", again)
+			}
+		})
+	}
+}
+
+// A pack imported once, grabbed again by hand, held and then dismissed keeps its files when
+// its seed goal is met: the first grab's 'imported' no longer speaks for the torrent.
+func TestRegrabHeldDismissedKeepsFilesAtSeedGoal(t *testing.T) {
+	h, id := newTitleHarness(t, nwtShow(nwtStale))
+	hash, name, _ := dropDownload(t, h, nwtPack, nwtFiles)
+	// The first import: grabbed, imported, recorded, then blocklisted by the re-process.
+	h.c.recordSeriesGrab(h.ctx, id, name, "Fake", "", hash)
+	h.c.markSeriesGrabImported(h.ctx, id, hash, name)
+	h.c.recordImportedHash(h.ctx, hash, name, 0)
+	h.c.addBlockSeries(h.ctx, id, name, "Fake", incompleteSeasonReason(0))
+
+	if err := h.c.GrabForSeries(h.ctx, id, "Fake", magnetFor(name), name, GrabScope{Season: 3}); err != nil {
+		t.Fatal(err)
+	}
+	h.c.ImportSeriesDownloads(h.ctx)
+	reviews, _ := h.c.ListReviews(h.ctx)
+	if len(reviews) != 1 {
+		t.Fatalf("premise: the re-grab is held (reviews %+v)", reviews)
+	}
+	if err := h.c.DismissReview(h.ctx, reviews[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Its seed goal met.
+	h.qbit.mu.Lock()
+	for _, tor := range h.qbit.torrents {
+		if tor["hash"] == hash {
+			tor["completed"], tor["downloaded"], tor["uploaded"], tor["seeding_time"] = 1<<30, 1<<30, 50<<30, 4000*3600
+		}
+	}
+	h.qbit.mu.Unlock()
+	h.c.downloads.InvalidateSnapshot()
+	var removed []removeCall
+	h.c.removeTorrent = func(_ context.Context, hash string, deleteData bool) error {
+		removed = append(removed, removeCall{hash, deleteData})
+		return nil
+	}
+	h.c.ManageSeeding(h.ctx)
+	if len(removed) == 0 {
+		t.Fatal("premise: seed cleanup removed nothing — the goal isn't met")
+	}
+	for _, r := range removed {
+		if r.deleteData {
+			t.Fatalf("the torrent was removed with its data: %+v", removed)
+		}
+	}
+	var superseded int
+	if err := h.c.db.QueryRow(`SELECT COUNT(*) FROM grabs WHERE status = ?`, grabStatusSuperseded).Scan(&superseded); err != nil {
+		t.Fatal(err)
+	}
+	if superseded != 1 {
+		t.Errorf("superseded grabs = %d, want the first one", superseded)
+	}
+}
+
+// Seed cleanup goes by the newest grab of a torrent: an earlier 'imported' grab of the same
+// hash doesn't decide that a later, dismissed one's files are deleted.
+func TestSeedMatcherPrefersTheNewestGrab(t *testing.T) {
+	hash := hashFor(nwtPack)
+	grabs := []grab{
+		{ID: 1, InfoHash: hash, Status: grabStatusImported},
+		{ID: 2, InfoHash: hash, Status: grabStatusDismissed},
+	}
+	it := download.Item{Hash: hash, Name: nwtPack}
+	m := newSeedMatcher(grabs, []download.Item{it})
+	if g := m.match(it); g == nil || g.ID != 2 {
+		t.Fatalf("matched %+v, want the newer grab", g)
+	}
+}
+
+// A re-grab reopens only a show's own import record: a film imported from the same torrent
+// keeps its record.
+func TestRegrabLeavesAFilmsImportAlone(t *testing.T) {
+	h, id := newTitleHarness(t, nwtShow(nwtFixed))
+	if _, err := h.c.db.Exec(`INSERT INTO imports (download_hash, source_path, target_path, title, size_bytes, movie_id)
+		VALUES (?, '/dl/film.mkv', '/movies/Film (2020)/Film (2020).mkv', ?, 0, 5)`, hashFor(nwtPack), nwtPack); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.c.GrabForSeries(h.ctx, id, "Fake", magnetFor(nwtPack), nwtPack, GrabScope{Season: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if !h.c.hashAlreadyImported(h.ctx, hashFor(nwtPack)) {
+		t.Error("a film's import record was deleted by a show's re-grab")
+	}
 }
