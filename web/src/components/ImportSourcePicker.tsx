@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState, type FormEvent } from "react";
-import { Button, StatusChip, Tabs } from "../ui";
-import { TabPanel } from "../ui/Tabs";
+import { Button, StatusChip } from "../ui";
+import { TabPanel, Tabs } from "../ui/Tabs";
 import { Input } from "../ui/Input";
 import { formatBytes } from "../lib/format";
 import { manualImportApi, type ImportFolder, type ImportKind, type ImportSearchHit, type ImportSuggestion } from "../lib/manualImportApi";
