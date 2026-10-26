@@ -28,14 +28,25 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Before you update
 
-- **Refresh & rescan keeps a film's recorded file while it's on disk.** It used to switch
-  the film to the biggest video in its folder whenever that was a different file, even one
-  an extra version (or another film) already recorded, so two records could hold one file
-  and removing the version recycled the film's file. Now it only looks for a replacement
-  when the recorded file is gone, and never takes a file another version or film records;
-  with none left, the record is cleared as before. A recorded file under 50 MB is no longer
-  cleared as "no video". If you relied on a rescan to swap in a bigger copy, import it by
-  hand.
+- **Refresh & rescan keeps a film's file while it's on disk.** It used to switch a film to
+  the biggest video in its folder whenever that was a different file, even an extra
+  version's file, a trailer or another film's, so two records could hold one file and
+  removing the version recycled the film's file. Now:
+  - While the recorded file is on disk (or can't be checked, as when a network share is
+    down), Refresh leaves the film's file as it is. A bigger copy beside it shows as
+    **+1 other file** on the film's page instead.
+  - To switch a film to another file in its folder, remove or move the old file, then
+    Refresh: the biggest video left in the folder becomes the film's file. Or import the
+    new file by hand.
+  - It never picks a file another version or film records (a hardlink of one included), a
+    sample, a trailer, featurette or anything in an extras folder, anything in Arrmada's
+    hidden folders, or a file in a subfolder named as another film.
+  - A film with several versions whose main file is gone has that record cleared, not
+    replaced by one of its versions' files. Its other versions keep their files.
+  - A film loose in a Movies folder whose file is gone has the record cleared; nothing else
+    in that folder is taken for it.
+  - A file renamed only in case (`Heat (1995).mkv` to `heat (1995).mkv`) is still found.
+  - A recorded file under 50 MB is no longer cleared as if there were no video.
 - **What a show's rescan and duplicate check read is narrower** (#56). They no longer read a
   folder inside the show's that holds another show (hidden, nested, or under Other or
   Bonus), Plex extras folders, a file named as another show in your library, a video
