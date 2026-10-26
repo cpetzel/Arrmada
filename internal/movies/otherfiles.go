@@ -115,19 +115,28 @@ func otherFileSkip(rel string, size int64) string {
 
 // otherFilesPass is what one look through the library shares: every recorded file (so a
 // file another film records is never this one's other file), and one linkProbe that
-// resolves each of them once. A scan looks at every film's folder in one pass, and
-// asking each folder about every record would otherwise lower-case and clean every
-// record's path again for every film.
+// resolves each of them once.
+//
+// A scan asks every film's folder whether another film records a file in or under it.
+// Looping over every record for every folder was O(films × records) — about 100 million
+// comparisons on a 10,000-film library, eating into the scan's time budget. Instead each
+// record is filed under every folder above it, once (under; realUnder with links
+// resolved), and a folder's question is one map lookup.
 type otherFilesPass struct {
 	recorded map[string]bool // pathKey of every recorded file
 	others   []string        // every recorded file, as recorded
 	keys     []string        // pathKey of others[i]
-	resolved []string        // pathKey of others[i] with links resolved ("" = not yet)
-	failed   []bool          // others[i] couldn't be resolved
 	probe    *linkProbe
-	// real is the resolved pathKey of every record, built the first time a file is asked
-	// about (recordedAs): a file recorded through a link to its folder is still recorded.
-	real map[string]bool
+
+	under map[string][]int32 // folder pathKey → the records in or under it, as written
+
+	// Filled once, the first time links matter (index): every record resolved.
+	indexed    bool
+	real       map[string]bool    // resolved pathKey of every record
+	realUnder  map[string][]int32 // under, with links resolved
+	unresolved []int32            // records that couldn't be resolved
+
+	looked int // records examined by recordedIntoExcept (tests bound it)
 }
 
 func (s *Service) newOtherFilesPass(ctx context.Context) (*otherFilesPass, error) {
@@ -135,11 +144,27 @@ func (s *Service) newOtherFilesPass(ctx context.Context) (*otherFilesPass, error
 	if err != nil {
 		return nil, err
 	}
-	p := &otherFilesPass{recorded: make(map[string]bool, len(rps)), probe: newLinkProbe(nil)}
+	p := &otherFilesPass{
+		recorded: make(map[string]bool, len(rps)),
+		under:    make(map[string][]int32, len(rps)*4),
+		probe:    newLinkProbe(nil),
+	}
 	for _, rp := range rps {
 		p.note(rp.path)
 	}
 	return p, nil
+}
+
+// fileUnder files record i under key and every folder above it.
+func fileUnder(m map[string][]int32, key string, i int32) {
+	for d := key; ; {
+		m[d] = append(m[d], i)
+		parent := filepath.Dir(d)
+		if parent == d {
+			return
+		}
+		d = parent
+	}
 }
 
 // note adds a recorded file (and, during a scan, one the scan just recorded).
@@ -148,28 +173,38 @@ func (p *otherFilesPass) note(path string) {
 		return
 	}
 	k := pathKey(path)
+	i := int32(len(p.others))
 	p.recorded[k] = true
 	p.others = append(p.others, path)
 	p.keys = append(p.keys, k)
-	p.resolved = append(p.resolved, "")
-	p.failed = append(p.failed, false)
-	if p.real != nil {
-		if r, ok := p.resolvedKey(len(p.others) - 1); ok {
-			p.real[r] = true
-		}
+	fileUnder(p.under, k, i)
+	if p.indexed {
+		p.indexOne(i)
 	}
 }
 
-// resolvedKey is others[i]'s pathKey with every link resolved, worked out once.
-func (p *otherFilesPass) resolvedKey(i int) (string, bool) {
-	if p.resolved[i] == "" && !p.failed[i] {
-		if ro, err := p.probe.resolvePath(p.others[i]); err != nil {
-			p.failed[i] = true
-		} else {
-			p.resolved[i] = pathKey(ro)
-		}
+// index resolves every record once, the first time a question needs links.
+func (p *otherFilesPass) index() {
+	if p.indexed {
+		return
 	}
-	return p.resolved[i], !p.failed[i]
+	p.indexed = true
+	p.real = make(map[string]bool, len(p.others))
+	p.realUnder = make(map[string][]int32, len(p.others)*4)
+	for i := range p.others {
+		p.indexOne(int32(i))
+	}
+}
+
+func (p *otherFilesPass) indexOne(i int32) {
+	ro, err := p.probe.resolvePath(p.others[i])
+	if err != nil {
+		p.unresolved = append(p.unresolved, i)
+		return
+	}
+	rk := pathKey(ro)
+	p.real[rk] = true
+	fileUnder(p.realUnder, rk, i)
 }
 
 // recordedAs reports whether some film records the file at path: as written, or through
@@ -179,22 +214,23 @@ func (p *otherFilesPass) recordedAs(path string) bool {
 	if p.recorded[pathKey(path)] {
 		return true
 	}
-	if p.real == nil {
-		p.real = make(map[string]bool, len(p.others))
-		for i := range p.others {
-			if r, ok := p.resolvedKey(i); ok {
-				p.real[r] = true
-			}
-		}
-	}
+	p.index()
 	r, err := p.probe.resolvePath(path)
 	return err != nil || p.real[pathKey(r)]
 }
 
 func pathKey(p string) string { return strings.ToLower(filepath.Clean(p)) }
 
-// insideKey is pathInside for two pathKeys.
-func insideKey(p, d string) bool { return p == d || strings.HasPrefix(p, d+string(filepath.Separator)) }
+// firstNotOwn is the first of the records ids that isn't the film's own, or "".
+func (p *otherFilesPass) firstNotOwn(ids []int32, own map[string]bool) string {
+	for _, i := range ids {
+		p.looked++
+		if !own[p.keys[i]] {
+			return p.others[i]
+		}
+	}
+	return ""
+}
 
 // recordedIntoExcept is recordedInto (deletefolder.go) for this pass's records, skipping
 // the film's own (own, by pathKey): another film's recorded file that is dir or lies in
@@ -202,21 +238,24 @@ func insideKey(p, d string) bool { return p == d || strings.HasPrefix(p, d+strin
 // can't be resolved counts: refuse rather than guess.
 func (p *otherFilesPass) recordedIntoExcept(dir string, own map[string]bool) string {
 	clean := filepath.Clean(dir)
-	key := pathKey(clean)
-	realDir, derr := p.probe.resolvePath(clean)
-	realKey := pathKey(realDir)
-	for i, o := range p.others {
-		if own[p.keys[i]] {
-			continue
-		}
-		if insideKey(p.keys[i], key) || derr != nil {
-			return o
-		}
-		if r, ok := p.resolvedKey(i); !ok || insideKey(r, realKey) {
-			return o
-		}
+	if o := p.firstNotOwn(p.under[pathKey(clean)], own); o != "" {
+		return o
 	}
-	return ""
+	realDir, derr := p.probe.resolvePath(clean)
+	if derr != nil {
+		for i := range p.others {
+			p.looked++
+			if !own[p.keys[i]] {
+				return p.others[i]
+			}
+		}
+		return ""
+	}
+	p.index()
+	if o := p.firstNotOwn(p.unresolved, own); o != "" {
+		return o
+	}
+	return p.firstNotOwn(p.realUnder[pathKey(realDir)], own)
 }
 
 // findOtherFiles looks through movie m's folder (the default file's) for its other files.
@@ -274,7 +313,9 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 			if e.IsDir() {
 				// Arrmada's hidden folders (the recycle bin, Convert's originals) and a
 				// system's are never the film's; links aren't followed (IsDir is false).
-				if level < depth && !library.SkipScanDir(name) {
+				// Nor a folder named as another film ("Alien (1979)/Aliens (1986)"): its
+				// videos are that film's, not this one's other files.
+				if level < depth && !library.SkipScanDir(name) && !s.anotherFilmsFolder(m, name) {
 					walk(full, r, level+1)
 				}
 				continue
@@ -320,6 +361,14 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 	walk(dir, "", 0)
 	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].RelPath < out.Files[j].RelPath })
 	return out, true
+}
+
+// anotherFilmsFolder reports whether a folder called name, inside film m's folder, is
+// named as a different film: a title and a year (the parser's reading) that aren't m's.
+// "Cuts", "Extended" or "Heat (1995) Extended" are not; "Aliens (1986)" is, in Alien's.
+func (s *Service) anotherFilmsFolder(m Movie, name string) bool {
+	r := parser.Parse(name)
+	return r.Year > 0 && strings.TrimSpace(r.Title) != "" && !s.folderNamedFor(m, name)
 }
 
 // refreshOtherFiles looks again at one film's folder and stores what it found (nothing is
@@ -515,7 +564,9 @@ func (r *Repo) pathRecorded(ctx context.Context, path string) (bool, error) {
 	return n > 0, err
 }
 
-// setOtherFiles stores what a look at a film's folder found.
+// setOtherFiles stores what a look at a film's folder found. When it's what the stored
+// row already says, nothing is written: a scan re-looking at an unchanged library makes
+// no writes (checked_at then keeps the time it last changed).
 func (r *Repo) setOtherFiles(ctx context.Context, id int64, of OtherFiles) error {
 	files := of.Files
 	if files == nil {
@@ -523,6 +574,18 @@ func (r *Repo) setOtherFiles(ctx context.Context, id int64, of OtherFiles) error
 	}
 	b, err := json.Marshal(files)
 	if err != nil {
+		return err
+	}
+	var (
+		count, shared, truncd int
+		stored                string
+	)
+	err = r.q().QueryRowContext(ctx, `SELECT file_count, files_json, shared, truncated FROM movie_other_files WHERE movie_id = ?`, id).
+		Scan(&count, &stored, &shared, &truncd)
+	if err == nil && count == of.Count && stored == string(b) && shared == boolToInt(of.Shared) && truncd == boolToInt(of.Truncated) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	_, err = r.q().ExecContext(ctx, `INSERT INTO movie_other_files (movie_id, file_count, files_json, shared, truncated, checked_at)
@@ -533,7 +596,12 @@ func (r *Repo) setOtherFiles(ctx context.Context, id int64, of OtherFiles) error
 	return err
 }
 
+// clearOtherFiles drops a film's stored look (no write when there's none).
 func (r *Repo) clearOtherFiles(ctx context.Context, id int64) error {
+	var n int
+	if err := r.q().QueryRowContext(ctx, `SELECT COUNT(*) FROM movie_other_files WHERE movie_id = ?`, id).Scan(&n); err != nil || n == 0 {
+		return err
+	}
 	_, err := r.q().ExecContext(ctx, `DELETE FROM movie_other_files WHERE movie_id = ?`, id)
 	return err
 }
