@@ -18,4 +18,11 @@ describe("manual import picker helpers", () => {
     expect(matchesFilter("anything", "")).toBe(true);
     expect(matchesFilter("Amélie.2001", "amélie")).toBe(true);
   });
+
+  it("folds accents both ways, as the server's search does", () => {
+    expect(matchesFilter("Amélie.2001.1080p", "amelie")).toBe(true);
+    expect(matchesFilter("Amelie.2001.1080p", "Amélie")).toBe(true);
+    expect(matchesFilter("Pokémon.Heroes.2002", "pokemon heroes")).toBe(true);
+    expect(matchesFilter("Pokémon.Heroes.2002", "pokemon villains")).toBe(false);
+  });
 });

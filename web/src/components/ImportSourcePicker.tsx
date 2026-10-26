@@ -24,10 +24,14 @@ export function mediaCount(kind: ImportKind, n: number, more?: boolean): string 
   return `${n}${more ? "+" : ""} ${n === 1 && !more ? one : many}`;
 }
 
+// fold lowercases and drops accents, as the server's search does, so "amelie" finds
+// "Amélie" and the other way round.
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
 // matchesFilter keeps the names holding every word typed, in any order ("dune 2160").
 export function matchesFilter(name: string, filter: string): boolean {
-  const words = filter.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  const hay = name.toLowerCase();
+  const words = fold(filter).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const hay = fold(name);
   return words.every((w) => hay.includes(w));
 }
 
