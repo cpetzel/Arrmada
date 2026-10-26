@@ -307,6 +307,9 @@ func TestAddOtherFileAsVersionRecordsInPlace(t *testing.T) {
 	if v.FilePath != extra || !v.HasFile || v.Monitored || v.Label != "2160p" {
 		t.Fatalf("version = %+v, want the file where it is, unmonitored, labelled 2160p", v)
 	}
+	if taken, err := e.svc.repo.pathRecorded(e.ctx, extra); err != nil || !taken {
+		t.Fatalf("pathRecorded = %v (%v), want true: a second add must find it taken", taken, err)
+	}
 	if after := listTree(t, filepath.Join(e.base, "Movies")); strings.Join(after, "|") != strings.Join(before, "|") {
 		t.Fatalf("the folder changed:\nbefore %v\nafter  %v", before, after)
 	}
@@ -408,5 +411,25 @@ func TestScanNotesOtherFiles(t *testing.T) {
 		if len(got) != 2 || got["Movie"] != 1 || got["Other"] != 0 {
 			t.Fatalf("scan %d: other files = %v, want Movie 1, Other 0", i+1, got)
 		}
+	}
+}
+
+// A record made through a link to the film's folder still points into it: the folder is
+// shared, and the other film's file is never listed as this one's.
+func TestOtherFilesRecordThroughALink(t *testing.T) {
+	e := newOtherEnv(t)
+	e.file(t, "Movies/Heat (1995)/Heat (1995).mkv", otherBig)
+	e.file(t, "Movies/Heat (1995)/Ronin (1998).mkv", otherBig)
+	if err := os.Symlink(filepath.Join(e.base, "Movies", "Heat (1995)"), filepath.Join(e.base, "Movies", "Alias")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	heat := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995).mkv")
+	e.film(t, 2, "Ronin", 1998, "Movies/Alias/Ronin (1998).mkv")
+	of, err := e.svc.OtherFilesLive(e.ctx, heat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !of.Shared || of.Count != 0 {
+		t.Fatalf("other files = %v (shared %v), want none, shared: Ronin's file is Ronin's", relNames(of), of.Shared)
 	}
 }

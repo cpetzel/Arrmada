@@ -114,10 +114,20 @@ func otherFileSkip(rel string, size int64) string {
 }
 
 // otherFilesPass is what one look through the library shares: every recorded file (so a
-// file another film records is never this one's other file) and one linkProbe over them.
+// file another film records is never this one's other file), and one linkProbe that
+// resolves each of them once. A scan looks at every film's folder in one pass, and
+// asking each folder about every record would otherwise lower-case and clean every
+// record's path again for every film.
 type otherFilesPass struct {
-	recorded map[string]bool // lower-cased clean paths of every recorded file
+	recorded map[string]bool // pathKey of every recorded file
+	others   []string        // every recorded file, as recorded
+	keys     []string        // pathKey of others[i]
+	resolved []string        // pathKey of others[i] with links resolved ("" = not yet)
+	failed   []bool          // others[i] couldn't be resolved
 	probe    *linkProbe
+	// real is the resolved pathKey of every record, built the first time a file is asked
+	// about (recordedAs): a file recorded through a link to its folder is still recorded.
+	real map[string]bool
 }
 
 func (s *Service) newOtherFilesPass(ctx context.Context) (*otherFilesPass, error) {
@@ -125,44 +135,84 @@ func (s *Service) newOtherFilesPass(ctx context.Context) (*otherFilesPass, error
 	if err != nil {
 		return nil, err
 	}
-	p := &otherFilesPass{recorded: make(map[string]bool, len(rps))}
-	paths := make([]string, 0, len(rps))
+	p := &otherFilesPass{recorded: make(map[string]bool, len(rps)), probe: newLinkProbe(nil)}
 	for _, rp := range rps {
-		p.recorded[pathKey(rp.path)] = true
-		paths = append(paths, rp.path)
+		p.note(rp.path)
 	}
-	p.probe = newLinkProbe(paths)
 	return p, nil
 }
 
-// note adds a file recorded during the pass (a scan's import).
+// note adds a recorded file (and, during a scan, one the scan just recorded).
 func (p *otherFilesPass) note(path string) {
 	if path == "" || p.recorded[pathKey(path)] {
 		return
 	}
-	p.recorded[pathKey(path)] = true
-	p.probe.others = append(p.probe.others, path)
+	k := pathKey(path)
+	p.recorded[k] = true
+	p.others = append(p.others, path)
+	p.keys = append(p.keys, k)
+	p.resolved = append(p.resolved, "")
+	p.failed = append(p.failed, false)
+	if p.real != nil {
+		if r, ok := p.resolvedKey(len(p.others) - 1); ok {
+			p.real[r] = true
+		}
+	}
+}
+
+// resolvedKey is others[i]'s pathKey with every link resolved, worked out once.
+func (p *otherFilesPass) resolvedKey(i int) (string, bool) {
+	if p.resolved[i] == "" && !p.failed[i] {
+		if ro, err := p.probe.resolvePath(p.others[i]); err != nil {
+			p.failed[i] = true
+		} else {
+			p.resolved[i] = pathKey(ro)
+		}
+	}
+	return p.resolved[i], !p.failed[i]
+}
+
+// recordedAs reports whether some film records the file at path: as written, or through
+// a link (the two resolve to one place). A path that can't be resolved counts as recorded:
+// it's left off the list rather than guessed at.
+func (p *otherFilesPass) recordedAs(path string) bool {
+	if p.recorded[pathKey(path)] {
+		return true
+	}
+	if p.real == nil {
+		p.real = make(map[string]bool, len(p.others))
+		for i := range p.others {
+			if r, ok := p.resolvedKey(i); ok {
+				p.real[r] = true
+			}
+		}
+	}
+	r, err := p.probe.resolvePath(path)
+	return err != nil || p.real[pathKey(r)]
 }
 
 func pathKey(p string) string { return strings.ToLower(filepath.Clean(p)) }
 
-// recordedIntoExcept is linkProbe.recordedInto skipping the film's own records (own, by
-// pathKey): another film's recorded file in or under dir, or "".
-func (p *linkProbe) recordedIntoExcept(dir string, own map[string]bool) string {
+// insideKey is pathInside for two pathKeys.
+func insideKey(p, d string) bool { return p == d || strings.HasPrefix(p, d+string(filepath.Separator)) }
+
+// recordedIntoExcept is recordedInto (deletefolder.go) for this pass's records, skipping
+// the film's own (own, by pathKey): another film's recorded file that is dir or lies in
+// or under it, as written or with every link resolved, or "". A record or a folder that
+// can't be resolved counts: refuse rather than guess.
+func (p *otherFilesPass) recordedIntoExcept(dir string, own map[string]bool) string {
 	clean := filepath.Clean(dir)
-	realDir, derr := p.resolvePath(clean)
-	for _, o := range p.others {
-		if own[pathKey(o)] {
+	key := pathKey(clean)
+	realDir, derr := p.probe.resolvePath(clean)
+	realKey := pathKey(realDir)
+	for i, o := range p.others {
+		if own[p.keys[i]] {
 			continue
 		}
-		if pathInside(o, clean) {
+		if insideKey(p.keys[i], key) || derr != nil {
 			return o
 		}
-		if derr != nil {
-			return o
-		}
-		ro, err := p.resolvePath(o)
-		if err != nil || pathInside(ro, realDir) {
+		if r, ok := p.resolvedKey(i); !ok || insideKey(r, realKey) {
 			return o
 		}
 	}
@@ -193,7 +243,7 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 			ownPaths = append(ownPaths, v.FilePath)
 		}
 	}
-	shared := s.ownFolder(m, dir) != "" || pass.probe.recordedIntoExcept(dir, own) != ""
+	shared := s.ownFolder(m, dir) != "" || pass.recordedIntoExcept(dir, own) != ""
 	depth := otherFilesDepth
 	if shared {
 		depth = 0
@@ -250,6 +300,10 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 				}
 			}
 			if sameAsOwn {
+				continue
+			}
+			// Last, as it can mean resolving every record once: recorded through a link.
+			if pass.recordedAs(full) {
 				continue
 			}
 			out.Count++
@@ -412,6 +466,13 @@ func (s *Service) AddOtherFileAsVersion(ctx context.Context, id, versionID int64
 		if cur.HasFile || cur.FilePath != "" {
 			return ErrVersionHasFile
 		}
+		// Nor may any track have recorded the file meanwhile (a second click, another tab).
+		if taken, err := r.pathRecorded(ctx, file.Path); err != nil || taken {
+			if err != nil {
+				return err
+			}
+			return ErrNotOtherFile
+		}
 		if err := r.SetVersionFile(ctx, v.ID, file.Path, media.SizeBytes, mediaJSONOf(media)); err != nil {
 			return err
 		}
@@ -452,6 +513,15 @@ func defaultOtherLabel(f OtherFile) string {
 		return f.Resolution
 	}
 	return "Other copy"
+}
+
+// pathRecorded reports whether any film's track records path.
+func (r *Repo) pathRecorded(ctx context.Context, path string) (bool, error) {
+	var n int
+	err := r.q().QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM movies WHERE movie_file_path = ?) +
+		(SELECT COUNT(*) FROM movie_versions WHERE file_path = ?)`, path, path).Scan(&n)
+	return n > 0, err
 }
 
 // setOtherFiles stores what a look at a film's folder found.
