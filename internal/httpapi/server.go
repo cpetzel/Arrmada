@@ -191,6 +191,7 @@ type api struct {
 	codeLimit     *codeLimiter  // two-factor code attempts per account (twofactor_limit.go)
 	icsLimiter    *loginLimiter // throttles calendar feed fetches per address (calendar_ics.go)
 	widgetLimiter *loginLimiter // throttles wrong dashboard widget keys per address (widget.go)
+	picker        pickerGate    // manual-import folder walks running at once (importpicker.go)
 	// keySprayLimiter is the per-address ceiling on wrong personal API keys (auth.go).
 	keySprayLimiter *loginLimiter
 	plexPins        *plexPinGuard // which browser (and account) started each Plex PIN
@@ -648,6 +649,7 @@ func (a *api) registerRoutes(mux *router) {
 	mux.HandleFunc("POST /api/v1/series/{id}/refresh", a.requireRole(auth.RoleManager, a.handleRefreshSeries))
 	mux.HandleFunc("GET /api/v1/series/{id}/manualimport", a.requireRole(auth.RoleManager, a.handleSeriesManualImportList))
 	mux.HandleFunc("POST /api/v1/series/{id}/manualimport", a.requireRole(auth.RoleManager, a.handleSeriesManualImport))
+	mux.HandleFunc("GET /api/v1/series/{id}/manualimport/suggestions", a.requireRole(auth.RoleManager, a.handleSeriesImportSuggestions))
 	mux.HandleFunc("GET /api/v1/series/{id}/duplicates", a.requireRole(auth.RoleManager, a.handleSeriesDuplicates))
 	mux.HandleFunc("DELETE /api/v1/series/{id}/duplicates", a.requireRole(auth.RoleManager, a.handleDeleteSeriesDuplicate))
 	mux.HandleFunc("GET /api/v1/series/{id}/numbering", a.requireRole(auth.RoleManager, a.handleSeriesNumbering))
@@ -892,6 +894,7 @@ func (a *api) registerRoutes(mux *router) {
 	mux.HandleFunc("POST /api/v1/books/{id}/grab", a.requireRole(auth.RoleManager, a.handleGrabBook))
 	mux.HandleFunc("GET /api/v1/books/{id}/manualimport", a.requireRole(auth.RoleManager, a.handleBookManualImportList))
 	mux.HandleFunc("POST /api/v1/books/{id}/manualimport", a.requireRole(auth.RoleManager, a.handleBookManualImport))
+	mux.HandleFunc("GET /api/v1/books/{id}/manualimport/suggestions", a.requireRole(auth.RoleManager, a.handleBookImportSuggestions))
 	mux.HandleFunc("POST /api/v1/books/{id}/rename", a.requireRole(auth.RoleManager, a.handleBookRename))
 	mux.HandleFunc("GET /api/v1/books/{id}/history", a.requireRole(auth.RoleManager, a.handleBookHistory))
 	mux.HandleFunc("POST /api/v1/books/{id}/rematch", a.requireRole(auth.RoleManager, a.handleRematchBook))
@@ -1025,6 +1028,11 @@ func (a *api) registerRoutes(mux *router) {
 	mux.HandleFunc("PUT /api/v1/movies/{id}/availability", a.requireRole(auth.RoleManager, a.handleSetAvailability))
 	mux.HandleFunc("GET /api/v1/movies/{id}/manualimport", a.requireRole(auth.RoleManager, a.handleManualImportList))
 	mux.HandleFunc("POST /api/v1/movies/{id}/manualimport", a.requireRole(auth.RoleManager, a.handleManualImport))
+	mux.HandleFunc("GET /api/v1/movies/{id}/manualimport/suggestions", a.requireRole(auth.RoleManager, a.handleMovieImportSuggestions))
+	// The manual-import folder picker (importpicker.go): browse and search inside the
+	// import roots only, by the same staff who may import from them.
+	mux.HandleFunc("GET /api/v1/manualimport/folders", a.requireRole(auth.RoleManager, a.handleImportBrowse))
+	mux.HandleFunc("GET /api/v1/manualimport/search", a.requireRole(auth.RoleManager, a.handleImportSearch))
 	mux.HandleFunc("GET /api/v1/movies/{id}/rename", a.requireRole(auth.RoleManager, a.handleRenamePreview))
 	mux.HandleFunc("POST /api/v1/movies/{id}/rename", a.requireRole(auth.RoleManager, a.handleRename))
 	// Multi-version tracks (opt-in)

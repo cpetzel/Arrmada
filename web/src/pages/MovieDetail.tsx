@@ -48,6 +48,7 @@ import { MovieSubtitles } from "../components/subtitles/MovieSubtitles";
 import { TitleProfilePicker } from "./subtitles/ProfileSelect";
 import { movieStatus, trackStatus } from "../lib/movieStatus";
 import { Page } from "../ui/Page";
+import { ImportSourcePicker } from "../components/ImportSourcePicker";
 
 // The "Display title…" picker: loaded when it opens.
 const DisplayTitleDialog = lazy(() => import("../components/DisplayTitleDialog"));
@@ -1455,13 +1456,19 @@ function ManualImportModal({ movie, versionId, onClose, onImported }: { movie: M
   const tracks = movie.versions ?? [];
   const [into, setInto] = useState<string>(versionId === undefined ? "auto" : String(versionId));
   const target = into === "auto" ? undefined : Number(into);
+  // Where to look: null is the downloads folder; the picker can point anywhere inside the
+  // downloads and library folders.
+  const [source, setSource] = useState<string | null>(null);
 
   useEffect(() => {
+    setCands(null);
+    setError(null);
+    setNotice(null);
     api
-      .manualImportList(movie.id)
+      .manualImportList(movie.id, source ?? undefined)
       .then((r) => { setCands(r.candidates); setNotice(importListNotice(r)); })
-      .catch((e: Error) => setError(e.message));
-  }, [movie.id]);
+      .catch((e: Error) => { setCands([]); setError(e.message); });
+  }, [movie.id, source]);
 
   const doImport = async (path: string) => {
     setImporting(path);
@@ -1487,13 +1494,14 @@ function ManualImportModal({ movie, versionId, onClose, onImported }: { movie: M
           </select>
         </div>
       )}
+      <ImportSourcePicker kind="movies" id={movie.id} path={source} onPick={setSource} disabled={importing !== null} />
       {error && <div className="mb-2 text-sm" style={{ color: "var(--reject-text)" }}>{error}</div>}
       {notice && <div className="mb-2 text-sm text-ink-faint">{notice}</div>}
       <div className="thin-scroll max-h-[52vh] overflow-y-auto">
         {cands === null ? (
           <div className="p-6 text-center text-base text-ink-dim">Scanning…</div>
         ) : cands.length === 0 ? (
-          <div className="p-6 text-center text-base text-ink-dim">No importable video files found in the downloads folder.</div>
+          <div className="p-6 text-center text-base text-ink-dim">{error ? "" : `No importable video files found in ${source ? "this folder" : "the downloads folder"}.`}</div>
         ) : (
           cands.map((c) => (
             <button key={c.path} onClick={() => doImport(c.path)} disabled={importing !== null} className="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition-colors hover:bg-[var(--panel-2)]">

@@ -3,6 +3,8 @@ import { IconButton, Modal } from "../../ui";
 import { importListNotice, type Series as SeriesT, type SeriesImportCandidate } from "../../lib/api";
 import { seriesApi } from "../../lib/seriesApi";
 import { fmtSize } from "./util";
+import { ImportSourcePicker } from "../../components/ImportSourcePicker";
+import { manualImportApi } from "../../lib/manualImportApi";
 
 export function ManualImportModal({ series, onClose, onImported, onBackground }: { series: SeriesT; onClose: () => void; onImported: () => void; onBackground: (jobId?: number) => void }) {
   const [cands, setCands] = useState<SeriesImportCandidate[] | null>(null);
@@ -10,10 +12,17 @@ export function ManualImportModal({ series, onClose, onImported, onBackground }:
   const titleId = useId();
   const [importing, setImporting] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Where to look: null is the downloads folder; the picker can point anywhere inside the
+  // downloads and library folders.
+  const [source, setSource] = useState<string | null>(null);
+  const list = () => manualImportApi.list<SeriesImportCandidate>("series", series.id, source);
 
   useEffect(() => {
-    seriesApi.seriesManualImportList(series.id).then((r) => { setCands(r.candidates); setNotice(importListNotice(r)); }).catch((e: Error) => setError(e.message));
-  }, [series.id]);
+    setCands(null);
+    setError(null);
+    setNotice(null);
+    list().then((r) => { setCands(r.candidates); setNotice(importListNotice(r)); }).catch((e: Error) => { setCands([]); setError(e.message); });
+  }, [series.id, source]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Whole-folder imports. A season pack is dozens of files and clicking each one is not a
   // realistic way to import it — and importing the folder runs the full pipeline (quality
@@ -49,7 +58,7 @@ export function ManualImportModal({ series, onClose, onImported, onBackground }:
       }
       onImported();
       // refresh the list so the imported file drops off
-      const r = await seriesApi.seriesManualImportList(series.id);
+      const r = await list();
       setCands(r.candidates);
       setNotice(importListNotice(r));
     } catch (e) {
@@ -66,6 +75,7 @@ export function ManualImportModal({ series, onClose, onImported, onBackground }:
         <IconButton label="Close" onClick={onClose} className="text-ink-faint hover:text-[var(--ink)]">✕</IconButton>
       </div>
       <p className="mb-3 text-sm text-ink-dim">Pick episode files already on disk to import as <b>{series.title}</b>. Season/episode is detected from each filename; files are renamed to the library scheme.</p>
+      <ImportSourcePicker kind="series" id={series.id} path={source} onPick={setSource} disabled={importing !== null} />
       {error && <div className="mb-2 text-sm" style={{ color: "var(--reject-text)" }}>{error}</div>}
       {background && (
         <div className="mb-3 rounded-lg p-3 text-sm" style={{ border: "1px solid var(--accent-line)", background: "var(--accent-soft)", color: "var(--accent-text)" }}>
@@ -102,7 +112,7 @@ export function ManualImportModal({ series, onClose, onImported, onBackground }:
         {cands === null ? (
           <div className="p-6 text-center text-base text-ink-dim">Scanning…</div>
         ) : cands.length === 0 ? (
-          <div className="p-6 text-center text-base text-ink-dim">No importable video files found in the downloads folder.</div>
+          <div className="p-6 text-center text-base text-ink-dim">{error ? "" : `No importable video files found in ${source ? "this folder" : "the downloads folder"}.`}</div>
         ) : (
           cands.map((c) => {
             const detected = c.season > 0 && c.episode > 0;

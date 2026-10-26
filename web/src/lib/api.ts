@@ -3482,8 +3482,6 @@ export const api = {
   bookReleases: (id: number) => req<ReleaseList>(`/api/v1/books/${id}/releases`),
   grabBook: (id: number, body: { token: string; version_id?: number }) =>
     req<{ status: string }>(`/api/v1/books/${id}/grab`, { method: "POST", body: JSON.stringify(body) }),
-  bookManualImportList: (id: number) =>
-    req<ManualImportList<BookImportCandidate>>(`/api/v1/books/${id}/manualimport`),
   bookManualImport: (id: number, path: string, versionId?: number) =>
     req<{ status: string }>(`/api/v1/books/${id}/manualimport`, { method: "POST", body: JSON.stringify({ path, version_id: versionId || 0 }) }),
   addAudioVersion: (id: number, body: { label: string; terms: string[]; monitored: boolean }) =>

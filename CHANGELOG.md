@@ -189,6 +189,14 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
+- **Manual import can look anywhere you gave Arrmada, not just the downloads folder.** On a
+  movie, show or book, **Manual import** now opens with the finished downloads whose names
+  match it (in your download clients, Not managed ones included, or sitting in a downloads
+  folder), one click to use. **Choose a folder…** browses your downloads and library folders
+  with how many videos (or book files) each folder holds and a filter, searches every
+  downloads folder by name, or takes a typed path. It only ever shows folders inside your
+  downloads and library folders, never Arrmada's own data folder, and doesn't follow links
+  that lead outside them.
 - **A global seed goal** (#78). Settings → Downloads → **Seeding** sets a ratio and a
   seeding time for indexers set to **Use the global default**, so you don't have to type the
   same limits on each indexer. It only ever applies going forward, and only where you choose
