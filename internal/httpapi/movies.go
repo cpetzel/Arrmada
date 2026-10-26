@@ -766,6 +766,25 @@ func (a *api) handleDeleteVersion(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleUntrackVersion is "Stop tracking (keep the file)": POST
+// /api/v1/movies/{id}/versions/{vid}/untrack removes an extra version's record and leaves
+// its file on disk.
+func (a *api) handleUntrackVersion(w http.ResponseWriter, r *http.Request) {
+	id, v, ok := a.extraVersion(w, r)
+	if !ok {
+		return
+	}
+	if err := a.deps.Movies.UntrackVersion(r.Context(), id, v.ID); err != nil {
+		if errors.Is(err, movies.ErrNotFound) {
+			a.writeError(w, http.StatusNotFound, "that version isn't one of this movie's")
+			return
+		}
+		a.writeError(w, http.StatusInternalServerError, "could not stop tracking the version")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleDeleteVersionFile deletes a version's file (vid 0 = the default track).
 func (a *api) handleDeleteVersionFile(w http.ResponseWriter, r *http.Request) {
 	id, ok := a.pathID(w, r)

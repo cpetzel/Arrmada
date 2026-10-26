@@ -444,3 +444,36 @@ func TestOtherFilesRecordThroughALink(t *testing.T) {
 		t.Fatalf("other files = %v (shared %v), want none, shared: Ronin's file is Ronin's", relNames(of), of.Shared)
 	}
 }
+
+// Stop tracking (keep the file): the version's record goes, its file stays exactly where it
+// was, and it's one of the film's other files again. Remove version, by contrast, recycles it.
+func TestUntrackVersionKeepsTheFile(t *testing.T) {
+	e := newOtherEnv(t)
+	e.file(t, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv", otherBig)
+	extra := e.file(t, "Movies/Heat (1995)/Heat (1995) Copy 2160p.mkv", otherBig)
+	m := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv")
+	v, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, extra, "", "hd", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := listTree(t, filepath.Join(e.base, "Movies"))
+	other, _ := e.svc.repo.Create(e.ctx, Movie{TMDBID: 9, Title: "Ronin", Year: 1998})
+	if err := e.svc.UntrackVersion(e.ctx, other.ID, v.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("through another film: err = %v, want ErrNotFound", err)
+	}
+	if err := e.svc.UntrackVersion(e.ctx, m.ID, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(extra); err != nil {
+		t.Fatalf("the file after Stop tracking: %v", err)
+	}
+	if after := listTree(t, filepath.Join(e.base, "Movies")); strings.Join(after, "|") != strings.Join(before, "|") {
+		t.Fatalf("the folder changed:\nbefore %v\nafter  %v", before, after)
+	}
+	if vs, _ := e.svc.repo.ListVersions(e.ctx, m.ID); len(vs) != 0 {
+		t.Fatalf("versions = %+v, want none", vs)
+	}
+	if st := e.svc.StoredOtherFiles(e.ctx, m); st == nil || st.Count != 1 {
+		t.Fatalf("stored other files = %+v, want the file back", st)
+	}
+}
