@@ -443,14 +443,12 @@ POST /api/v1/movies/{id}/grabtorrent staff -
 POST /api/v1/movies/{id}/manualimport staff -
 POST /api/v1/movies/{id}/move staff -
 POST /api/v1/movies/{id}/move/preview staff -
-POST /api/v1/movies/{id}/other-files/version staff -
 POST /api/v1/movies/{id}/refresh staff -
 POST /api/v1/movies/{id}/regrab staff -
 POST /api/v1/movies/{id}/rename staff -
 POST /api/v1/movies/{id}/resume-upgrades staff -
 POST /api/v1/movies/{id}/search staff -
 POST /api/v1/movies/{id}/versions staff -
-POST /api/v1/movies/{id}/versions/{vid}/untrack staff -
 POST /api/v1/music/albums/{id}/grab staff -
 POST /api/v1/music/albums/{id}/notes/{note}/resolve staff -
 POST /api/v1/music/albums/{id}/rename staff -

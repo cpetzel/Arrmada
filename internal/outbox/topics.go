@@ -30,9 +30,8 @@ type MovieImported struct {
 const (
 	ChangeRenamed     = "renamed"
 	ChangeFileDeleted = "file_deleted"
-	ChangeDeleted     = "deleted"   // the movie itself is gone
-	ChangeDetected    = "detected"  // a rescan found a different file on disk
-	ChangeUntracked   = "untracked" // a version's record went; its file stays on disk
+	ChangeDeleted     = "deleted"  // the movie itself is gone
+	ChangeDetected    = "detected" // a rescan found a different file on disk
 )
 
 // MovieChanged is TopicMovieChanged's payload.

@@ -35,7 +35,7 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   when the recorded file is gone, and never takes a file another version or film records;
   with none left, the record is cleared as before. A recorded file under 50 MB is no longer
   cleared as "no video". If you relied on a rescan to swap in a bigger copy, import it by
-  hand or add it as a version from the film's **+1 other file** list.
+  hand.
 - **What a show's rescan and duplicate check read is narrower** (#56). They no longer read a
   folder inside the show's that holds another show (hidden, nested, or under Other or
   Bonus), Plex extras folders, a file named as another show in your library, a video
@@ -201,7 +201,8 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   (another cut, an old copy, a second film left there), the film's page shows **+1 other
   file** by its file, and the Movies library has a **Has other files** filter and a small
   **+1** on the poster. A library scan or **Refresh & rescan** notes them, and the chip's
-  list looks again. It only lists them: nothing moves, renames or deletes a file.
+  list looks again. It only says they're there and not tracked: nothing is moved, renamed,
+  recorded or deleted, and there's nothing to do with them from the list.
   - Not counted: the film's own files and any other film's, samples (named so, in a Sample
     folder, or under 50 MB), Plex and Jellyfin extras (names ending `-trailer`,
     `-featurette`, `-behindthescenes`, `-deleted`, `-interview`, `-scene`, `-short`,
@@ -211,12 +212,6 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   - A folder that isn't plainly the film's own (not named for it, or another film in your
     library has a file there) is looked at only at its top level, and only files no film
     uses count. A film loose in a Movies folder has nothing listed.
-  - **Add as a version** records a listed file, where it is and under its own name, as a
-    new extra version, unmonitored so no upgrade replaces the file. From then on it's like
-    any file Arrmada tracks: Rename or Organize may move it to your naming scheme's path,
-    and Convert may convert it if automatic converting is on.
-- **Stop tracking (keep the file)** on an extra version forgets the version and leaves its
-  file where it is. **Remove version** still moves the file to the recycle bin.
 - **A global seed goal** (#78). Settings → Downloads → **Seeding** sets a ratio and a
   seeding time for indexers set to **Use the global default**, so you don't have to type the
   same limits on each indexer. It only ever applies going forward, and only where you choose

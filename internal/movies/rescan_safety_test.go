@@ -8,7 +8,7 @@ import (
 
 // A rescan adopts a new default file only when the recorded one is gone from disk, and
 // never a file a track of any film records. Before, it took the folder's biggest video
-// whenever that differed from the record: an adopted 2160p copy (a version) became the
+// whenever that differed from the record: a bigger 2160p version beside it became the
 // default's file too, two tracks held one path, and "Remove version" recycled the file
 // the default still recorded.
 
@@ -17,8 +17,11 @@ func TestRescanKeepsDefaultWhenAVersionIsBigger(t *testing.T) {
 	def := e.file(t, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv", otherBig)
 	big := e.file(t, "Movies/Heat (1995)/Heat (1995) Copy 2160p.mkv", otherBig+(20<<20))
 	m := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995) Bluray-1080p.mkv")
-	v, err := e.svc.AddOtherFileAsVersion(e.ctx, m.ID, big, "", "hd", "")
+	v, err := e.svc.repo.CreateVersion(e.ctx, m.ID, Version{Label: "2160p", QualityProfile: "uhd"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.repo.SetVersionFile(e.ctx, v.ID, big, otherBig+(20<<20), ""); err != nil {
 		t.Fatal(err)
 	}
 	// Refresh, as the page's button does (TMDB knows nothing here; the rescan still runs).

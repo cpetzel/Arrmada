@@ -376,46 +376,6 @@ func (s *Service) DeleteVersion(ctx context.Context, versionID int64) error {
 	})
 }
 
-// UntrackVersion is "Stop tracking (keep the file)": it removes an extra version's record
-// and leaves its file exactly where it is — the undo for Add as a version, and for any
-// version whose file the owner wants to keep but Arrmada to forget. It never touches the
-// disk. Convert, Subtitles and Plex re-read the film's record, which no longer has the
-// file; the file shows among the film's other files again.
-func (s *Service) UntrackVersion(ctx context.Context, movieID, versionID int64) error {
-	v, owner, err := s.repo.GetVersion(ctx, versionID)
-	if err != nil {
-		return err
-	}
-	if owner != movieID {
-		return ErrNotFound // another movie's track: never through this one
-	}
-	detail := "Stopped tracking version: " + v.Label
-	if v.FilePath != "" {
-		detail += " (kept " + filepath.Base(v.FilePath) + " on disk)"
-	}
-	err = s.repo.inTx(ctx, func(tx *sql.Tx, r *Repo) error {
-		if err := r.DeleteVersion(ctx, versionID); err != nil {
-			return err
-		}
-		_ = r.AddEvent(ctx, movieID, "version_untracked", detail)
-		if v.FilePath == "" {
-			return nil
-		}
-		return s.enqueue(ctx, tx, outbox.TopicMovieChanged,
-			outbox.MovieChanged{MovieID: movieID, VersionID: versionID, Change: outbox.ChangeUntracked, Path: v.FilePath}, movieKey(movieID))
-	})
-	if err != nil {
-		return err
-	}
-	s.publish("movie.version_untracked", map[string]any{"id": movieID, "version_id": versionID, "path": v.FilePath})
-	if m, gerr := s.repo.Get(ctx, movieID); gerr == nil {
-		if _, oerr := s.refreshOtherFiles(ctx, nil, m, nil); oerr != nil {
-			s.log.Warn("couldn't note the film's other files again", "title", m.Title, "err", oerr)
-		}
-	}
-	return nil
-}
-
 // DeleteVersionFile deletes a version's file (vid 0 = the default version). If the bin
 // refuses the file, nothing changes.
 func (s *Service) DeleteVersionFile(ctx context.Context, movieID, versionID int64) error {

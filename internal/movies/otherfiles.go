@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,9 +19,8 @@ import (
 // Other files are the videos in a film's folder that Arrmada doesn't use: another cut, an
 // old copy kept by hand, a second film someone left in the folder. Arrmada only notes
 // them — a library scan or a refresh looks, the movies list shows how many, and the film's
-// page lists them. Nothing here moves, renames or deletes a file. The one thing the page
-// can do with one is record it, where it is, as an extra version of the film
-// (AddOtherFileAsVersion).
+// page lists them. Nothing here moves, renames, records or deletes a file, and the page
+// offers no action on one: it only says the file is there and not tracked.
 //
 // What doesn't count, so the list is only what the owner would want to know about:
 //   - the film's own files (every track's), and any file another film records;
@@ -442,126 +440,6 @@ func (s *Service) noteOtherFilesInScan(ctx context.Context, pass *otherFilesPass
 	if _, err := s.refreshOtherFiles(ctx, pass, m, versions); err != nil {
 		s.log.Warn("library scan: couldn't note the other files in a film's folder", "title", m.Title, "err", err)
 	}
-}
-
-// ErrNotOtherFile is a path that isn't one of the film's other files (any more).
-var ErrNotOtherFile = errors.New("that file isn't one of this film's other files — look at the list again")
-
-// ErrVersionHasFile is a new version that gained a file before the other file could be
-// recorded on it (a grab landing at that moment): recording it would replace that file.
-var ErrVersionHasFile = errors.New("the new version got a file of its own meanwhile — nothing was recorded")
-
-// AddOtherFileAsVersion records one of the film's other files, where it is and under its
-// own name, as the file of a NEW extra version (label, profile, edition), unmonitored so
-// no upgrade or search ever replaces it. Never an existing version: one may be monitored
-// or have a grab in flight, which would replace (recycle) the hand-kept file. The file
-// isn't moved, renamed, linked or copied: this is the library scan's attach
-// (attachExisting), for a version. Renaming it to the version's name is left to Rename,
-// which previews first.
-func (s *Service) AddOtherFileAsVersion(ctx context.Context, id int64, path, label, profile, edition string) (Version, error) {
-	m, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return Version{}, err
-	}
-	// Only a file the folder holds now, by the same rules the list shows.
-	of, err := s.refreshOtherFiles(ctx, nil, m, nil)
-	if err != nil {
-		return Version{}, err
-	}
-	var file OtherFile
-	found := false
-	for _, f := range of.Files {
-		if filepath.Clean(f.Path) == filepath.Clean(path) {
-			file, found = f, true
-			break
-		}
-	}
-	if !found {
-		return Version{}, ErrNotOtherFile
-	}
-	// Read once, before anything is written (a probe can take seconds, and a file gone
-	// meanwhile leaves no version behind).
-	media := s.probeTrack(file.Path)
-	if media == nil || media.Missing {
-		return Version{}, ErrNotOtherFile
-	}
-	if strings.TrimSpace(label) == "" {
-		label = defaultOtherLabel(file)
-	}
-	v, err := s.AddVersion(ctx, id, strings.TrimSpace(label), profile, edition, false)
-	if err != nil {
-		return Version{}, err
-	}
-	err = s.repo.inTx(ctx, func(_ *sql.Tx, r *Repo) error {
-		// Re-check inside the transaction: an import may have landed on the version since.
-		cur, owner, err := r.GetVersion(ctx, v.ID)
-		if err != nil || owner != id {
-			return ErrVersionNotFound
-		}
-		if cur.HasFile || cur.FilePath != "" {
-			return ErrVersionHasFile
-		}
-		// Nor may any track have recorded the file meanwhile (a second click, another tab).
-		if taken, err := r.pathRecorded(ctx, file.Path); err != nil || taken {
-			if err != nil {
-				return err
-			}
-			return ErrNotOtherFile
-		}
-		if err := r.SetVersionFile(ctx, v.ID, file.Path, media.SizeBytes, mediaJSONOf(media)); err != nil {
-			return err
-		}
-		if err := r.SetVersionSourceRelease(ctx, v.ID, ""); err != nil {
-			return err
-		}
-		if err := r.ClearConvertedFrom(ctx, id, v.ID); err != nil {
-			return err
-		}
-		_ = r.AddEvent(ctx, id, "detected", fmt.Sprintf("Recorded %s as the %s version (left where it was)", file.RelPath, cur.Label))
-		return nil
-	})
-	if err != nil {
-		// The version was made for this file alone: it goes with the failure — unless
-		// something recorded a file on it meanwhile, which then keeps its version.
-		if errors.Is(err, ErrVersionHasFile) {
-			return Version{}, err
-		}
-		if derr := s.repo.DeleteVersion(ctx, v.ID); derr != nil {
-			s.log.Warn("couldn't remove the version made for an other file", "version", v.ID, "err", derr)
-		}
-		return Version{}, err
-	}
-	s.log.Info("recorded a file in the film's folder as a version", "title", m.Title, "path", file.Path, "version", v.Label)
-	// For the page only: no title, so no "Imported" alert for a file that was already there.
-	s.publish("movie.downloaded", map[string]any{"id": id, "version_id": v.ID, "path": file.Path, "source": "scan"})
-	if _, err := s.refreshOtherFiles(ctx, nil, m, nil); err != nil {
-		s.log.Warn("couldn't note the film's other files again", "title", m.Title, "err", err)
-	}
-	out, _, err := s.repo.GetVersion(ctx, v.ID)
-	if err != nil {
-		return v, nil
-	}
-	return out, nil
-}
-
-// defaultOtherLabel names a new version after its file's resolution ("2160p"), else "Other copy".
-func defaultOtherLabel(f OtherFile) string {
-	if r := parser.Parse(f.Name); r.Edition != "" {
-		return r.Edition
-	}
-	if f.Resolution != "" {
-		return f.Resolution
-	}
-	return "Other copy"
-}
-
-// pathRecorded reports whether any film's track records path.
-func (r *Repo) pathRecorded(ctx context.Context, path string) (bool, error) {
-	var n int
-	err := r.q().QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM movies WHERE movie_file_path = ?) +
-		(SELECT COUNT(*) FROM movie_versions WHERE file_path = ?)`, path, path).Scan(&n)
-	return n > 0, err
 }
 
 // setOtherFiles stores what a look at a film's folder found. When it's what the stored

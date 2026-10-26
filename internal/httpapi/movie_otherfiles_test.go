@@ -12,12 +12,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tristenlammi/arrmada/internal/auth"
 	"github.com/tristenlammi/arrmada/internal/movies"
 	"github.com/tristenlammi/arrmada/internal/store"
 )
 
 // The film page's other files: GET lists the videos in its folder Arrmada doesn't use,
-// POST records one where it is as a new version, and the detail endpoint carries the count.
+// and the detail endpoint carries the count.
 func TestMovieOtherFilesEndpoints(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -55,7 +56,6 @@ func TestMovieOtherFilesEndpoints(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/movies/{id}/other-files", a.handleMovieOtherFiles)
-	mux.HandleFunc("POST /api/v1/movies/{id}/other-files/version", a.handleAddOtherFileAsVersion)
 	mux.HandleFunc("GET /api/v1/movies/{id}", a.handleGetMovie)
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -83,29 +83,31 @@ func TestMovieOtherFilesEndpoints(t *testing.T) {
 		t.Fatalf("detail other_files = %+v (%v), want a count of 1", detail.OtherFiles, err)
 	}
 
-	body, _ := json.Marshal(map[string]any{"path": filepath.Join(dir, "Heat (1995)-trailer.mkv")})
-	if rec := do("POST", "/api/v1/movies/1/other-files/version", string(body)); rec.Code != http.StatusConflict {
-		t.Fatalf("a trailer as a version: %d %s, want 409", rec.Code, rec.Body)
+	// Read-only: there is no action on an other file.
+	if rec := do("POST", "/api/v1/movies/1/other-files/version", `{"path":"x"}`); rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
+		t.Fatalf("POST other-files/version: %d, want no such route", rec.Code)
 	}
-	// Never into an existing version: the body takes no version_id.
-	body, _ = json.Marshal(map[string]any{"path": extra, "version_id": 3})
-	if rec := do("POST", "/api/v1/movies/1/other-files/version", string(body)); rec.Code != http.StatusBadRequest {
-		t.Fatalf("with a version_id: %d %s, want 400", rec.Code, rec.Body)
+}
+
+// Through the real router: the other-files list is staff-only.
+func TestOtherFilesRouteIsStaffOnly(t *testing.T) {
+	root := t.TempDir()
+	s := newRouteServer(t, func(d *Deps) {
+		d.Movies = movies.NewService(d.Store.DB(), nil, nil, root, "", nil, d.Log)
+	})
+	_, kid := s.user(t, "kid@example.com", auth.RoleRequester)
+	_, mgr := s.user(t, "mgr@example.com", auth.RoleManager)
+	if _, err := s.st.DB().Exec(`INSERT INTO movies (id, tmdb_id, title, year, has_file, movie_file_path) VALUES (1, 1, 'Heat', 1995, 1, ?)`,
+		filepath.Join(root, "Heat (1995)", "Heat (1995).mkv")); err != nil {
+		t.Fatal(err)
 	}
-	body, _ = json.Marshal(map[string]any{"path": extra, "label": "4K copy"})
-	rec = do("POST", "/api/v1/movies/1/other-files/version", string(body))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("add as a version: %d %s", rec.Code, rec.Body)
+	if rec := s.do("GET", "/api/v1/movies/1/other-files", kid); rec.Code != http.StatusForbidden {
+		t.Errorf("requester: HTTP %d, want 403", rec.Code)
 	}
-	var v movies.Version
-	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || v.Label != "4K copy" || v.FilePath != extra || v.Monitored {
-		t.Fatalf("version = %+v (%v), want '4K copy' holding the file where it is, unmonitored", v, err)
+	if rec := s.do("GET", "/api/v1/movies/1/other-files", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous: HTTP %d, want 401", rec.Code)
 	}
-	if _, err := os.Stat(extra); err != nil {
-		t.Fatalf("the file must stay where it was: %v", err)
-	}
-	rec = do("GET", "/api/v1/movies/1/other-files", "")
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || list.Count != 0 {
-		t.Fatalf("after: %+v (%v), want none", list, err)
+	if rec := s.do("GET", "/api/v1/movies/1/other-files", mgr); rec.Code != http.StatusOK {
+		t.Fatalf("manager: HTTP %d %s", rec.Code, rec.Body)
 	}
 }

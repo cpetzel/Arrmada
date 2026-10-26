@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Movie, MovieOtherFiles } from "../../lib/api";
-import { qualityApi } from "../../lib/qualityApi";
 import { OtherFilesChip, otherFilesApi, otherFilesLabel } from "./OtherFiles";
 
 // The film page's "+N other files" chip: shown only when the last look found some, and
-// opening a list (looked at again) whose one action records a file as a version.
+// opening a read-only list (looked at again) of the files in the folder Arrmada doesn't
+// track. No action on a file.
 
 afterEach(() => {
   cleanup();
@@ -27,59 +27,31 @@ describe("other files chip", () => {
   it("counts the files, and isn't there without any", () => {
     expect(otherFilesLabel(1)).toBe("+1 other file");
     expect(otherFilesLabel(3)).toBe("+3 other files");
-    const { rerender } = render(<OtherFilesChip movie={movie()} onChange={() => {}} />);
+    const { rerender } = render(<OtherFilesChip movie={movie()} />);
     expect(screen.getByRole("button", { name: "+1 other file" })).toBeTruthy();
-    rerender(<OtherFilesChip movie={movie({ other_files: { count: 0, files: [] } })} onChange={() => {}} />);
+    rerender(<OtherFilesChip movie={movie({ other_files: { count: 0, files: [] } })} />);
     expect(screen.queryByRole("button")).toBeNull();
-    rerender(<OtherFilesChip movie={movie({ has_file: false })} onChange={() => {}} />);
+    rerender(<OtherFilesChip movie={movie({ has_file: false })} />);
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("opens the list and records a file as a new version, where it is", async () => {
+  it("opens a read-only list: name, path, size and resolution", async () => {
     vi.spyOn(otherFilesApi, "list").mockResolvedValue(listed);
-    vi.spyOn(qualityApi, "qualityProfiles").mockResolvedValue({ profiles: [{ key: "uhd", name: "4K", is_default: true }] } as unknown as Awaited<ReturnType<typeof qualityApi.qualityProfiles>>);
-    const add = vi.spyOn(otherFilesApi, "addAsVersion").mockResolvedValue({ id: 3, is_default: false, label: "2160p", quality_profile: "uhd", monitored: false, has_file: true });
-    const changed = vi.fn();
-    render(<OtherFilesChip movie={movie()} onChange={changed} />);
+    render(<OtherFilesChip movie={movie()} />);
     fireEvent.click(screen.getByRole("button", { name: "+1 other file" }));
-    expect(await screen.findByRole("dialog", { name: "Other files in this folder" })).toBeTruthy();
+    const dialog = await screen.findByRole("dialog", { name: "Other files in this folder" });
     expect(await screen.findByText("Heat (1995) Extended.mkv")).toBeTruthy();
     expect(screen.getByText("Cuts/Heat (1995) Extended.mkv")).toBeTruthy();
     expect(screen.getByText("2160p")).toBeTruthy();
     expect(screen.getByText("8.00 GB")).toBeTruthy();
-
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add as a version" })); });
-    expect(screen.getByText(/Nothing is moved, renamed or copied/)).toBeTruthy();
-    expect((screen.getByLabelText("Label") as HTMLInputElement).value).toBe("2160p");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add as a version" })); });
-    expect(add).toHaveBeenCalledWith(7, { path: listed.files[0].path, label: "2160p", quality_profile: "uhd" });
-    expect(changed).toHaveBeenCalled();
-  });
-
-  it("only ever makes a new version, and says how to undo it without losing the file", async () => {
-    vi.spyOn(otherFilesApi, "list").mockResolvedValue(listed);
-    vi.spyOn(qualityApi, "qualityProfiles").mockResolvedValue({ profiles: [] } as unknown as Awaited<ReturnType<typeof qualityApi.qualityProfiles>>);
-    // An empty extra version exists, but the file never goes onto it: it may be monitored
-    // or have a grab in flight that would replace the file.
-    const versions = [
-      { id: 0, is_default: true, label: "Default", quality_profile: "hd", monitored: true, has_file: true },
-      { id: 5, is_default: false, label: "Extended", quality_profile: "hd", monitored: true, has_file: false },
-    ];
-    render(<OtherFilesChip movie={movie({ versions })} onChange={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "+1 other file" }));
-    await screen.findByText("Heat (1995) Extended.mkv");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add as a version" })); });
-    expect(screen.queryByLabelText("Version")).toBeNull();
-    expect(screen.getByText(/starts unmonitored/)).toBeTruthy();
-    expect(screen.getByText(/Rename or Organize may move it/)).toBeTruthy();
-    expect(screen.getByText(/Convert may convert it/)).toBeTruthy();
-    expect(screen.getByText(/moves the file to the recycle bin/)).toBeTruthy();
-    expect(screen.getAllByText("Stop tracking").length).toBeGreaterThan(0);
+    expect(screen.getByText(/in the film's folder, but Arrmada doesn't track them/)).toBeTruthy();
+    // The only button in the list is Close.
+    expect(Array.from(dialog.querySelectorAll("button")).map((b) => b.textContent?.trim()).filter((t) => t !== "Close" && t !== "×" && t !== "")).toEqual([]);
   });
 
   it("says when the folder isn't only the film's", async () => {
     vi.spyOn(otherFilesApi, "list").mockResolvedValue({ ...listed, shared: true });
-    render(<OtherFilesChip movie={movie()} onChange={() => {}} />);
+    render(<OtherFilesChip movie={movie()} />);
     fireEvent.click(screen.getByRole("button", { name: "+1 other file" }));
     expect(await screen.findByText(/isn't only this film's/)).toBeTruthy();
   });
