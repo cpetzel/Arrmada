@@ -188,7 +188,15 @@ func (c *Coordinator) hasReview(ctx context.Context, hash string) bool {
 }
 
 // lastReviewDismissed reports whether the latest review of this download for this show was
-// dismissed: the user took it over, so the import sweep leaves it alone.
+// dismissed and nothing has happened to it since: the user took it over, so the import
+// sweep leaves it alone.
+//
+// A grab made after the dismissal ends it. Dismiss moves the download's grabs to
+// 'dismissed', so while the dismissal stands the newest grab of the hash says so; a re-grab
+// by hand adds a newer one, which is imported, held or still downloading — and an import
+// writes no review, so the dismissal would otherwise read as the last word for good and
+// stop that import's gaps ever being filled. Grabs, not timestamps, order the two: both
+// are stamped to the second, and a re-grab often lands within it.
 func (c *Coordinator) lastReviewDismissed(ctx context.Context, hash string, seriesID int64) bool {
 	if hash == "" {
 		return false
@@ -197,7 +205,17 @@ func (c *Coordinator) lastReviewDismissed(ctx context.Context, hash string, seri
 	err := c.db.QueryRowContext(ctx,
 		`SELECT resolution FROM import_reviews WHERE hash = ? AND media_type = 'series' AND expected_id = ?
 		 ORDER BY id DESC LIMIT 1`, hash, seriesID).Scan(&resolution)
-	return err == nil && resolution.String == ResolutionDismissed
+	if err != nil || resolution.String != ResolutionDismissed {
+		return false
+	}
+	var newest string
+	err = c.db.QueryRowContext(ctx,
+		`SELECT status FROM grabs WHERE media_type = 'series' AND info_hash != '' AND lower(info_hash) = lower(?)
+		 ORDER BY id DESC LIMIT 1`, hash).Scan(&newest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true // never grabbed by Arrmada: only the review speaks for it
+	}
+	return err == nil && newest == grabStatusDismissed
 }
 
 // How a review was settled, recorded on import_reviews.resolution.
@@ -1708,7 +1726,11 @@ func (c *Coordinator) refreshForTitleConflict(ctx context.Context, s series.Seri
 	c.unmatchedMu.Unlock()
 	c.log.Info("series import: episode titles and numbers disagree — refreshing the show's episode list before holding it",
 		"series", s.Title, "release", name)
-	if _, _, err := c.series.Refresh(ctx, s.ID, series.RefreshOptions{}); err != nil {
+	_, rr, err := c.series.Refresh(ctx, s.ID, series.RefreshOptions{})
+	if err == nil {
+		err = rr.FetchErr // the source couldn't be read: the listing is as stale as it was
+	}
+	if err != nil {
 		c.log.Warn("series import: refresh failed — holding the download as it is", "series", s.Title, "err", err)
 		return false
 	}

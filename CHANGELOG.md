@@ -444,7 +444,11 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   imported and often blocklisted it for the show. The new grab now clears both, so the
   release imports like any release you pick yourself. The earlier grab no longer counts
   for seed cleanup, so if you dismiss the new grab in Needs you, its files are kept when
-  the torrent is removed at its seed goal.
+  the torrent is removed at its seed goal. Files the earlier import couldn't match still
+  keep the torrent seeding.
+- **Map files… keeps a download seeding while files are left unmapped.** Files you leave
+  out exist only in the download, so the torrent is no longer removed with its data at its
+  seed goal.
 - **The Activity search shows only what matches** (#71). With the same qBittorrent added
   twice, every torrent was listed once per client under one hash, and a search left
   unrelated cards on screen and added copies each time you retyped. Cards are now told

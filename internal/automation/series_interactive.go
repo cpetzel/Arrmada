@@ -518,7 +518,8 @@ func (c *Coordinator) grabForSeries(ctx context.Context, seriesID int64, indexer
 //
 // Only a show's import record is reopened: one written by the series import (no film, no
 // paths) for a torrent no other kind of grab knows. A film imported from the same hash is
-// never touched.
+// never touched — and a torrent another kind of grab shares isn't reopened at all; it
+// can still be imported by hand.
 //
 // The torrent's earlier grabs are retired (superseded) first. Seed cleanup reads the grab
 // a torrent came from, and an old 'imported' row still said its data may go with it —
@@ -541,10 +542,16 @@ func (c *Coordinator) reopenImportedRelease(ctx context.Context, seriesID int64,
 		return
 	}
 	ids := make([]int64, 0, len(old))
+	unmatched := 0
 	for _, g := range old {
 		ids = append(ids, g.ID)
+		unmatched = max(unmatched, g.ImportUnmatched)
 	}
 	c.setGrabStatuses(ctx, ids, grabStatusSuperseded)
+	// Files an earlier import couldn't match are still only in the download. The mark that
+	// keeps it seeding moves to the new grab (it only ever rises), or retiring the old rows
+	// would let the new one's seed goal delete them.
+	c.noteImportUnmatched(ctx, hash, title, unmatched)
 	if _, err := c.db.ExecContext(ctx,
 		`DELETE FROM blocklist WHERE movie_id = ? AND media_type = 'series' AND norm_title IN (?, ?)`,
 		seriesID, normTitle(title), normTitle(name)); err != nil {
