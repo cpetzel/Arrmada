@@ -84,8 +84,10 @@ test.describe("manual import picker", () => {
     await dialog.getByRole("button", { name: "Downloads folder", exact: true }).click();
     await expect(source).toHaveText("the downloads folder");
     const toggle = dialog.getByRole("button", { name: "Choose a folder…" });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // The same button now closes it again.
+    await expect(dialog.getByRole("button", { name: "Close folder picker" })).toHaveAttribute("aria-expanded", "true");
     await expect(dialog.getByRole("tab", { name: "Browse" })).toHaveAttribute("aria-selected", "true");
     const openDownloads = dialog.getByRole("button", { name: "Open Downloads" });
     await openDownloads.focus();
