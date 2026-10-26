@@ -41,11 +41,11 @@ import { downloadPercent } from "../lib/percent";
 import { jobFailed, useJob } from "../lib/useJob";
 import { attemptLine, searchJobLine } from "../lib/searchOutcome";
 import { queuedNote } from "../lib/movieQueue";
-import { Button, Menu, Modal, StatusChip, useToast } from "../ui";
+import { Button, Menu, Modal, StatusChip, useConfirm, useToast } from "../ui";
 import { Switch } from "../ui/Switch";
 import { orphanApi } from "./subtitles/orphanApi";
 import { MovieSubtitles } from "../components/subtitles/MovieSubtitles";
-import { OtherFilesChip } from "./movies/OtherFiles";
+import { OtherFilesChip, otherFilesApi } from "./movies/OtherFiles";
 import { TitleProfilePicker } from "./subtitles/ProfileSelect";
 import { movieStatus, trackStatus } from "../lib/movieStatus";
 import { Page } from "../ui/Page";
@@ -392,6 +392,28 @@ function VersionCard({ movie, version, onChange, onCleared, flash, profileName }
 
   // Both destructive buttons ask first, naming the file, its size and where it goes.
   const [confirm, setConfirm] = useState<"file" | "version" | null>(null);
+  // Stop tracking forgets the version and keeps its file on disk (the undo for Add as a
+  // version, which Remove version isn't: that recycles the file).
+  const askConfirm = useConfirm();
+  const untrack = async () => {
+    if (!f) return;
+    const ok = await askConfirm({
+      title: <>Stop tracking the “{version.label}” version?</>,
+      body: <>Arrmada forgets this version and leaves its file where it is: <span className="break-all font-mono text-xs">{f.path}</span>. Nothing on disk changes.</>,
+      confirmLabel: "Stop tracking",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await otherFilesApi.untrackVersion(movieId, version.id);
+      flash(`Stopped tracking "${version.label}" — its file stays on disk.`);
+      onChange();
+    } catch (e) {
+      flash((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
   const [panel, setPanel] = useState<"search" | "import" | "edit" | null>(null);
 
   const status = trackStatus(version);
@@ -417,6 +439,7 @@ function VersionCard({ movie, version, onChange, onCleared, flash, profileName }
         <button onClick={() => setPanel("import")} disabled={busy} className={small} style={ghost}>Import</button>
         {!version.is_default && <button onClick={() => setPanel("edit")} disabled={busy} className={small} style={ghost}>Edit</button>}
         {f && <button onClick={() => setConfirm("file")} disabled={busy} className={small} style={missing ? ghost : { border: "1px solid var(--reject)", color: "var(--reject-text)" }}>{missing ? "Clear record" : "Delete file"}</button>}
+        {!version.is_default && f && <button onClick={untrack} disabled={busy} className={small} style={ghost} title="Forget this version and keep its file on disk">Stop tracking</button>}
         {!version.is_default && <button onClick={() => setConfirm("version")} disabled={busy} className="rounded-lg px-2.5 py-1 text-xs" style={{ color: "var(--ink-faint)" }}>Remove version</button>}
       </div>
       {panel === "search" && (

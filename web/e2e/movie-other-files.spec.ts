@@ -35,7 +35,7 @@ const movie: Movie = {
 
 interface Seen { method: string; path: string; body: unknown }
 
-async function serve(page: Page): Promise<Seen[]> {
+async function serve(page: Page, mv: Movie = movie): Promise<Seen[]> {
   const seen: Seen[] = [];
   const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
   await page.route((u) => u.pathname.startsWith(`/api/v1/movies/${ID}`) || u.pathname === "/api/v1/recycle/mode", (route) => {
@@ -46,7 +46,7 @@ async function serve(page: Page): Promise<Seen[]> {
     seen.push({ method: req.method(), path: url.pathname, body });
     const p = url.pathname.replace(`/api/v1/movies/${ID}`, "");
     if (url.pathname === "/api/v1/recycle/mode") return route.fulfill(json({ enabled: true, dirs: [], retention_days: 30, max_gb: 0 }));
-    if (p === "" && req.method() === "GET") return route.fulfill(json(movie));
+    if (p === "" && req.method() === "GET") return route.fulfill(json(mv));
     if (p === "/other-files") return route.fulfill(json(listed));
     if (p === "/other-files/version") return route.fulfill(json({ id: 9, is_default: false, label: "2160p", quality_profile: "hd-1080p", monitored: false, has_file: true, file_path: listed.files[0].path }, 201));
     if (p === "/history") return route.fulfill(json({ events: [] }));
@@ -89,7 +89,8 @@ test.describe("manager", () => {
     expect(overflow).toBeLessThanOrEqual(0);
 
     await dialog.getByRole("button", { name: "Add as a version" }).click();
-    await expect(dialog.getByText(/Nothing is moved, renamed or copied/)).toBeVisible();
+    await expect(dialog.getByText(/Nothing is moved, renamed or copied now/)).toBeVisible();
+    await expect(dialog.getByText(/Rename or Organize may move it/)).toBeVisible();
     await expect(dialog.getByLabel("Label")).toHaveValue("2160p");
     await expect(dialog.getByLabel("Quality profile")).toHaveValue("hd-1080p");
     await dialog.getByRole("button", { name: "Add as a version" }).click();
@@ -97,6 +98,30 @@ test.describe("manager", () => {
     expect(seen.find((s) => s.method === "POST")?.body).toEqual({ path: listed.files[0].path, label: "2160p", quality_profile: "hd-1080p" });
     // Nothing else on the film was asked to change.
     expect(seen.filter((s) => s.method !== "GET" && !s.path.endsWith("/other-files/version"))).toEqual([]);
+  });
+
+  test("Stop tracking forgets a version and keeps its file, after asking", async ({ page, api }) => {
+    const kept: MovieFile = { ...main, path: listed.files[0].path, filename: listed.files[0].name, quality: "2160p" };
+    const withVersion: Movie = { ...movie, versions: [
+      ...(movie.versions ?? []).slice(0, 1),
+      { id: 9, is_default: false, label: "2160p", quality_profile: "hd-1080p", monitored: false, has_file: true, file_path: kept.path, file: kept },
+    ] };
+    const seen = await serve(page, withVersion);
+    await page.route((u) => u.pathname === `/api/v1/movies/${ID}/versions/9/untrack`, (route) => {
+      seen.push({ method: route.request().method(), path: new URL(route.request().url()).pathname, body: undefined });
+      return route.fulfill({ status: 204 });
+    });
+    await page.goto(`/movies/${ID}`);
+    await api.quiet();
+    const card = page.getByTestId("version-card").filter({ hasText: "2160p" }).last();
+    await card.getByRole("button", { name: "Stop tracking" }).click();
+    const ask = page.getByRole("alertdialog").or(page.getByRole("dialog")).filter({ hasText: "Stop tracking the" });
+    await expect(ask).toBeVisible();
+    await expect(ask.getByText(/Nothing on disk changes/)).toBeVisible();
+    await ask.getByRole("button", { name: "Stop tracking" }).click();
+    await expect.poll(() => seen.filter((s) => s.method === "POST" && s.path.endsWith("/versions/9/untrack")).length).toBe(1);
+    // Never the delete that recycles the file.
+    expect(seen.filter((s) => s.method === "DELETE")).toEqual([]);
   });
 
   test("the Movies library filters to films with other files, and badges their posters", async ({ page }) => {

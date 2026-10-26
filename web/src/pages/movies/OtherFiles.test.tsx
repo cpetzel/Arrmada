@@ -56,25 +56,25 @@ describe("other files chip", () => {
     expect(changed).toHaveBeenCalled();
   });
 
-  it("can fill an existing version that has no file yet", async () => {
+  it("only ever makes a new version, and says how to undo it without losing the file", async () => {
     vi.spyOn(otherFilesApi, "list").mockResolvedValue(listed);
     vi.spyOn(qualityApi, "qualityProfiles").mockResolvedValue({ profiles: [] } as unknown as Awaited<ReturnType<typeof qualityApi.qualityProfiles>>);
-    const add = vi.spyOn(otherFilesApi, "addAsVersion").mockResolvedValue({ id: 5, is_default: false, label: "Extended", quality_profile: "hd", monitored: true, has_file: true });
+    // An empty extra version exists, but the file never goes onto it: it may be monitored
+    // or have a grab in flight that would replace the file.
     const versions = [
       { id: 0, is_default: true, label: "Default", quality_profile: "hd", monitored: true, has_file: true },
-      { id: 4, is_default: false, label: "4K", quality_profile: "uhd", monitored: true, has_file: true },
       { id: 5, is_default: false, label: "Extended", quality_profile: "hd", monitored: true, has_file: false },
     ];
     render(<OtherFilesChip movie={movie({ versions })} onChange={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "+1 other file" }));
     await screen.findByText("Heat (1995) Extended.mkv");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add as a version" })); });
-    const pick = screen.getByLabelText("Version") as HTMLSelectElement;
-    // Only the version with no file is offered: nothing is ever replaced.
-    expect(Array.from(pick.options).map((o) => o.text)).toEqual(["A new version", "Extended (no file yet)"]);
-    fireEvent.change(pick, { target: { value: "5" } });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add as a version" })); });
-    expect(add).toHaveBeenCalledWith(7, { path: listed.files[0].path, version_id: 5 });
+    expect(screen.queryByLabelText("Version")).toBeNull();
+    expect(screen.getByText(/starts unmonitored/)).toBeTruthy();
+    expect(screen.getByText(/Rename or Organize may move it/)).toBeTruthy();
+    expect(screen.getByText(/Convert may convert it/)).toBeTruthy();
+    expect(screen.getByText(/moves the file to the recycle bin/)).toBeTruthy();
+    expect(screen.getAllByText("Stop tracking").length).toBeGreaterThan(0);
   });
 
   it("says when the folder isn't only the film's", async () => {

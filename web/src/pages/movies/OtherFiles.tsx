@@ -11,8 +11,11 @@ import { Button, Modal, useToast } from "../../ui";
 
 export const otherFilesApi = {
   list: (movieId: number) => req<MovieOtherFiles>(`/api/v1/movies/${movieId}/other-files`),
-  addAsVersion: (movieId: number, body: { path: string; version_id?: number; label?: string; quality_profile?: string }) =>
+  addAsVersion: (movieId: number, body: { path: string; label?: string; quality_profile?: string }) =>
     req<MovieVersion>(`/api/v1/movies/${movieId}/other-files/version`, { method: "POST", body: JSON.stringify(body) }),
+  // Stop tracking (keep the file): the version's record goes, its file stays on disk.
+  untrackVersion: (movieId: number, versionId: number) =>
+    req<void>(`/api/v1/movies/${movieId}/versions/${versionId}/untrack`, { method: "POST" }),
 };
 
 /** "+1 other file", "+3 other files". */
@@ -115,12 +118,11 @@ export function OtherFilesModal({ movie, onClose, onChange }: { movie: Movie; on
   );
 }
 
-// AddAsVersion says what recording a file as a version does, and does it: a new version
-// (labelled, with a quality profile), or an existing one that has no file yet.
+// AddAsVersion says what recording a file as a version does, and does it: always a new,
+// unmonitored version (labelled, with a quality profile) — never an existing one, which
+// may be monitored or have a grab in flight that would replace the file.
 function AddAsVersion({ movie, file, onCancel, onDone }: { movie: Movie; file: MovieOtherFile; onCancel: () => void; onDone: () => void }) {
   const toast = useToast();
-  const empty = (movie.versions ?? []).filter((v) => !v.is_default && !v.has_file);
-  const [target, setTarget] = useState<number>(0); // 0: a new version
   const [label, setLabel] = useState(file.resolution || "Other copy");
   const [profile, setProfile] = useState("");
   const [profiles, setProfiles] = useState<{ key: string; name: string }[]>([]);
@@ -136,16 +138,14 @@ function AddAsVersion({ movie, file, onCancel, onDone }: { movie: Movie; file: M
   }, []);
 
   const save = async () => {
-    if (target === 0 && !label.trim()) {
+    if (!label.trim()) {
       setError("Give the version a label (e.g. 4K, Extended).");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const v = await otherFilesApi.addAsVersion(movie.id, target
-        ? { path: file.path, version_id: target }
-        : { path: file.path, label: label.trim(), quality_profile: profile });
+      const v = await otherFilesApi.addAsVersion(movie.id, { path: file.path, label: label.trim(), quality_profile: profile });
       toast(`Recorded ${file.name} as the “${v.label}” version.`);
       onDone();
     } catch (e) {
@@ -158,29 +158,22 @@ function AddAsVersion({ movie, file, onCancel, onDone }: { movie: Movie; file: M
   const id = `other-${movie.id}-${file.rel_path}`.replace(/[^A-Za-z0-9_-]/g, "_");
   return (
     <div className="mt-3 rounded-lg p-3" style={{ background: "var(--panel-2)" }}>
-      <p className="mb-3 mt-0 text-sm text-ink-dim">
-        Arrmada records this file where it is, under its own name, as an extra version of the film. Nothing is moved, renamed or copied.
-        {target === 0 && " The new version starts unmonitored, so no upgrade replaces this file; turn Monitor on later if you want upgrades."}
+      <p className="mb-2 mt-0 text-sm text-ink-dim">
+        Arrmada records this file where it is, under its own name, as a new version of the film. Nothing is moved, renamed or copied now.
+        The version starts unmonitored, so no upgrade replaces this file; turn Monitor on later if you want upgrades.
       </p>
-      {empty.length > 0 && (
-        <>
-          <label htmlFor={`${id}-target`} className="mb-1 block font-mono text-2xs font-bold uppercase text-accent-text">Version</label>
-          <select id={`${id}-target`} value={target} onChange={(e) => setTarget(Number(e.target.value))} className="mb-3 w-full rounded-lg px-3 py-2 text-base" style={fieldStyle}>
-            <option value={0}>A new version</option>
-            {empty.map((v) => <option key={v.id} value={v.id}>{v.label} (no file yet)</option>)}
-          </select>
-        </>
-      )}
-      {target === 0 && (
-        <>
-          <label htmlFor={`${id}-label`} className="mb-1 block font-mono text-2xs font-bold uppercase text-accent-text">Label</label>
-          <input id={`${id}-label`} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="4K · Extended · Remux" className="mb-3 w-full rounded-lg px-3 py-2 text-base" style={fieldStyle} />
-          <label htmlFor={`${id}-profile`} className="mb-1 block font-mono text-2xs font-bold uppercase text-accent-text">Quality profile</label>
-          <select id={`${id}-profile`} value={profile} onChange={(e) => setProfile(e.target.value)} className="mb-3 w-full rounded-lg px-3 py-2 text-base" style={fieldStyle}>
-            {profiles.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
-          </select>
-        </>
-      )}
+      <p className="mb-2 mt-0 text-sm text-ink-dim">
+        From then on it's handled like any other file Arrmada tracks: Rename or Organize may move it to your naming scheme's path, and Convert may convert it if automatic converting is on.
+      </p>
+      <p className="mb-3 mt-0 text-sm text-ink-dim">
+        To undo, use <strong>Stop tracking</strong> on the version: it keeps the file. <strong>Remove version</strong> moves the file to the recycle bin.
+      </p>
+      <label htmlFor={`${id}-label`} className="mb-1 block font-mono text-2xs font-bold uppercase text-accent-text">Label</label>
+      <input id={`${id}-label`} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="4K · Extended · Remux" className="mb-3 w-full rounded-lg px-3 py-2 text-base" style={fieldStyle} />
+      <label htmlFor={`${id}-profile`} className="mb-1 block font-mono text-2xs font-bold uppercase text-accent-text">Quality profile</label>
+      <select id={`${id}-profile`} value={profile} onChange={(e) => setProfile(e.target.value)} className="mb-3 w-full rounded-lg px-3 py-2 text-base" style={fieldStyle}>
+        {profiles.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
+      </select>
       {error && <div className="mb-2 text-sm" style={{ color: "var(--reject-text)" }} role="alert">{error}</div>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
