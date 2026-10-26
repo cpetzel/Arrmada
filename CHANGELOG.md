@@ -36,15 +36,17 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     down), Refresh leaves the film's file as it is. A bigger copy beside it shows as
     **+1 other file** on the film's page instead.
   - To switch a film to another file in its folder, remove or move the old file, then
-    Refresh: the biggest video left in the folder becomes the film's file. Or import the
-    new file by hand.
+    Refresh: the biggest video left in the folder (or two folders down) becomes the film's
+    file. This works only in a folder that is plainly the film's own (named for it, with no
+    other film's file in it); anywhere else, import the new file by hand.
   - It never picks a file another version or film records (a hardlink of one included), a
     sample, a trailer, featurette or anything in an extras folder, anything in Arrmada's
     hidden folders, or a file in a subfolder named as another film.
   - A film with several versions whose main file is gone has that record cleared, not
     replaced by one of its versions' files. Its other versions keep their files.
-  - A film loose in a Movies folder whose file is gone has the record cleared; nothing else
-    in that folder is taken for it.
+  - A film loose in a Movies folder, or in a folder it shares with other films, whose file
+    is gone has the record cleared; nothing else in that folder is taken for it.
+  - If the folder can't be read, or holds too many files to look through, nothing changes.
   - A file renamed only in case (`Heat (1995).mkv` to `heat (1995).mkv`) is still found.
   - A recorded file under 50 MB is no longer cleared as if there were no video.
 - **What a show's rescan and duplicate check read is narrower** (#56). They no longer read a
