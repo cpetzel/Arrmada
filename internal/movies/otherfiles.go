@@ -83,7 +83,12 @@ var extrasSuffixes = []string{"trailer", "featurette", "behindthescenes", "delet
 // otherFileSkip says why a video at rel (relative to the film's folder, OS separators)
 // of size bytes isn't one of the film's other files, or "" when it is one. It judges the
 // name alone: the film's own files and other films' records are checked by the caller.
-func otherFileSkip(rel string, size int64) string {
+func otherFileSkip(rel string, size int64) string { return otherFileSkipFor(Movie{}, rel, size) }
+
+// otherFileSkipFor is otherFileSkip for film m: a file named exactly as one of m's titles
+// isn't taken for a local extra by the name ending — "The.Other.mkv" in The Other (1972)'s
+// folder is the film, not an "-other" extra. Extras folders still count.
+func otherFileSkipFor(m Movie, rel string, size int64) string {
 	name := filepath.Base(rel)
 	if !library.IsVideoFile(name) {
 		return "not a video"
@@ -103,6 +108,9 @@ func otherFileSkip(rel string, size int64) string {
 		return "a sample"
 	}
 	stem := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+	if namedJustAs(m, stem) {
+		return ""
+	}
 	for _, suf := range extrasSuffixes {
 		for _, sep := range []string{"-", ".", "_"} {
 			if strings.HasSuffix(stem, sep+suf) {
@@ -111,6 +119,31 @@ func otherFileSkip(rel string, size int64) string {
 		}
 	}
 	return ""
+}
+
+// filmTitles is every title film m goes by: TMDB's, the shown one, the override, and
+// the original and alternative titles.
+func filmTitles(m Movie) []string {
+	out := []string{m.Title, m.DisplayTitle, m.TitleOverride}
+	if m.Extra != nil {
+		out = append(out, m.Extra.OriginalTitle)
+		out = append(out, m.Extra.AltTitles...)
+	}
+	return out
+}
+
+// namedJustAs reports whether a file stem's words are exactly one of m's titles.
+func namedJustAs(m Movie, stem string) bool {
+	words := strings.Join(nameWords(stem), " ")
+	if words == "" {
+		return false
+	}
+	for _, t := range filmTitles(m) {
+		if tw := strings.Join(nameWords(t), " "); tw != "" && tw == words {
+			return true
+		}
+	}
+	return false
 }
 
 // otherFilesPass is what one look through the library shares: every recorded file (so a
@@ -197,10 +230,13 @@ func (c *resolveCache) put(path, key string, now time.Time) {
 	c.m[path] = cachedResolution{key: key, at: now}
 }
 
-// newOtherFilesPass reads every recorded file. except, when set, is left out: a film's
-// recorded default that rescan knows is gone from disk, so a case-only rename of it
-// ("Heat (1995).mkv" → "heat (1995).mkv") isn't mistaken for a recorded file.
-func (s *Service) newOtherFilesPass(ctx context.Context, except ...string) (*otherFilesPass, error) {
+// newOtherFilesPass reads every recorded file. cached passes reuse recent link
+// resolutions (the list and the scan); a rescan choosing a file to record resolves afresh,
+// so a link retargeted a moment ago can't make a recorded file look unrecorded. except,
+// when set, is left out: a film's recorded default that rescan knows is gone from disk, so
+// a case-only rename of it ("Heat (1995).mkv" → "heat (1995).mkv") isn't mistaken for a
+// recorded file.
+func (s *Service) newOtherFilesPass(ctx context.Context, cached bool, except ...string) (*otherFilesPass, error) {
 	rps, err := s.repo.RecordedPaths(ctx)
 	if err != nil {
 		return nil, err
@@ -209,7 +245,9 @@ func (s *Service) newOtherFilesPass(ctx context.Context, except ...string) (*oth
 		recorded: make(map[string]bool, len(rps)),
 		under:    make(map[string][]int32, len(rps)*4),
 		probe:    newLinkProbe(nil),
-		cache:    &s.resolved,
+	}
+	if cached {
+		p.cache = &s.resolved
 	}
 	skip := map[string]bool{}
 	for _, x := range except {
@@ -384,8 +422,8 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 	// same file, not another one.
 	ownInfo := statAll(ownPaths)
 	out := OtherFiles{Folder: dir, Shared: shared, Files: []OtherFile{}, CheckedAt: time.Now().UTC().Format(time.RFC3339)}
-	out.Truncated = s.walkFolderVideos(m, dir, depth, func(full, rel string, fi os.FileInfo) {
-		if ownFile[fileKey(full)] || pass.recorded[fileKey(full)] || otherFileSkip(rel, fi.Size()) != "" || sameAsAny(fi, ownInfo) {
+	truncated, _ := s.walkFolderVideos(m, dir, depth, false, func(full, rel string, fi os.FileInfo) {
+		if ownFile[fileKey(full)] || pass.recorded[fileKey(full)] || otherFileSkipFor(m, rel, fi.Size()) != "" || sameAsAny(fi, ownInfo) {
 			return
 		}
 		// Last, as it can mean resolving every record once: recorded through a link.
@@ -402,7 +440,8 @@ func (s *Service) findOtherFiles(pass *otherFilesPass, m Movie, versions []Versi
 			Name: name, RelPath: filepath.ToSlash(rel), Path: full, SizeBytes: fi.Size(),
 			Resolution: string(parser.Parse(name).StatedResolution()),
 		})
-	}) || out.Truncated
+	})
+	out.Truncated = out.Truncated || truncated
 	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].RelPath < out.Files[j].RelPath })
 	return out, true
 }
@@ -423,13 +462,19 @@ func (s *Service) looseIn(dir string) bool {
 // folders, with its path relative to dir. Arrmada's hidden folders (the recycle bin,
 // Convert's hold) and a system's are left out, and so is a folder named as another film
 // ("Alien (1979)/Aliens (1986)"); links aren't followed. It stops after
-// otherFilesMaxEntries entries and then reports true.
-func (s *Service) walkFolderVideos(m Movie, dir string, depth int, fn func(full, rel string, fi os.FileInfo)) (truncated bool) {
+// otherFilesMaxEntries entries and then reports truncated. rootErr is dir's own listing
+// failing (a subfolder that can't be read is skipped). adopt is a rescan choosing a
+// replacement: a subfolder within a year of the film's ("Le.Fabuleux.Destin…2001" in
+// Amelie (2001)) is looked in then, as a release folder of the film itself.
+func (s *Service) walkFolderVideos(m Movie, dir string, depth int, adopt bool, fn func(full, rel string, fi os.FileInfo)) (truncated bool, rootErr error) {
 	seen := 0
 	var walk func(d, rel string, level int)
 	walk = func(d, rel string, level int) {
-		entries, err := os.ReadDir(d)
+		entries, err := readDir(d)
 		if err != nil {
+			if level == 0 {
+				rootErr = err
+			}
 			return
 		}
 		for _, e := range entries {
@@ -443,7 +488,7 @@ func (s *Service) walkFolderVideos(m Movie, dir string, depth int, fn func(full,
 			name := e.Name()
 			full, r := filepath.Join(d, name), filepath.Join(rel, name)
 			if e.IsDir() {
-				if level < depth && !library.SkipScanDir(name) && !s.anotherFilmsFolder(m, name) {
+				if level < depth && !library.SkipScanDir(name) && !s.anotherFilmsFolder(m, name, adopt) {
 					walk(full, r, level+1)
 				}
 				continue
@@ -457,8 +502,12 @@ func (s *Service) walkFolderVideos(m Movie, dir string, depth int, fn func(full,
 		}
 	}
 	walk(dir, "", 0)
-	return truncated
+	return truncated, rootErr
 }
+
+// readDir is os.ReadDir; tests make a folder unreadable through it (a root test process
+// reads any folder).
+var readDir = os.ReadDir
 
 func statAll(paths []string) []os.FileInfo {
 	var out []os.FileInfo
@@ -481,10 +530,29 @@ func sameAsAny(fi os.FileInfo, infos []os.FileInfo) bool {
 
 // anotherFilmsFolder reports whether a folder called name, inside film m's folder, is
 // named as a different film: a title and a year (the parser's reading) that aren't m's.
-// "Cuts", "Extended" or "Heat (1995) Extended" are not; "Aliens (1986)" is, in Alien's.
-func (s *Service) anotherFilmsFolder(m Movie, name string) bool {
+// "Cuts", "Extended" or "Heat (1995) Extended" are not; "Aliens (1986)" is, in Alien's;
+// a folder named for one of m's original or alternative titles and its year is m's. For
+// adoption (adopt), a year within one of m's isn't another film's either: a release folder
+// under a foreign title is how a replacement often arrives.
+func (s *Service) anotherFilmsFolder(m Movie, name string, adopt bool) bool {
 	r := parser.Parse(name)
-	return r.Year > 0 && strings.TrimSpace(r.Title) != "" && !s.folderNamedFor(m, name)
+	if r.Year <= 0 || strings.TrimSpace(r.Title) == "" || s.folderNamedFor(m, name) {
+		return false
+	}
+	if adopt && m.Year > 0 && abs(r.Year-m.Year) <= 1 {
+		return false
+	}
+	return !namedForAnyTitle(m, name)
+}
+
+// namedForAnyTitle is titleYearPrefix over all of m's titles (filmTitles).
+func namedForAnyTitle(m Movie, name string) bool {
+	for _, t := range filmTitles(m) {
+		if t != "" && titleYearPrefix(Movie{Title: t, Year: m.Year}, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshOtherFiles looks again at one film's folder and stores what it found (nothing is
@@ -492,7 +560,7 @@ func (s *Service) anotherFilmsFolder(m Movie, name string) bool {
 func (s *Service) refreshOtherFiles(ctx context.Context, pass *otherFilesPass, m Movie, versions []Version) (OtherFiles, error) {
 	if pass == nil {
 		var err error
-		if pass, err = s.newOtherFilesPass(ctx); err != nil {
+		if pass, err = s.newOtherFilesPass(ctx, true); err != nil {
 			return OtherFiles{}, err
 		}
 	}

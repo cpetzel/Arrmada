@@ -58,22 +58,24 @@ func TestRescanAdoptsACaseOnlyRename(t *testing.T) {
 	}
 }
 
-// A file differing from another track's only in case is another file on Linux: it may be
-// adopted, and the track's file still isn't.
-func TestRescanCaseDifferentFromAVersionIsAnotherFile(t *testing.T) {
+// A file differing from a record in the same folder only in case: on a case-insensitive
+// share (CIFS with noserverino) it is that record's file renamed, so it's never adopted —
+// the version keeps it, and the gone default's record is cleared. (The other-files list,
+// which records nothing, still shows it on a case-sensitive disk.)
+func TestRescanNeverAdoptsACaseVariantOfARecord(t *testing.T) {
 	caseSensitive(t)
 	e := newOtherEnv(t)
 	def := e.file(t, "Movies/Heat (1995)/Heat (1995) 1080p.mkv", otherBig)
-	v := e.file(t, "Movies/Heat (1995)/Heat (1995) 2160p.mkv", otherBig*3)
-	other := e.file(t, "Movies/Heat (1995)/heat (1995) 2160p.mkv", otherBig*2)
+	v := filepath.Join(e.base, "Movies/Heat (1995)/Heat (1995) 2160p.mkv")
+	renamed := e.file(t, "Movies/Heat (1995)/heat (1995) 2160p.mkv", otherBig*2)
 	m := e.film(t, 1, "Heat", 1995, "Movies/Heat (1995)/Heat (1995) 1080p.mkv")
 	ver, _ := e.svc.repo.CreateVersion(e.ctx, m.ID, Version{Label: "4K", QualityProfile: "uhd"})
-	if err := e.svc.repo.SetVersionFile(e.ctx, ver.ID, v, otherBig*3, ""); err != nil {
+	if err := e.svc.repo.SetVersionFile(e.ctx, ver.ID, v, otherBig*2, ""); err != nil {
 		t.Fatal(err)
 	}
 	_ = os.Remove(def)
-	if m = rescanOnce(t, e, m.ID); m.MovieFilePath != other {
-		t.Fatalf("default = %q, want the case-different copy", m.MovieFilePath)
+	if m = rescanOnce(t, e, m.ID); m.MovieFilePath == renamed || m.HasFile {
+		t.Fatalf("default = %q, want cleared", m.MovieFilePath)
 	}
 }
 
@@ -194,7 +196,7 @@ func TestOtherFilesPassResolvesOncePerWhile(t *testing.T) {
 		rel := fmt.Sprintf("Movies/Film %d (2000)/Film %d (2000).mkv", i, i)
 		e.film(t, 1000+i, fmt.Sprintf("Film %d", i), 2000, rel)
 	}
-	p1, err := e.svc.newOtherFilesPass(e.ctx)
+	p1, err := e.svc.newOtherFilesPass(e.ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,13 +204,13 @@ func TestOtherFilesPassResolvesOncePerWhile(t *testing.T) {
 	if p1.resolved != n {
 		t.Fatalf("first look resolved %d, want %d", p1.resolved, n)
 	}
-	p2, _ := e.svc.newOtherFilesPass(e.ctx)
+	p2, _ := e.svc.newOtherFilesPass(e.ctx, true)
 	p2.index()
 	if p2.resolved != 0 {
 		t.Fatalf("second look resolved %d, want 0 (cached)", p2.resolved)
 	}
 	e.film(t, 9999, "New", 2001, "Movies/New (2001)/New (2001).mkv")
-	p3, _ := e.svc.newOtherFilesPass(e.ctx)
+	p3, _ := e.svc.newOtherFilesPass(e.ctx, true)
 	p3.index()
 	if p3.resolved != 1 || !p3.recorded[fileKey(filepath.Join(e.base, "Movies/New (2001)/New (2001).mkv"))] {
 		t.Fatalf("after a new record: resolved %d (want 1), recorded %v", p3.resolved, p3.recorded[fileKey(filepath.Join(e.base, "Movies/New (2001)/New (2001).mkv"))])
