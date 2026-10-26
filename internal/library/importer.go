@@ -54,6 +54,9 @@ func BookFileFormat(path string) string {
 // IsAudiobookFile reports whether a path is an audiobook file (vs an ebook).
 func IsAudiobookFile(p string) bool { return isAudiobook(p) }
 
+// IsBookFile reports whether a path is an ebook or audiobook file, by its extension.
+func IsBookFile(p string) bool { return isBookFile(p) }
+
 // FoundFile is a media file discovered on disk (path + size). Shared by video, ebook,
 // and audiobook discovery.
 type FoundFile = FoundVideo

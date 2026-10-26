@@ -88,6 +88,7 @@ GET /api/v1/books/{id}/ebook user ext key
 GET /api/v1/books/{id}/edition-files staff -
 GET /api/v1/books/{id}/history staff -
 GET /api/v1/books/{id}/manualimport staff -
+GET /api/v1/books/{id}/manualimport/suggestions staff -
 GET /api/v1/books/{id}/releases staff -
 GET /api/v1/books/{id}/series staff -
 GET /api/v1/calendar user -
@@ -174,6 +175,8 @@ GET /api/v1/library/search staff -
 GET /api/v1/logs admin -
 GET /api/v1/logs/download admin -
 GET /api/v1/logs/level admin -
+GET /api/v1/manualimport/folders staff -
+GET /api/v1/manualimport/search staff -
 GET /api/v1/me/2fa user ext
 GET /api/v1/me/account user ext
 GET /api/v1/me/api-keys user ext
@@ -216,6 +219,7 @@ GET /api/v1/movies/{id}/collection staff -
 GET /api/v1/movies/{id}/delete-preview staff -
 GET /api/v1/movies/{id}/history staff -
 GET /api/v1/movies/{id}/manualimport staff -
+GET /api/v1/movies/{id}/manualimport/suggestions staff -
 GET /api/v1/movies/{id}/releases staff -
 GET /api/v1/movies/{id}/rename staff -
 GET /api/v1/movies/{id}/title-choices staff -
@@ -273,6 +277,7 @@ GET /api/v1/series/{id}/downloads staff -
 GET /api/v1/series/{id}/duplicates staff -
 GET /api/v1/series/{id}/history staff -
 GET /api/v1/series/{id}/manualimport staff -
+GET /api/v1/series/{id}/manualimport/suggestions staff -
 GET /api/v1/series/{id}/misplaced staff -
 GET /api/v1/series/{id}/numbering staff -
 GET /api/v1/series/{id}/releases staff -
