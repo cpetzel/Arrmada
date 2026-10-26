@@ -36,6 +36,8 @@ export function routes(p: PersonaInfo): MockRoute[] {
     get("/api/v1/setup/checklist", sys.setupChecklist),
     get("/api/v1/system/backups", sys.backups),
     get("/api/v1/system/pending-restart", sys.pendingRestart),
+    // Manual import's picker opens with the finished downloads that match: none here.
+    get(/^\/api\/v1\/(movies|series|books)\/\d+\/manualimport\/suggestions$/, { suggestions: [] }),
     get("/api/v1/system/status", sys.systemStatus),
     // Settings → Status → Updates: the switch answers with the check off; Check now with
     // the same answer as Status.
