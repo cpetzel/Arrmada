@@ -4062,6 +4062,9 @@ export interface Movie {
   file_missing_since?: string;
   /** Detail only: what Arrmada will do about this movie, from the facts the sweeps act on. */
   acquisition?: MovieAcquisition;
+  /** Detail only: the videos in the film's folder Arrmada doesn't use, as the last scan,
+   *  refresh or look at the list found them (absent until one has looked). */
+  other_files?: MovieOtherFiles;
   // Detail only (MOV-04): the missing-sweep's backoff, when it next searches (absent when
   // no automatic search is coming) and how the stored searches went.
   last_search_at?: string;
@@ -4128,6 +4131,30 @@ export interface MovieSummary {
   library_folder_id?: number;
   media?: SummaryMedia;
   download?: MovieDownload;
+  /** How many videos in the film's folder Arrmada doesn't use (absent: none, or not looked at). */
+  other_files?: number;
+}
+
+/** A video in a film's folder that Arrmada doesn't use (GET /movies/{id}/other-files). */
+export interface MovieOtherFile {
+  name: string;
+  /** From the film's folder, with forward slashes. */
+  rel_path: string;
+  path: string;
+  size_bytes: number;
+  /** From the name, or read from the file when the list was opened (probed). */
+  resolution?: string;
+  probed?: boolean;
+}
+
+export interface MovieOtherFiles {
+  count: number;
+  files: MovieOtherFile[];
+  folder?: string;
+  /** The folder isn't provably the film's own: only its top level, and only files no film records. */
+  shared?: boolean;
+  truncated?: boolean;
+  checked_at?: string;
 }
 
 export interface MovieAcquisition {

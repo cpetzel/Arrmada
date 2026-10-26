@@ -45,6 +45,7 @@ import { Button, Menu, Modal, StatusChip, useToast } from "../ui";
 import { Switch } from "../ui/Switch";
 import { orphanApi } from "./subtitles/orphanApi";
 import { MovieSubtitles } from "../components/subtitles/MovieSubtitles";
+import { OtherFilesChip } from "./movies/OtherFiles";
 import { TitleProfilePicker } from "./subtitles/ProfileSelect";
 import { movieStatus, trackStatus } from "../lib/movieStatus";
 import { Page } from "../ui/Page";
@@ -295,6 +296,8 @@ function VersionsArea({ movie, onChange, flash }: { movie: Movie; onChange: () =
       <>
         {clearedNotice}
         {movie.file && <FilePanel file={movie.file} movieId={movie.id} audio={versions[0]} onChange={onChange} onCleared={onCleared} />}
+        {/* Other videos in the film's folder, by its file: the chip opens the list. */}
+        {(movie.other_files?.count ?? 0) > 0 && <div className="mt-2"><OtherFilesChip movie={movie} onChange={onChange} /></div>}
         <button onClick={() => setAdding(true)} className="mt-4 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold" style={{ border: "1px dashed var(--line)", color: "var(--ink-dim)" }}>
           ＋ Keep another version <span className="text-ink-faint">(e.g. 1080p + 4K, or a Director's Cut)</span>
         </button>
@@ -307,7 +310,10 @@ function VersionsArea({ movie, onChange, flash }: { movie: Movie; onChange: () =
     <div className="mt-6">
       {clearedNotice}
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="m-0 text-md font-bold">Versions <span className="font-normal text-ink-faint">· {versions.length} tracks</span></h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="m-0 text-md font-bold">Versions <span className="font-normal text-ink-faint">· {versions.length} tracks</span></h2>
+          <OtherFilesChip movie={movie} onChange={onChange} />
+        </div>
         <button onClick={() => setAdding(true)} className="rounded-lg px-3 py-1.5 text-sm font-semibold" style={{ border: "1px solid var(--line)", background: "var(--panel-2)", color: "var(--ink)" }}>＋ Add version</button>
       </div>
       <div className="flex flex-col gap-2.5">

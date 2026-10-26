@@ -189,6 +189,23 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
+- **Other files in a film's folder.** When a film's folder holds a video Arrmada doesn't use
+  (another cut, an old copy, a second film left there), the film's page shows **+1 other
+  file** by its file, and the Movies library has a **Has other files** filter and a small
+  **+1** on the poster. A library scan or **Refresh & rescan** notes them, and the chip's
+  list looks again. It only lists them: nothing moves, renames or deletes a file.
+  - Not counted: the film's own files and any other film's, samples (named so, in a Sample
+    folder, or under 50 MB), Plex and Jellyfin extras (names ending `-trailer`,
+    `-featurette`, `-behindthescenes`, `-deleted`, `-interview`, `-scene`, `-short`,
+    `-other`, and folders such as Extras, Featurettes, Trailers and Deleted Scenes), and
+    anything that isn't a video. Subfolders are looked in two levels deep.
+  - A folder that isn't plainly the film's own (not named for it, or another film in your
+    library has a file there) is looked at only at its top level, and only files no film
+    uses count. A film loose in a Movies folder has nothing listed.
+  - **Add as a version** records a listed file, where it is and under its own name, as an
+    extra version: a new one, unmonitored so no upgrade replaces the file, or an existing
+    version that has no file yet. Use **Rename** afterwards if you want it named like the
+    rest.
 - **A global seed goal** (#78). Settings → Downloads → **Seeding** sets a ratio and a
   seeding time for indexers set to **Use the global default**, so you don't have to type the
   same limits on each indexer. It only ever applies going forward, and only where you choose
