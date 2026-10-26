@@ -191,6 +191,7 @@ type api struct {
 	codeLimit     *codeLimiter  // two-factor code attempts per account (twofactor_limit.go)
 	icsLimiter    *loginLimiter // throttles calendar feed fetches per address (calendar_ics.go)
 	widgetLimiter *loginLimiter // throttles wrong dashboard widget keys per address (widget.go)
+	picker        pickerGate    // manual-import folder walks running at once (importpicker.go)
 	// keySprayLimiter is the per-address ceiling on wrong personal API keys (auth.go).
 	keySprayLimiter *loginLimiter
 	plexPins        *plexPinGuard // which browser (and account) started each Plex PIN

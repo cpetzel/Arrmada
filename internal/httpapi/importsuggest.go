@@ -160,30 +160,45 @@ func (a *api) handleBookImportSuggestions(w http.ResponseWriter, r *http.Request
 }
 
 func (a *api) writeSuggestions(w http.ResponseWriter, r *http.Request, kind string, match suggestMatcher) {
-	isMedia, _ := pickerMedia(kind)
+	k, _ := pickerMedia(kind)
+	if !a.enterPicker(w) {
+		return
+	}
+	defer a.picker.leave()
 	ctx, cancel := context.WithTimeout(r.Context(), pickerTimeout)
 	defer cancel()
-	out := a.importSuggestions(ctx, match, isMedia)
+	out := a.importSuggestions(ctx, match, k)
 	if r.Context().Err() != nil {
 		return
 	}
 	a.writeJSON(w, http.StatusOK, map[string]any{"suggestions": out})
 }
 
+// vetSuggestion is the last check on anything offered, wherever it came from: the
+// cleaned path must pass the import guard (so a client's path outside the roots, or a
+// link leading out of them, is never offered) and must exist where Arrmada can see it.
+func vetSuggestion(guard func(string) error, p string) (string, bool) {
+	clean, err := filepath.Abs(filepath.Clean(p))
+	if err != nil || guard(clean) != nil {
+		return "", false
+	}
+	if _, err := os.Stat(clean); err != nil {
+		return "", false // the client's path isn't one Arrmada can see
+	}
+	return clean, true
+}
+
 // importSuggestions gathers the matches: client downloads first (they carry a hash, so
 // "imported before" and "not managed" can be said), then whatever else sits in the
 // downloads folders. The best match comes first, the newest among equals.
-func (a *api) importSuggestions(ctx context.Context, match suggestMatcher, isMedia func(string) bool) []importSuggestion {
+func (a *api) importSuggestions(ctx context.Context, match suggestMatcher, kind pickerKind) []importSuggestion {
 	guard := a.importGuard(ctx)
 	out := []importSuggestion{}
 	seen := map[string]bool{}
 	add := func(s importSuggestion) {
-		clean, err := filepath.Abs(filepath.Clean(s.Path))
-		if err != nil || seen[clean] || guard(clean) != nil {
+		clean, ok := vetSuggestion(guard, s.Path)
+		if !ok || seen[clean] {
 			return
-		}
-		if _, err := os.Stat(clean); err != nil {
-			return // the client's path isn't one Arrmada can see
 		}
 		seen[clean] = true
 		s.Path = clean
@@ -234,7 +249,7 @@ func (a *api) importSuggestions(ctx context.Context, match suggestMatcher, isMed
 	for _, root := range a.visibleRoots(ctx, guard, func(r libroots.Root) bool {
 		return r.Name == "downloads" || r.Name == "former-downloads"
 	}) {
-		for _, s := range scanSuggestions(ctx, root.Path, match, isMedia) {
+		for _, s := range scanSuggestions(ctx, root.Path, match, kind, guard) {
 			add(s)
 		}
 	}
@@ -255,50 +270,41 @@ func (a *api) importSuggestions(ctx context.Context, match suggestMatcher, isMed
 }
 
 // scanSuggestions looks at the top two levels of one downloads folder (the second for
-// category sub-folders such as downloads/movies) for names that match. No symlinks, no
-// hidden entries, at most suggestScanVisits entries.
-func scanSuggestions(ctx context.Context, root string, match suggestMatcher, isMedia func(string) bool) []importSuggestion {
+// category sub-folders such as downloads/movies) for names that match: folders, and files
+// the listing would show. The folder is resolved first (a downloads folder linked into
+// place is scanned); below it, symlinks are skipped, not followed or offered. No hidden
+// entries, at most suggestScanVisits entries, and nothing read once the deadline passes.
+func scanSuggestions(ctx context.Context, root string, match suggestMatcher, kind pickerKind, guard func(string) error) []importSuggestion {
 	var out []importSuggestion
-	base := strings.Count(root, string(filepath.Separator))
-	visits := 0
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if d != nil && d.IsDir() && p != root {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if p == root {
-			return nil
-		}
-		visits++
-		if ctx.Err() != nil || visits > suggestScanVisits {
-			return fs.SkipAll
-		}
-		if strings.HasPrefix(d.Name(), ".") || d.Type()&fs.ModeSymlink != 0 {
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if sc := match(d.Name()); sc > 0 && (d.IsDir() || isMedia(d.Name())) {
-			s := importSuggestion{Name: d.Name(), Path: p, score: sc}
-			if fi, err := d.Info(); err == nil {
-				s.AddedOn = fi.ModTime().Unix()
-				if !d.IsDir() {
-					s.SizeBytes = fi.Size()
-				}
-			}
-			out = append(out, s)
-			if d.IsDir() {
-				return fs.SkipDir // a match's own contents are its files, not more matches
-			}
-			return nil
-		}
-		if d.IsDir() && strings.Count(p, string(filepath.Separator))-base >= 2 {
-			return fs.SkipDir
-		}
+	real, ok := resolveWalkRoot(root, guard)
+	if !ok {
 		return nil
+	}
+	b := &walkBudget{ctx: ctx, max: suggestScanVisits}
+	boundedWalk(b, real, 2, func(p string, e fs.DirEntry, _ int) (bool, bool) {
+		if e.Type()&fs.ModeSymlink != 0 {
+			return false, false
+		}
+		if e.IsDir() && guard(p) != nil {
+			return false, false
+		}
+		sc := match(e.Name())
+		if sc == 0 {
+			return e.IsDir(), false
+		}
+		s := importSuggestion{Name: e.Name(), Path: p, score: sc}
+		if !e.IsDir() {
+			size, ok := kind.file(p, e)
+			if !ok {
+				return false, false
+			}
+			s.SizeBytes = size
+		}
+		if fi, err := e.Info(); err == nil {
+			s.AddedOn = fi.ModTime().Unix()
+		}
+		out = append(out, s)
+		return false, false // a match's own contents are its files, not more matches
 	})
 	return out
 }

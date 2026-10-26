@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -26,34 +27,196 @@ import (
 // Everything here stays inside importRoots and goes through the same test as
 // checkImportPath (importGuard): the data folder is refused, every path is fully resolved
 // before it's compared, and the comparison is on a separator boundary. Entries are vetted
-// one by one too, so a symlink inside a root that points out of it is never listed, and
-// the walks never follow symlinks at all. Only names, media-file counts and media-file
-// sizes leave the server — never anything read from inside a file.
+// one by one too, so a symlink inside a root that points out of it is never listed. A
+// walk starts from its folder resolved (so a downloads folder that is itself a link is
+// walked) and never follows a symlink below that. Only names, media-file counts and
+// media-file sizes leave the server — never anything read from inside a file.
+
+// pickerTimeout bounds one browse, search or suggestion request. A variable so a test
+// can run one against a deadline that has already passed.
+var pickerTimeout = 10 * time.Second
 
 // Bounds on one browse or search, so a share with a million files can't hang the page.
 const (
-	pickerTimeout     = 10 * time.Second
 	pickerReadMax     = 5000 // directory entries read from the folder on screen
 	pickerEntriesMax  = 1000 // folders + media files shown for it
 	pickerCountDepth  = 3    // how deep a sub-folder's media files are counted
 	pickerCountVisits = 2000 // entries one sub-folder's count may look at
 	pickerTotalVisits = 50_000
+	pickerReadChunk   = 256 // entries one directory read takes, between deadline checks
+	pickerConcurrent  = 2   // picker walks running at once, per server
 	searchDepth       = 5
 	searchResultsMax  = 50
 	searchVisitsMax   = 50_000
 	searchQueryMin    = 2
 )
 
-// pickerMedia is what counts as importable for a kind: video for movies and series, ebook
-// and audiobook files for books.
-func pickerMedia(kind string) (func(string) bool, bool) {
+// pickerKind is what counts as importable for one kind of title: the very test that
+// kind's manual-import listing applies (library.Listed*), so a folder said to hold "2
+// videos" opens on 2 — samples and stubs under the size floor aren't counted. name is a
+// cheap first check, so a file whose extension can't match is never stat'ed.
+type pickerKind struct {
+	name   func(string) bool
+	listed func(string, int64) bool
+}
+
+func pickerMedia(kind string) (pickerKind, bool) {
 	switch kind {
-	case "movies", "series":
-		return library.IsVideoFile, true
+	case "movies":
+		return pickerKind{library.IsVideoFile, library.ListedMovieVideo}, true
+	case "series":
+		return pickerKind{library.IsVideoFile, library.ListedEpisodeVideo}, true
 	case "books":
-		return library.IsBookFile, true
+		return pickerKind{library.IsBookFile, library.ListedBookFile}, true
 	}
-	return nil, false
+	return pickerKind{}, false
+}
+
+// file reports whether the entry e at p (not a symlink) is a file the listing would show,
+// and its size.
+func (k pickerKind) file(p string, e fs.DirEntry) (int64, bool) {
+	if !k.name(e.Name()) {
+		return 0, false
+	}
+	fi, err := e.Info()
+	if err != nil || !fi.Mode().IsRegular() {
+		return 0, false
+	}
+	return fi.Size(), k.listed(p, fi.Size())
+}
+
+// pickerGate lets pickerConcurrent picker walks run at once; the rest are told to try
+// again, so a few clicks on a slow share can't stack up walks. The zero value is ready.
+type pickerGate struct {
+	once  sync.Once
+	slots chan struct{}
+}
+
+func (g *pickerGate) enter() bool {
+	g.once.Do(func() { g.slots = make(chan struct{}, pickerConcurrent) })
+	select {
+	case g.slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *pickerGate) leave() { <-g.slots }
+
+const pickerBusyMessage = "Arrmada is already looking through folders for someone — try again in a moment."
+
+// enterPicker takes a picker slot, or answers 503 and returns false. The caller calls
+// a.picker.leave() when it took one.
+func (a *api) enterPicker(w http.ResponseWriter) bool {
+	if a.picker.enter() {
+		return true
+	}
+	w.Header().Set("Retry-After", "2")
+	a.writeError(w, http.StatusServiceUnavailable, pickerBusyMessage)
+	return false
+}
+
+// readDirChunk reads the next entries of an open folder. Every picker walk reads through
+// it; a test swaps it to count what a walk read.
+var readDirChunk = func(f *os.File, n int) ([]fs.DirEntry, error) { return f.ReadDir(n) }
+
+// walkBudget is what one walk (or a request's walks) may spend: the request's deadline
+// and a cap on entries looked at. cut says either stopped it.
+type walkBudget struct {
+	ctx    context.Context
+	max    int // 0 = no cap
+	visits int
+	cut    bool
+}
+
+func (b *walkBudget) done() bool {
+	if !b.cut && b.ctx.Err() != nil {
+		b.cut = true
+	}
+	return b.cut
+}
+
+// walkVisit sees one entry (never a hidden one) at depth (1 = in the walk's root).
+// enter asks to walk into it — honoured only for a real folder, never a symlink, and
+// only above maxDepth; stop ends the whole walk.
+type walkVisit func(p string, e fs.DirEntry, depth int) (enter, stop bool)
+
+// boundedWalk walks the tree below root depth first. Unlike filepath.WalkDir it never
+// reads or sorts a whole folder up front: each folder is read pickerReadChunk entries at
+// a time, the deadline is checked before every read (before the root's too), and the cap
+// before every entry. root should already be resolved (resolveWalkRoot); below it,
+// symlinks are handed to visit but never followed.
+func boundedWalk(b *walkBudget, root string, maxDepth int, visit walkVisit) {
+	type frame struct {
+		dir   string
+		depth int
+	}
+	stack := []frame{{root, 0}}
+	for len(stack) > 0 {
+		fr := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		sub, stop := walkFolder(b, fr.dir, fr.depth, maxDepth, visit)
+		if stop {
+			return
+		}
+		for i := len(sub) - 1; i >= 0; i-- { // first-read sub-folder walked first
+			stack = append(stack, frame{sub[i], fr.depth + 1})
+		}
+	}
+}
+
+// walkFolder reads one folder for boundedWalk, returning the sub-folders to walk next.
+func walkFolder(b *walkBudget, dir string, depth, maxDepth int, visit walkVisit) (sub []string, stop bool) {
+	if b.done() {
+		return nil, true
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	for {
+		if b.done() {
+			return sub, true
+		}
+		entries, err := readDirChunk(f, pickerReadChunk)
+		for _, e := range entries {
+			if b.max > 0 && b.visits >= b.max {
+				b.cut = true
+				return sub, true
+			}
+			b.visits++
+			if strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			p := filepath.Join(dir, e.Name())
+			enter, halt := visit(p, e, depth+1)
+			if halt {
+				return sub, true
+			}
+			if enter && e.IsDir() && e.Type()&fs.ModeSymlink == 0 && depth+1 < maxDepth {
+				sub = append(sub, p)
+			}
+		}
+		if err != nil || len(entries) == 0 {
+			return sub, false
+		}
+	}
+}
+
+// resolveWalkRoot is the real folder a walk of p starts from: p with its symlinks
+// resolved — a downloads folder linked into place is walked where it really is — and
+// still put through the guard, so the walk's start can't be anywhere a path couldn't be.
+func resolveWalkRoot(p string, guard func(string) error) (string, bool) {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil || guard(real) != nil {
+		return "", false
+	}
+	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+		return "", false
+	}
+	return real, true
 }
 
 // importRootLabel names a root for the browser's top level and its breadcrumb.
@@ -128,11 +291,15 @@ func (a *api) visibleRoots(ctx context.Context, guard func(string) error, only f
 // the manual-import picker: its sub-folders with how many importable files each holds,
 // and the importable files in it. No path lists the import roots themselves.
 func (a *api) handleImportBrowse(w http.ResponseWriter, r *http.Request) {
-	isMedia, ok := pickerMedia(r.URL.Query().Get("kind"))
+	kind, ok := pickerMedia(r.URL.Query().Get("kind"))
 	if !ok {
 		a.writeError(w, http.StatusBadRequest, "kind must be movies, series or books")
 		return
 	}
+	if !a.enterPicker(w) {
+		return
+	}
+	defer a.picker.leave()
 	ctx, cancel := context.WithTimeout(r.Context(), pickerTimeout)
 	defer cancel()
 	guard := a.importGuard(ctx)
@@ -152,7 +319,7 @@ func (a *api) handleImportBrowse(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "That folder doesn't exist (or isn't a folder)")
 		return
 	}
-	dirs, files, truncated := readPickerFolder(ctx, clean, guard, isMedia)
+	dirs, files, truncated := readPickerFolder(ctx, clean, guard, kind)
 	resp := map[string]any{
 		"path": clean, "crumbs": a.pickerCrumbs(ctx, clean, guard), "dirs": dirs, "files": files, "truncated": truncated,
 	}
@@ -196,17 +363,20 @@ func (a *api) pickerCrumbs(ctx context.Context, clean string, guard func(string)
 // readPickerFolder reads one folder: sub-folders (with counts) and media files, hidden
 // entries left out, every entry vetted by guard. It reads at most pickerReadMax entries
 // and returns at most pickerEntriesMax; truncated says there were more.
-func readPickerFolder(ctx context.Context, dir string, guard func(string) error, isMedia func(string) bool) ([]pickerDir, []pickerFile, bool) {
+func readPickerFolder(ctx context.Context, dir string, guard func(string) error, kind pickerKind) ([]pickerDir, []pickerFile, bool) {
 	dirs, files := []pickerDir{}, []pickerFile{}
+	if ctx.Err() != nil {
+		return dirs, files, true
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return dirs, files, false
 	}
-	entries, err := f.ReadDir(pickerReadMax)
+	entries, err := readDirChunk(f, pickerReadMax)
 	truncated := false
 	if err == nil && len(entries) == pickerReadMax {
 		// There may be more; one more read says for sure.
-		if more, _ := f.ReadDir(1); len(more) > 0 {
+		if more, _ := readDirChunk(f, 1); len(more) > 0 {
 			truncated = true
 		}
 	} else if err != nil && !errors.Is(err, io.EOF) {
@@ -229,8 +399,10 @@ func readPickerFolder(ctx context.Context, dir string, guard func(string) error,
 			break
 		}
 		full := filepath.Join(dir, name)
+		link := e.Type()&fs.ModeSymlink != 0
 		isDir := e.IsDir()
-		if e.Type()&fs.ModeSymlink != 0 {
+		var linked os.FileInfo
+		if link {
 			// A link is shown only when where it leads is still inside the roots.
 			if guard(full) != nil {
 				continue
@@ -239,78 +411,66 @@ func readPickerFolder(ctx context.Context, dir string, guard func(string) error,
 			if err != nil {
 				continue
 			}
-			isDir = fi.IsDir()
+			isDir, linked = fi.IsDir(), fi
 		} else if isDir && guard(full) != nil {
 			continue // the data folder, when it sits inside a root
 		}
 		if isDir {
 			d := pickerDir{Name: name, Path: full}
 			if visits < pickerTotalVisits {
-				n, more, used := countMedia(ctx, full, isMedia, guard)
-				visits += used
-				d.Media, d.More = &n, more
+				if real, ok := resolveWalkRoot(full, guard); ok {
+					n, more, used := countMedia(ctx, real, kind, guard)
+					visits += used
+					d.Media, d.More = &n, more
+				}
 			}
 			dirs = append(dirs, d)
 			continue
 		}
-		if !isMedia(name) {
-			continue
+		var size int64
+		if link {
+			if !kind.name(name) || !linked.Mode().IsRegular() || !kind.listed(full, linked.Size()) {
+				continue
+			}
+			size = linked.Size()
+		} else {
+			s, ok := kind.file(full, e)
+			if !ok {
+				continue
+			}
+			size = s
 		}
-		fi, err := os.Stat(full)
-		if err != nil || !fi.Mode().IsRegular() {
-			continue
-		}
-		files = append(files, pickerFile{Name: name, Path: full, SizeBytes: fi.Size()})
+		files = append(files, pickerFile{Name: name, Path: full, SizeBytes: size})
 	}
 	return dirs, files, truncated
 }
 
-// countMedia counts the media files under dir, pickerCountDepth levels down at most and
-// looking at pickerCountVisits entries at most (more = it stopped early). It doesn't
-// follow symlinks, skips hidden entries, and never enters a folder the guard refuses.
-func countMedia(ctx context.Context, dir string, isMedia func(string) bool, guard func(string) error) (n int, more bool, visits int) {
-	base := strings.Count(dir, string(filepath.Separator))
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if d != nil && d.IsDir() && p != dir {
-				return fs.SkipDir
-			}
-			return nil
+// countMedia counts the files the listing would show under dir (already resolved),
+// pickerCountDepth levels down at most and looking at pickerCountVisits entries at most
+// (more = it stopped early). It doesn't follow symlinks, skips hidden entries, and never
+// enters a folder the guard refuses.
+func countMedia(ctx context.Context, dir string, kind pickerKind, guard func(string) error) (n int, more bool, visits int) {
+	b := &walkBudget{ctx: ctx, max: pickerCountVisits}
+	boundedWalk(b, dir, pickerCountDepth, func(p string, e fs.DirEntry, depth int) (bool, bool) {
+		if e.Type()&fs.ModeSymlink != 0 {
+			return false, false
 		}
-		if ctx.Err() != nil {
-			more = true
-			return fs.SkipAll
-		}
-		if p == dir {
-			return nil
-		}
-		visits++
-		if visits > pickerCountVisits {
-			more = true
-			return fs.SkipAll
-		}
-		if strings.HasPrefix(d.Name(), ".") || d.Type()&fs.ModeSymlink != 0 {
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
+		if e.IsDir() {
 			if guard(p) != nil {
-				return fs.SkipDir // the data folder, when it sits inside a root
+				return false, false // the data folder, when it sits inside a root
 			}
-			if strings.Count(p, string(filepath.Separator))-base >= pickerCountDepth {
+			if depth >= pickerCountDepth {
 				more = more || hasEntries(p)
-				return fs.SkipDir
+				return false, false
 			}
-			return nil
+			return true, false
 		}
-		if isMedia(d.Name()) {
+		if _, ok := kind.file(p, e); ok {
 			n++
 		}
-		return nil
+		return false, false
 	})
-	return n, more, visits
+	return n, more || b.cut, b.visits
 }
 
 // hasEntries reports whether a folder holds anything at all (one entry read).
@@ -320,7 +480,7 @@ func hasEntries(dir string) bool {
 		return false
 	}
 	defer f.Close()
-	e, _ := f.ReadDir(1)
+	e, _ := readDirChunk(f, 1)
 	return len(e) > 0
 }
 
@@ -332,6 +492,7 @@ type pickerHit struct {
 	// Where is the root it was found in ("Downloads") and the path below it, for display.
 	Where string `json:"where"`
 	Rel   string `json:"rel"`
+	root  int    // which root, for the sort
 }
 
 // searchWords splits a name or a query into lowercase, accent-folded words.
@@ -358,7 +519,7 @@ func nameMatches(name string, words []string) bool {
 // first searchResultsMax of them. Library folders aren't searched: what's there is
 // already imported, and they're the big trees.
 func (a *api) handleImportSearch(w http.ResponseWriter, r *http.Request) {
-	isMedia, ok := pickerMedia(r.URL.Query().Get("kind"))
+	kind, ok := pickerMedia(r.URL.Query().Get("kind"))
 	if !ok {
 		a.writeError(w, http.StatusBadRequest, "kind must be movies, series or books")
 		return
@@ -368,13 +529,17 @@ func (a *api) handleImportSearch(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusBadRequest, "Type at least two letters to search")
 		return
 	}
+	if !a.enterPicker(w) {
+		return
+	}
+	defer a.picker.leave()
 	ctx, cancel := context.WithTimeout(r.Context(), pickerTimeout)
 	defer cancel()
 	guard := a.importGuard(ctx)
 	roots := a.visibleRoots(ctx, guard, func(r libroots.Root) bool {
 		return r.Name == "downloads" || r.Name == "former-downloads"
 	})
-	hits, truncated := searchRoots(ctx, roots, words, isMedia, guard)
+	hits, truncated := searchRoots(ctx, roots, words, kind, guard)
 	if ctx.Err() != nil {
 		if r.Context().Err() != nil {
 			return
@@ -384,68 +549,57 @@ func (a *api) handleImportSearch(w http.ResponseWriter, r *http.Request) {
 	a.writeJSON(w, http.StatusOK, map[string]any{"results": hits, "truncated": truncated})
 }
 
-// searchRoots walks each root (no symlinks, no hidden entries, searchDepth levels) for
-// folders and media files whose names hold every word.
-func searchRoots(ctx context.Context, roots []pickerDir, words []string, isMedia func(string) bool, guard func(string) error) ([]pickerHit, bool) {
+// searchRoots walks each root (resolved; no symlinks below it, no hidden entries,
+// searchDepth levels, searchVisitsMax entries in all) for folders and media files whose
+// names hold every word.
+func searchRoots(ctx context.Context, roots []pickerDir, words []string, kind pickerKind, guard func(string) error) ([]pickerHit, bool) {
 	hits := []pickerHit{}
-	visits := 0
-	truncated := false
-	for _, root := range roots {
-		base := strings.Count(root.Path, string(filepath.Separator))
-		_ = filepath.WalkDir(root.Path, func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				if d != nil && d.IsDir() && p != root.Path {
-					return fs.SkipDir
+	b := &walkBudget{ctx: ctx, max: searchVisitsMax}
+	full := false
+	for ri, root := range roots {
+		real, ok := resolveWalkRoot(root.Path, guard)
+		if !ok {
+			continue
+		}
+		boundedWalk(b, real, searchDepth, func(p string, e fs.DirEntry, _ int) (bool, bool) {
+			if e.Type()&fs.ModeSymlink != 0 {
+				return false, false
+			}
+			if e.IsDir() && guard(p) != nil {
+				return false, false
+			}
+			if !nameMatches(e.Name(), words) {
+				return e.IsDir(), false
+			}
+			h := pickerHit{Name: e.Name(), Path: p, Dir: e.IsDir(), Where: root.Label, root: ri}
+			if !e.IsDir() {
+				size, ok := kind.file(p, e)
+				if !ok {
+					return false, false
 				}
-				return nil
+				h.SizeBytes = size
 			}
-			if ctx.Err() != nil {
-				truncated = true
-				return fs.SkipAll
+			if len(hits) >= searchResultsMax {
+				full = true
+				return false, true
 			}
-			if p == root.Path {
-				return nil
+			if rel, err := filepath.Rel(real, p); err == nil {
+				h.Rel = filepath.ToSlash(rel)
 			}
-			visits++
-			if visits > searchVisitsMax {
-				truncated = true
-				return fs.SkipAll
-			}
-			name := d.Name()
-			if strings.HasPrefix(name, ".") || d.Type()&fs.ModeSymlink != 0 {
-				if d.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			depth := strings.Count(p, string(filepath.Separator)) - base
-			if d.IsDir() && guard(p) != nil {
-				return fs.SkipDir
-			}
-			if (d.IsDir() || isMedia(name)) && nameMatches(name, words) {
-				if len(hits) >= searchResultsMax {
-					truncated = true
-					return fs.SkipAll
-				}
-				h := pickerHit{Name: name, Path: p, Dir: d.IsDir(), Where: root.Label}
-				if rel, err := filepath.Rel(root.Path, p); err == nil {
-					h.Rel = filepath.ToSlash(rel)
-				}
-				if !d.IsDir() {
-					if fi, err := d.Info(); err == nil {
-						h.SizeBytes = fi.Size()
-					}
-				}
-				hits = append(hits, h)
-			}
-			if d.IsDir() && depth >= searchDepth {
-				return fs.SkipDir
-			}
-			return nil
+			hits = append(hits, h)
+			return e.IsDir(), false
 		})
-		if truncated {
+		if full || b.cut {
 			break
 		}
 	}
-	return hits, truncated
+	// The walk reads folders in the order the disk gives; show them in name order, a
+	// folder ahead of what's inside it.
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].root != hits[j].root {
+			return hits[i].root < hits[j].root
+		}
+		return strings.ToLower(hits[i].Rel) < strings.ToLower(hits[j].Rel)
+	})
+	return hits, full || b.cut
 }

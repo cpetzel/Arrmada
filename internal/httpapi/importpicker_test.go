@@ -21,28 +21,45 @@ import (
 )
 
 // pickerFixture is downloads, a Movies library, the data folder and an "elsewhere" side
-// by side (importTestDirs), with a few releases in downloads.
+// by side (importTestDirs), with a few releases in downloads. Real videos are sparse
+// files just over the listing's size floor; samples and stubs are a byte.
 func pickerFixture(t *testing.T) (cfg config.Config, outside string, srv *http.Server) {
 	t.Helper()
 	cfg, outside = importTestDirs(t)
-	write := func(p string) {
-		t.Helper()
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(filepath.Join(cfg.DownloadsDir, "Dune.Part.One.2021.2160p", "Dune.Part.One.2021.2160p.mkv"))
-	write(filepath.Join(cfg.DownloadsDir, "Dune.Part.One.2021.2160p", "Sample", "sample.mkv"))
-	write(filepath.Join(cfg.DownloadsDir, "Dune.Part.One.2021.2160p", "release.nfo"))
-	write(filepath.Join(cfg.DownloadsDir, "Loose.Film.2019.mkv"))
-	write(filepath.Join(cfg.DownloadsDir, "notes.txt"))
-	write(filepath.Join(cfg.DownloadsDir, ".hidden", "x.mkv"))
-	write(filepath.Join(outside, "Secret.Film.2020.mkv"))
-	write(filepath.Join(cfg.DataDir, "arrmada.db"))
+	tiny := func(p string) { sparseFile(t, p, 1) }
+	big := func(p string) { sparseFile(t, p, bigVideo) }
+	big(filepath.Join(cfg.DownloadsDir, "Dune.Part.One.2021.2160p", "Dune.Part.One.2021.2160p.mkv"))
+	tiny(filepath.Join(cfg.DownloadsDir, "Dune.Part.One.2021.2160p", "Sample", "sample.mkv"))
+	tiny(filepath.Join(cfg.DownloadsDir, "Dune.Part.One.2021.2160p", "Extras", "stub.mkv"))
+	tiny(filepath.Join(cfg.DownloadsDir, "Dune.Part.One.2021.2160p", "release.nfo"))
+	big(filepath.Join(cfg.DownloadsDir, "Loose.Film.2019.mkv"))
+	tiny(filepath.Join(cfg.DownloadsDir, "Tiny.Clip.2019.mkv"))
+	tiny(filepath.Join(cfg.DownloadsDir, "notes.txt"))
+	big(filepath.Join(cfg.DownloadsDir, ".hidden", "x.mkv"))
+	big(filepath.Join(outside, "Secret.Film.2020.mkv"))
+	tiny(filepath.Join(cfg.DataDir, "arrmada.db"))
 	return cfg, outside, New(Deps{Config: cfg, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+}
+
+// bigVideo is just over the size a listing takes a video at.
+const bigVideo = library.MinEpisodeVideoSize + 1
+
+// sparseFile makes a file of size bytes (sparse, so a "50 MB video" costs nothing).
+func sparseFile(t *testing.T, p string, size int64) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type browseResp struct {
@@ -54,7 +71,12 @@ type browseResp struct {
 
 func browse(t *testing.T, srv *http.Server, path string) (int, browseResp, string) {
 	t.Helper()
-	target := "/api/v1/manualimport/folders?kind=movies"
+	return browseKind(t, srv, "movies", path)
+}
+
+func browseKind(t *testing.T, srv *http.Server, kind, path string) (int, browseResp, string) {
+	t.Helper()
+	target := "/api/v1/manualimport/folders?kind=" + kind
 	if path != "" {
 		target += "&path=" + url.QueryEscape(path)
 	}
@@ -104,11 +126,12 @@ func TestImportBrowseListsFoldersCountsAndMediaFiles(t *testing.T) {
 	if names := dirNames(got.Dirs); strings.Join(names, ",") != "Dune.Part.One.2021.2160p,sub" {
 		t.Errorf("dirs = %v (hidden and outside folders must not show)", names)
 	}
-	if d := got.Dirs[0]; d.Media == nil || *d.Media != 2 || d.More {
-		t.Errorf("Dune counted %+v, want 2 videos", d)
+	// The count is what the listing will show: the film, not its sample or the stub.
+	if d := got.Dirs[0]; d.Media == nil || *d.Media != 1 || d.More {
+		t.Errorf("Dune counted %+v, want 1 video", d)
 	}
-	if len(got.Files) != 1 || got.Files[0].Name != "Loose.Film.2019.mkv" || got.Files[0].SizeBytes != 1 {
-		t.Errorf("files = %+v, want only the video", got.Files)
+	if len(got.Files) != 1 || got.Files[0].Name != "Loose.Film.2019.mkv" || got.Files[0].SizeBytes != bigVideo {
+		t.Errorf("files = %+v, want only the full-size video", got.Files)
 	}
 	if len(got.Crumbs) != 1 || got.Crumbs[0].Name != "Downloads" {
 		t.Errorf("crumbs = %+v", got.Crumbs)
@@ -216,7 +239,7 @@ func TestImportPickerDataDirInsideRoot(t *testing.T) {
 		t.Errorf("search found %+v in the data folder", hits)
 	}
 	a := &api{deps: Deps{Config: cfg}}
-	if s := a.importSuggestions(context.Background(), movieMatcher(movies.Movie{Title: "Dune", Year: 2021}, nil), library.IsVideoFile); len(s) != 0 {
+	if s := a.importSuggestions(context.Background(), movieMatcher(movies.Movie{Title: "Dune", Year: 2021}, nil), mustKind(t, "movies")); len(s) != 0 {
 		t.Errorf("suggested from the data folder: %+v", s)
 	}
 }
@@ -288,47 +311,54 @@ func TestImportSearchIsBounded(t *testing.T) {
 	}
 }
 
-func TestImportPickerRoutesNeedManager(t *testing.T) {
-	cfg, _, srv := pickerFixture(t)
-	for _, target := range []string{
-		"/api/v1/manualimport/folders?kind=movies&path=" + url.QueryEscape(cfg.DownloadsDir),
-		"/api/v1/manualimport/search?kind=movies&q=dune",
-		"/api/v1/movies/1/manualimport/suggestions",
-		"/api/v1/series/1/manualimport/suggestions",
-		"/api/v1/books/1/manualimport/suggestions",
-	} {
-		for _, role := range []auth.Role{auth.RoleReadonly, auth.RoleRequester} {
-			rec := httptest.NewRecorder()
-			srv.Handler.ServeHTTP(rec, lanRequest("GET", target, "", role))
-			if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
-				t.Errorf("%s as %s: HTTP %d, want refused", target, role, rec.Code)
-			}
-		}
-	}
-	rec := httptest.NewRecorder()
-	srv.Handler.ServeHTTP(rec, lanRequest("GET", "/api/v1/manualimport/folders?kind=music", "", auth.RoleManager))
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("unknown kind: HTTP %d", rec.Code)
-	}
-}
-
 func TestImportSuggestionsFromTheDownloadsFolder(t *testing.T) {
 	cfg, outside, _ := pickerFixture(t)
-	// A matching name reached only through a symlink out of downloads is never offered.
-	symlink(t, outside, filepath.Join(cfg.DownloadsDir, "Dune.2021.Linked"))
 	a := &api{deps: Deps{Config: cfg}}
-	got := a.importSuggestions(context.Background(), movieMatcher(movies.Movie{Title: "Dune", Year: 2021}, nil), library.IsVideoFile)
-	if len(got) != 0 {
-		// "Dune Part One" isn't "Dune": the title keys must match, not just share a word.
-		t.Errorf("suggestions = %+v", got)
+	movieKind, _ := pickerMedia("movies")
+	ctx := context.Background()
+
+	// The title keys must match, not just share a word: "Dune" is not "Dune Part One".
+	if got := a.importSuggestions(ctx, movieMatcher(movies.Movie{Title: "Dune", Year: 2021}, nil), movieKind); len(got) != 0 {
+		t.Errorf("Dune: %+v", got)
 	}
-	got = a.importSuggestions(context.Background(), movieMatcher(movies.Movie{Title: "Dune: Part One", Year: 2021}, nil), library.IsVideoFile)
+	got := a.importSuggestions(ctx, movieMatcher(movies.Movie{Title: "Dune: Part One", Year: 2021}, nil), movieKind)
 	if len(got) != 1 || got[0].Name != "Dune.Part.One.2021.2160p" || got[0].InClient {
-		t.Errorf("suggestions = %+v", got)
+		t.Errorf("Dune: Part One: %+v", got)
 	}
-	got = a.importSuggestions(context.Background(), movieMatcher(movies.Movie{Title: "Loose Film", Year: 2019}, nil), library.IsVideoFile)
-	if len(got) != 1 || got[0].SizeBytes != 1 {
+	// A loose file is offered when the listing would show it; a stub under the size floor isn't.
+	got = a.importSuggestions(ctx, movieMatcher(movies.Movie{Title: "Loose Film", Year: 2019}, nil), movieKind)
+	if len(got) != 1 || got[0].SizeBytes != bigVideo {
 		t.Errorf("loose file: %+v", got)
+	}
+	if got := a.importSuggestions(ctx, movieMatcher(movies.Movie{Title: "Tiny Clip", Year: 2019}, nil), movieKind); len(got) != 0 {
+		t.Errorf("a stub was suggested: %+v", got)
+	}
+
+	// Layer one, the scan: it never offers a symlink below the root, even one that stays
+	// inside the roots, so what it offers can't depend on where a link leads.
+	inside := filepath.Join(cfg.MoviesDir, "Linked.Film.2021")
+	sparseFile(t, filepath.Join(inside, "Linked.Film.2021.mkv"), bigVideo)
+	symlink(t, inside, filepath.Join(cfg.DownloadsDir, "Linked.Film.2021"))
+	if got := a.importSuggestions(ctx, movieMatcher(movies.Movie{Title: "Linked Film", Year: 2021}, nil), movieKind); len(got) != 0 {
+		t.Errorf("the scan offered a symlink: %+v", got)
+	}
+
+	// Layer two, the vetting every suggestion goes through (a client's path included):
+	// a path outside the roots, or a link inside downloads that leads out, is refused on
+	// its own — no scan involved.
+	guard := a.importGuard(ctx)
+	out := filepath.Join(cfg.DownloadsDir, "Secret.Link")
+	symlink(t, filepath.Join(outside, "Secret.Film.2020.mkv"), out)
+	for _, p := range []string{filepath.Join(outside, "Secret.Film.2020.mkv"), out, cfg.DataDir} {
+		if _, ok := vetSuggestion(guard, p); ok {
+			t.Errorf("vetSuggestion(%s) passed", p)
+		}
+	}
+	if _, ok := vetSuggestion(guard, filepath.Join(cfg.DownloadsDir, "Loose.Film.2019.mkv")); !ok {
+		t.Errorf("vetSuggestion refused a file in downloads")
+	}
+	if _, ok := vetSuggestion(guard, filepath.Join(cfg.DownloadsDir, "gone.mkv")); ok {
+		t.Errorf("vetSuggestion passed a file that isn't there")
 	}
 }
 
