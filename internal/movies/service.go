@@ -46,6 +46,7 @@ type LibraryPrefs interface {
 // Service is the Movies module's application logic.
 type Service struct {
 	repo     *Repo
+	resolved resolveCache // recorded paths' link resolutions, shared by other-files looks
 	meta     metadata.MovieProvider
 	log      *slog.Logger
 	root     string            // library root, for rescan/rename/manual-import (see libRoot)
@@ -573,6 +574,13 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 	for _, m := range existing {
 		byTMDB[m.TMDBID] = m
 	}
+	// The other videos in each film's folder are noted as the scan reaches the folder
+	// (otherfiles.go). Without the records to check against, the scan goes on without.
+	others, err := s.newOtherFilesPass(ctx, true)
+	if err != nil {
+		s.log.Warn("library scan: couldn't read the recorded files — not noting other files this time", "err", err)
+		others = nil
+	}
 	// Every path any track holds: a file already recorded is never attached twice or
 	// reported as a duplicate of itself.
 	owned := map[string]bool{}
@@ -678,6 +686,7 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 			switch {
 			case owned[filepath.Clean(video)]:
 				res.Skipped++
+				s.noteOtherFilesInScan(ctx, others, m, tracks[m.ID])
 			case !m.HasFile:
 				// A folder started is finished, even if the scan is stopped meanwhile.
 				if err := s.attachExisting(context.WithoutCancel(ctx), m, video, "Attached during library scan: "); err != nil {
@@ -690,8 +699,13 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 				byTMDB[match.TMDBID] = m
 				owned[filepath.Clean(video)] = true
 				res.Attached++
+				if others != nil {
+					others.note(video)
+				}
+				s.noteOtherFilesInScan(ctx, others, m, tracks[m.ID])
 			default:
 				res.Duplicates = append(res.Duplicates, ScanDuplicate{MovieID: m.ID, Title: m.Title, Folder: name, Path: video})
+				s.noteOtherFilesInScan(ctx, others, m, tracks[m.ID])
 			}
 			continue
 		}
@@ -705,6 +719,10 @@ func (s *Service) ScanLibrary(ctx context.Context, rootOverride string, opts Sca
 		byTMDB[match.TMDBID] = created
 		owned[filepath.Clean(video)] = true
 		res.Imported++
+		if others != nil {
+			others.note(video)
+		}
+		s.noteOtherFilesInScan(ctx, others, created, []Version{})
 	}
 	if err := ctx.Err(); err != nil {
 		// Stopped part-way (a cancel, the time budget, shutdown): keep what it did find,
@@ -1820,17 +1838,34 @@ func (s *Service) Refresh(ctx context.Context, id int64) (Movie, error) {
 	if m.HasFile && m.MovieFilePath != "" && !adopted {
 		_ = s.setDefaultFile(ctx, id, m.MovieFilePath)
 	}
+	// 4. The other videos in its folder, looked at again (otherfiles.go).
+	if _, oerr := s.refreshOtherFiles(ctx, nil, m, nil); oerr != nil {
+		s.log.Warn("refresh: couldn't note the other files in the film's folder", "movie", m.Title, "err", oerr)
+	}
 	_ = s.repo.AddEvent(ctx, id, "refreshed", "Refreshed metadata and rescanned disk")
 	return s.repo.Get(ctx, id)
 }
 
 // rescan reconciles a movie's file record against its library folder in place, reporting
 // whether it adopted (and so read) a file.
+//
+// A recorded default file that is still on disk is kept, whatever else the folder holds:
+// a bigger video beside it may be an extra version's file or another film's. Only when
+// the recorded file is gone (or none is recorded) does it look for a replacement, and
+// then never one a track of any film records (adoptableVideo). A recorded file that
+// can't be looked at (a flaky mount, permissions) is left as it is.
 func (s *Service) rescan(ctx context.Context, m *Movie) (adopted bool) {
-	folder := s.movieFolder(*m)
-	found, _, err := library.FindVideo(folder)
+	if m.HasFile && m.MovieFilePath != "" {
+		if _, err := s.statFile(m.MovieFilePath); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return false
+		}
+	}
+	found, ok := s.adoptableVideo(ctx, *m)
+	if !ok {
+		return false // the records couldn't be read: change nothing
+	}
 	switch {
-	case err == nil && found != "":
+	case found != "":
 		if found != m.MovieFilePath {
 			old := m.MovieFilePath
 			if err := s.adoptDefaultFile(ctx, *m, found); err != nil {
@@ -1864,6 +1899,85 @@ func (s *Service) rescan(ctx context.Context, m *Movie) (adopted bool) {
 		}
 	}
 	return adopted
+}
+
+// adoptableVideo is the video a rescan may record as m's default when its recorded file is
+// gone: the biggest under the film's folder (two folders down) that the other-files list
+// would show — so never a sample, a trailer, featurette or anything in an extras folder,
+// nothing in Arrmada's hidden folders (the recycle bin, Convert's hold), nothing in a
+// folder named as another film, and no file a track of any film records, as written,
+// through a link (resolved afresh, never from the cache), as a hardlink of a recorded file
+// in the folder or of one of m's own versions, or — for a case-insensitive share — by a
+// name differing only in case from a record in the same folder. m's own gone default isn't
+// counted as recorded: a case-only rename of it ("Heat (1995).mkv" → "heat (1995).mkv")
+// is the same film's file.
+//
+// Only a folder that is provably the film's own adopts anything (the list's own-folder
+// test: named for the film, inside a Movies folder, no other film's record in it). A film
+// loose in a Movies, library or downloads folder, in a shared or collection folder, or
+// outside every Movies folder adopts nothing ("" — the record is cleared, as when its folder
+// holds no video): the biggest video there may be any other film's.
+//
+// ok is false — the rescan changes nothing at all — when the records can't be read, the
+// folder can't be read (not missing: unreadable, as a flaky mount), or the folder is too
+// big to look through (the walk was cut short).
+func (s *Service) adoptableVideo(ctx context.Context, m Movie) (path string, ok bool) {
+	dir := filepath.Clean(s.movieFolder(m))
+	if s.looseIn(dir) {
+		return "", true
+	}
+	if fi, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) || (err == nil && !fi.IsDir()) {
+		return "", true
+	} else if err != nil {
+		s.log.Warn("rescan: couldn't read the film's folder — changing nothing", "folder", dir, "err", err)
+		return "", false
+	}
+	if s.movieRootOf(dir) == "" {
+		return "", true
+	}
+	versions, err := s.repo.ListVersions(ctx, m.ID)
+	if err != nil {
+		return "", false
+	}
+	pass, err := s.newOtherFilesPass(ctx, false, m.MovieFilePath)
+	if err != nil {
+		s.log.Warn("rescan: couldn't read the recorded files — changing nothing", "folder", dir, "err", err)
+		return "", false
+	}
+	own := map[string]bool{}
+	var ownPaths []string
+	for _, v := range versions {
+		if v.FilePath != "" {
+			own[pathKey(v.FilePath)] = true
+			ownPaths = append(ownPaths, v.FilePath)
+		}
+	}
+	if s.ownFolder(m, dir) != "" || pass.recordedIntoExcept(dir, own) != "" {
+		return "", true // shared, or not provably the film's: adopt nothing
+	}
+	recorded := ownPaths
+	folded := map[string]bool{}
+	for _, i := range pass.under[pathKey(dir)] {
+		recorded = append(recorded, pass.others[i])
+		folded[pass.keys[i]] = true
+	}
+	recInfo := statAll(recorded)
+	best, size := "", int64(0)
+	truncated, rootErr := s.walkFolderVideos(m, dir, otherFilesDepth, true, func(full, rel string, fi os.FileInfo) {
+		if fi.Size() <= size || pass.recorded[fileKey(full)] || folded[pathKey(full)] ||
+			otherFileSkipFor(m, rel, fi.Size()) != "" || sameAsAny(fi, recInfo) {
+			return
+		}
+		if pass.recordedAs(full) {
+			return
+		}
+		best, size = full, fi.Size()
+	})
+	if truncated || rootErr != nil {
+		s.log.Warn("rescan: couldn't look through the film's folder — changing nothing", "folder", dir, "truncated", truncated, "err", rootErr)
+		return "", false
+	}
+	return best, true
 }
 
 // movieFolder is the library directory for a movie: the tracked file's folder if

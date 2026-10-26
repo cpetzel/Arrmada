@@ -1037,6 +1037,7 @@ func (a *api) registerRoutes(mux *router) {
 	mux.HandleFunc("POST /api/v1/movies/{id}/rename", a.requireRole(auth.RoleManager, a.handleRename))
 	// Multi-version tracks (opt-in)
 	mux.HandleFunc("GET /api/v1/movies/{id}/versions", a.requireRole(auth.RoleManager, a.handleListVersions))
+	mux.HandleFunc("GET /api/v1/movies/{id}/other-files", a.requireRole(auth.RoleManager, a.handleMovieOtherFiles))
 	mux.HandleFunc("POST /api/v1/movies/{id}/versions", a.requireRole(auth.RoleManager, a.handleAddVersion))
 	mux.HandleFunc("PUT /api/v1/movies/{id}/versions/{vid}", a.requireRole(auth.RoleManager, a.handleUpdateVersion))
 	mux.HandleFunc("DELETE /api/v1/movies/{id}/versions/{vid}/file", a.requireRole(auth.RoleManager, a.handleDeleteVersionFile))

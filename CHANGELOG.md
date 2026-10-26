@@ -28,6 +28,27 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Before you update
 
+- **Refresh & rescan keeps a film's file while it's on disk.** It used to switch a film to
+  the biggest video in its folder whenever that was a different file, even an extra
+  version's file, a trailer or another film's, so two records could hold one file and
+  removing the version recycled the film's file. Now:
+  - While the recorded file is on disk (or can't be checked, as when a network share is
+    down), Refresh leaves the film's file as it is. A bigger copy beside it shows as
+    **+1 other file** on the film's page instead.
+  - To switch a film to another file in its folder, remove or move the old file, then
+    Refresh: the biggest video left in the folder (or two folders down) becomes the film's
+    file. This works only in a folder that is plainly the film's own (named for it, with no
+    other film's file in it); anywhere else, import the new file by hand.
+  - It never picks a file another version or film records (a hardlink of one included), a
+    sample, a trailer, featurette or anything in an extras folder, anything in Arrmada's
+    hidden folders, or a file in a subfolder named as another film.
+  - A film with several versions whose main file is gone has that record cleared, not
+    replaced by one of its versions' files. Its other versions keep their files.
+  - A film loose in a Movies folder, or in a folder it shares with other films, whose file
+    is gone has the record cleared; nothing else in that folder is taken for it.
+  - If the folder can't be read, or holds too many files to look through, nothing changes.
+  - A file renamed only in case (`Heat (1995).mkv` to `heat (1995).mkv`) is still found.
+  - A recorded file under 50 MB is no longer cleared as if there were no video.
 - **What a show's rescan and duplicate check read is narrower** (#56). They no longer read a
   folder inside the show's that holds another show (hidden, nested, or under Other or
   Bonus), Plex extras folders, a file named as another show in your library, a video
@@ -189,6 +210,21 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
+- **Other files in a film's folder.** When a film's folder holds a video Arrmada doesn't use
+  (another cut, an old copy, a second film left there), the film's page shows **+1 other
+  file** by its file, and the Movies library has a **Has other files** filter and a small
+  **+1** on the poster. A library scan or **Refresh & rescan** notes them, and the chip's
+  list looks again. It only says they're there and not tracked: nothing is moved, renamed,
+  recorded or deleted, and there's nothing to do with them from the list.
+  - Not counted: the film's own files and any other film's, samples (named so, in a Sample
+    folder, or under 50 MB), Plex and Jellyfin extras (names ending `-trailer`,
+    `-featurette`, `-behindthescenes`, `-deleted`, `-interview`, `-scene`, `-short`,
+    `-other`, and folders such as Extras, Featurettes, Trailers and Deleted Scenes), and
+    anything that isn't a video. Subfolders are looked in two levels deep, except one
+    named as another film (`Alien (1979)/Aliens (1986)`).
+  - A folder that isn't plainly the film's own (not named for it, or another film in your
+    library has a file there) is looked at only at its top level, and only files no film
+    uses count. A film loose in a Movies folder has nothing listed.
 - **Manual import can look anywhere you gave Arrmada, not just the downloads folder.** On a
   movie, show or book, **Manual import** now opens with the finished downloads whose names
   match it (in your download clients, Not managed ones included, or sitting in a downloads

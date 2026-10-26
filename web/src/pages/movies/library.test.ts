@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FitItem, MovieSummary } from "../../lib/api";
-import { hdrBadge, isMisfit, movieLibraryConfig, resBadge } from "./library";
+import { hasOtherFiles, hdrBadge, isMisfit, movieLibraryConfig, resBadge } from "./library";
 
 const movie = (id: number, over: Partial<MovieSummary> = {}): MovieSummary => ({
   id, title: `M${id}`, sort_title: `m${id}`, year: 2020, monitored: true, has_file: false, quality_profile: "", min_availability: "released", ...over,
@@ -17,7 +17,7 @@ describe("movie library config", () => {
   const lib = [
     movie(1), // wanted
     movie(2, { download: { state: "downloading", progress: 0.4, kind: "missing" } }), // downloading, not wanted
-    movie(3, { has_file: true, media: { resolution: "2160p", hdr: ["DV", "HDR10"] } }),
+    movie(3, { has_file: true, media: { resolution: "2160p", hdr: ["DV", "HDR10"] }, other_files: 2 }),
     movie(4, { has_file: true, file_missing: true }),
     movie(5, { monitored: false }), // no file, unmonitored
     movie(6, { monitored: false, has_file: true, download: { state: "downloading", progress: 0.1, kind: "upgrade" } }),
@@ -25,13 +25,22 @@ describe("movie library config", () => {
   const ids = (key: string) => lib.filter(filter(key).match!).map((m) => m.id);
 
   it("filters by the badge words, and Downloading takes any download", () => {
-    expect(config.filters.map((f) => f.label)).toEqual(["All", "Wanted", "Downloading", "No file (unmonitored)", "File missing", "Doesn't fit", "Unmonitored"]);
+    expect(config.filters.map((f) => f.label)).toEqual(["All", "Wanted", "Downloading", "No file (unmonitored)", "File missing", "Has other files", "Doesn't fit", "Unmonitored"]);
     expect(ids("wanted")).toEqual([1]);
     expect(ids("downloading")).toEqual([2, 6]);
     expect(ids("nofile")).toEqual([5]);
     expect(ids("filemissing")).toEqual([4]);
     expect(ids("misfit")).toEqual([3]);
+    expect(ids("otherfiles")).toEqual([3]);
     expect(ids("unmonitored")).toEqual([5, 6]);
+  });
+
+  it("has other files only with a file and a count from the last look", () => {
+    expect(hasOtherFiles(movie(1, { has_file: true, other_files: 1 }))).toBe(true);
+    expect(hasOtherFiles(movie(1, { has_file: true }))).toBe(false);
+    expect(hasOtherFiles(movie(1, { has_file: true, other_files: 0 }))).toBe(false);
+    // A film that lost its file has no folder of its own to speak of.
+    expect(hasOtherFiles(movie(1, { has_file: false, other_files: 2 }))).toBe(false);
   });
 
   it("sorts titles by their sort title, so The Matrix files under M", () => {

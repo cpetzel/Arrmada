@@ -83,6 +83,18 @@ export function hdrBadge(f?: SummaryMedia): string {
   return h.length ? "HDR" : "";
 }
 
+// hasOtherFiles: the last scan or refresh found videos in the film's folder that Arrmada
+// doesn't use (the film's page lists them).
+export function hasOtherFiles(m: MovieSummary): boolean {
+  return m.has_file && (m.other_files ?? 0) > 0;
+}
+
+// OtherFilesBadge is the poster's quiet note that the film's folder holds other videos.
+function OtherFilesBadge({ n }: { n: number }) {
+  const what = `${n} other video file${n === 1 ? "" : "s"} in its folder`;
+  return <span role="img" aria-label={what} title={what} className="rounded px-1 py-px font-mono text-xs font-bold leading-[1.4]" style={{ background: POSTER_CHIP_BG, color: "#fff" }}>+{n}</span>;
+}
+
 function Badge({ children }: { children: ReactNode }) {
   return <span className="rounded px-1 py-px font-mono text-xs font-bold leading-[1.4]" style={{ background: POSTER_CHIP_BG, color: "#fff" }}>{children}</span>;
 }
@@ -99,6 +111,7 @@ function MovieBadges({ m }: { m: MovieSummary }) {
       {res && <Badge>{res}</Badge>}
       {hdr && <Badge>{hdr}</Badge>}
       {f && hasAtmos(f) && <Badge>Atmos</Badge>}
+      {hasOtherFiles(m) && <OtherFilesBadge n={m.other_files ?? 0} />}
     </>
   );
 }
@@ -127,6 +140,7 @@ export function movieLibraryConfig({ fits, queueKnown, actions, rowAction }: Mov
       { key: "downloading", label: "Downloading", match: (m) => !!m.download },
       { key: "nofile", label: "No file (unmonitored)", match: (m) => !m.monitored && !m.has_file, title: "No file and not monitored: never searched for" },
       { key: "filemissing", label: STATUS_LABEL.fileMissing, match: (m) => movieStatus(m, undefined, queueKnown).key === "missing", title: "A file was recorded but is gone from disk" },
+      { key: "otherfiles", label: "Has other files", match: hasOtherFiles, title: "The film's folder holds videos Arrmada doesn't use (another cut, an old copy) — its page lists them" },
       { key: "misfit", label: "Doesn't fit", match: (m) => isMisfit(fits.get(m.id)), title: "The file doesn't fit its profile's ideal file (bitrate or spec) — the table says why" },
       { key: "unmonitored", label: STATUS_LABEL.unmonitored, match: (m) => !m.monitored },
     ],

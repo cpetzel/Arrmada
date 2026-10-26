@@ -106,7 +106,8 @@ func (r *Repo) SetMediaInfoForPath(ctx context.Context, id int64, path, mediaJSO
 func (r *Repo) ListSummaries(ctx context.Context) ([]MovieSummary, error) {
 	rows, err := r.q().QueryContext(ctx, `SELECT id, title, year, poster_url, monitored, has_file, quality_profile,
 		min_availability, added_at, COALESCE(CASE WHEN json_valid(extra_json) THEN json_extract(extra_json, '$.vote_average') END, 0), media_json,
-		file_missing_since IS NOT NULL, display_title, library_folder_id
+		file_missing_since IS NOT NULL, display_title, library_folder_id,
+		COALESCE((SELECT file_count FROM movie_other_files o WHERE o.movie_id = movies.id), 0)
 		FROM movies ORDER BY added_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
@@ -121,9 +122,10 @@ func (r *Repo) ListSummaries(ctx context.Context) ([]MovieSummary, error) {
 			mediaJSON string
 			missing   bool
 			display   string
+			others    int
 		)
 		if err := rows.Scan(&s.ID, &s.Title, &s.Year, &s.PosterURL, &mon, &hf, &s.QualityProfile,
-			&s.MinAvailability, &s.AddedAt, &vote, &mediaJSON, &missing, &display, &s.LibraryFolderID); err != nil {
+			&s.MinAvailability, &s.AddedAt, &vote, &mediaJSON, &missing, &display, &s.LibraryFolderID, &others); err != nil {
 			return nil, err
 		}
 		s.Monitored, s.HasFile, s.VoteAverage = mon != 0, hf != 0, vote
@@ -145,6 +147,9 @@ func (r *Repo) ListSummaries(ctx context.Context) ([]MovieSummary, error) {
 			s.mediaStale = f == nil || (!f.Missing && f.MediaVersion < MediaVersion)
 			// Flagged by the missing-file check (MOV-21): read from the column, no stat.
 			s.FileMissing = s.FileMissing || missing
+			// What the last look at its folder found (otherfiles.go); only a film with a
+			// file has a folder to look in.
+			s.OtherFiles = others
 		}
 		out = append(out, s)
 	}
@@ -330,6 +335,9 @@ func (r *Repo) Delete(ctx context.Context, id int64) error {
 			return ErrNotFound
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM movie_versions WHERE movie_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM movie_other_files WHERE movie_id = ?`, id); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM movie_events WHERE movie_id = ?`, id)
