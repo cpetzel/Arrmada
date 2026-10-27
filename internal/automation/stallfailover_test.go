@@ -81,7 +81,7 @@ func (f *fakeQbit) stalledTorrent(hash, name, category string) {
 // fakeTorznab answers every search with the same feed, or fails every request while down.
 type fakeTorznab struct {
 	mu       sync.Mutex
-	releases []string // titles on offer
+	releases []string         // titles on offer
 	sizes    map[string]int64 // bytes by title; 4 GiB when unset
 	down     bool
 	searches int

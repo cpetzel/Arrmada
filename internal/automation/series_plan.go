@@ -28,10 +28,10 @@ type planOpts struct {
 // planInput is everything the planner decides from. cover and try are the only ties to
 // the outside world, so the tier rules can be tested without an indexer or a client.
 type planInput struct {
-	eligible      []quality.Evaluation // ranked best-first
+	eligible []quality.Evaluation // ranked best-first
 	// ranking is the mode that ordered eligible (Decision.Ranking). It says which avoids put
 	// a release in the avoided tier, which the plan only reaches for what's still needed.
-	ranking string
+	ranking       string
 	wanted        []epKey
 	seriesSeasons map[int]bool
 	counts        map[int]int
