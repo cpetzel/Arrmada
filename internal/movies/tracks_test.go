@@ -259,3 +259,29 @@ func mustGet(t *testing.T, svc *Service, id int64) Movie {
 	}
 	return m
 }
+
+// The recorded path and the new one can be one file spelt two ways: a symlinked folder, or
+// another case on a case-insensitive disk. Attaching it again is no upgrade, and nothing
+// is removed — removing the "old" file used to recycle the new one.
+func TestMarkImportedSameFileSpeltTwoWays(t *testing.T) {
+	svc, ctx, lib := trackService(t)
+	m, _ := svc.repo.Create(ctx, Movie{TMDBID: 6, Title: "Heat", Year: 1995, Monitored: true})
+	real := touch(t, filepath.Join(lib, "Heat (1995)", "Heat (1995) - 1080p BluRay.mkv"))
+	alias := filepath.Join(lib, "Alias")
+	if err := os.Symlink(filepath.Join(lib, "Heat (1995)"), alias); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	old := filepath.Join(alias, filepath.Base(real))
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, old, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, real, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(real); err != nil {
+		t.Fatalf("the file was removed: %v", err)
+	}
+	if got := mustGet(t, svc, m.ID).MovieFilePath; got != real {
+		t.Fatalf("recorded %q, want %q", got, real)
+	}
+}
