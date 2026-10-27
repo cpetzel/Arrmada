@@ -1474,7 +1474,8 @@ func releaseEdition(sourceRelease, path string) string {
 }
 
 // TrackNaming is how track v of movie m names its file: the movie's title and year, the
-// track's edition and label, and every other track's file as protected. With the
+// track's edition and label, its own recorded file (the only file an import may replace),
+// and every other track's file as protected. With the
 // importer's MovieTrackTarget it's the one name builder for movie files — the import,
 // manual import and rename all go through TrackTarget.
 func (s *Service) TrackNaming(m Movie, versions []Version, v Version) library.MovieTrack {
@@ -1482,6 +1483,7 @@ func (s *Service) TrackNaming(m Movie, versions []Version, v Version) library.Mo
 		Title: m.Title, Year: m.Year, Edition: v.Edition, Label: v.Label,
 		IDs:  library.MovieIDs{TMDB: m.TMDBID, IMDB: m.IMDBID},
 		Root: s.rootFor(m),
+		Own:  v.FilePath,
 	}
 	for _, o := range versions {
 		if o.ID != v.ID && o.FilePath != "" {

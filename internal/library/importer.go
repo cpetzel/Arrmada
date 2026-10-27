@@ -910,6 +910,10 @@ type MovieTrack struct {
 	// Protected are the files the movie's other tracks own. None is ever a target, and none
 	// is ever recycled or overwritten to make room.
 	Protected []string
+	// Own is the file this track records ("" for none), even one marked missing. An import
+	// may replace it when it's at the target (an upgrade under the same name, through the
+	// recycle bin); any other file already at the target is kept clear of (untrackedAt).
+	Own string
 }
 
 // MovieIDs are a movie's ids, for {tmdbid} and {imdbid} — what Plex matches a folder
@@ -1104,6 +1108,15 @@ func (im *Importer) Import(name, contentPath string) (*Result, error) {
 		return nil, err
 	}
 	target := im.targetPath(rel, filepath.Ext(src))
+	if !rel.IsTV() {
+		// No library movie was matched, so no file at the target is one this import may
+		// replace — except the same file (untrackedAt). An episode keeps its name: the file
+		// at a scheme-built SxxEyy name in the show's folder is that episode's own.
+		var ok bool
+		if target, ok = im.clearOfUntracked(MovieTrack{Title: rel.Title, Year: rel.Year}, rel, filepath.Ext(src), src, target); !ok {
+			return nil, fmt.Errorf("%w: %s", ErrUntrackedTarget, target)
+		}
+	}
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return nil, fmt.Errorf("create library dir: %w", err)
@@ -1849,10 +1862,63 @@ func OwnedByOther(path string, protected []string) bool {
 // can't come from MovieTrackTarget; it's the last guard before anything is placed.
 var ErrProtectedTarget = errors.New("that file belongs to another version of this movie")
 
+// ErrUntrackedTarget is an import whose every name is taken by files no record owns. The
+// files are left alone and nothing is placed.
+var ErrUntrackedTarget = errors.New("files Arrmada doesn't track already have every name this file could take")
+
+// untrackedAt reports whether a file already at target must be kept clear of: one that
+// isn't the track's own recorded file (own) and isn't the import itself (the same bytes —
+// a re-import, or a file adopted where it lies). Replacing it would recycle, or with the
+// bin off overwrite, a file no record knows of: a remux kept by hand under the scheme's
+// name, say. A file that can't be checked counts as in the way.
+func untrackedAt(target, own, src string) bool {
+	di, err := os.Stat(target)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	if own != "" && OwnedByOther(target, []string{own}) {
+		return false
+	}
+	si, err := os.Stat(src)
+	if err != nil {
+		return true
+	}
+	same, err := sameContent(src, target, si, di)
+	return err != nil || !same
+}
+
+// clearOfUntracked is target, or — when an untracked file is there (untrackedAt) — the
+// track's next name clear of it, made the way a name another track owns is kept clear of
+// (" - <label>", then a counter). ok is false when no name is free; nothing is placed then.
+// A target with nothing untracked at it comes back unchanged, so every other import is
+// named exactly as before.
+func (im *Importer) clearOfUntracked(t MovieTrack, rel parser.Release, ext, src, target string) (string, bool) {
+	if !untrackedAt(target, t.Own, src) {
+		return target, true
+	}
+	t.Protected = append([]string(nil), t.Protected...) // never the caller's array
+	for n := 0; n < 100; n++ {
+		t.Protected = append(t.Protected, target)
+		target = im.movieTrackTarget(t, rel, ext)
+		if OwnedByOther(target, t.Protected) {
+			return target, false
+		}
+		if !untrackedAt(target, t.Own, src) {
+			im.log.Info("a file Arrmada doesn't track has the import's name — placing the import beside it", "kept", t.Protected[len(t.Protected)-1], "target", target)
+			return target, true
+		}
+	}
+	return target, false
+}
+
 // ImportAsNamed imports a download into movie track t: named per track (MovieTrackTarget),
 // and never onto a file another track owns — that file is neither recycled nor
-// overwritten. A file already at the target that no other track owns (this track's own
-// older file under the same name) is replaced as before, through the recycle bin.
+// overwritten. A file already at the target that is this track's own (t.Own: its older
+// file under the same name) is replaced as before, through the recycle bin; any other
+// file there (untrackedAt) is kept, and the import takes the track's next name beside it.
 // Archives are unpacked first, exactly like Import.
 func (im *Importer) ImportAsNamed(t MovieTrack, contentPath string) (*Result, error) {
 	searchPath := im.prepareContent(contentPath)
@@ -1866,9 +1932,14 @@ func (im *Importer) ImportAsNamed(t MovieTrack, contentPath string) (*Result, er
 	if err := im.checkRoot(im.movieRoot(t)); err != nil {
 		return nil, err
 	}
-	target := im.MovieTrackTarget(t, filepath.Base(src), filepath.Ext(src))
+	rel := parser.Parse(filepath.Base(src))
+	target := im.movieTrackTarget(t, rel, filepath.Ext(src))
 	if OwnedByOther(target, t.Protected) {
 		return nil, fmt.Errorf("%w: %s", ErrProtectedTarget, target)
+	}
+	target, ok := im.clearOfUntracked(t, rel, filepath.Ext(src), src, target)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrUntrackedTarget, target)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return nil, fmt.Errorf("create library dir: %w", err)
