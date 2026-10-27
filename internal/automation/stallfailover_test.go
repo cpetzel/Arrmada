@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,8 +82,21 @@ func (f *fakeQbit) stalledTorrent(hash, name, category string) {
 type fakeTorznab struct {
 	mu       sync.Mutex
 	releases []string // titles on offer
+	sizes    map[string]int64 // bytes by title; 4 GiB when unset
 	down     bool
 	searches int
+}
+
+// offerSized puts titles on offer with their sizes in GiB.
+func (f *fakeTorznab) offerSized(gib map[string]float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases, f.sizes = nil, map[string]int64{}
+	for title, g := range gib {
+		f.releases = append(f.releases, title)
+		f.sizes[title] = int64(g * (1 << 30))
+	}
+	sort.Strings(f.releases)
 }
 
 func (f *fakeTorznab) handler() http.Handler {
@@ -97,8 +111,12 @@ func (f *fakeTorznab) handler() http.Handler {
 		var b strings.Builder
 		b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>`)
 		for _, title := range f.releases {
+			size, ok := f.sizes[title]
+			if !ok {
+				size = 4 << 30
+			}
 			fmt.Fprintf(&b, `<item><title>%s</title><link>%s</link><size>%d</size><torznab:attr name="seeders" value="25"/></item>`,
-				html.EscapeString(title), html.EscapeString(magnetFor(title)), int64(4<<30))
+				html.EscapeString(title), html.EscapeString(magnetFor(title)), size)
 		}
 		b.WriteString(`</channel></rss>`)
 		w.Header().Set("Content-Type", "application/xml")

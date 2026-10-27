@@ -40,15 +40,24 @@ func (previewMeta) SearchSeries(context.Context, string) ([]metadata.SeriesResul
 	return nil, nil
 }
 func (previewMeta) GetSeries(_ context.Context, id int) (*metadata.SeriesDetails, error) {
-	if id != 95396 {
-		return nil, errors.New("unknown show")
-	}
 	eps := func(n int, aired string) []metadata.EpisodeDetails {
 		var out []metadata.EpisodeDetails
 		for i := 1; i <= n; i++ {
 			out = append(out, metadata.EpisodeDetails{EpisodeNumber: i, AirDate: aired, Runtime: 50})
 		}
 		return out
+	}
+	if id == lutherTMDB {
+		// An ended show of five four-episode seasons: 20 episodes, 1000 minutes.
+		var seasons []metadata.SeasonDetails
+		for sn := 1; sn <= 5; sn++ {
+			seasons = append(seasons, metadata.SeasonDetails{SeasonNumber: sn, Episodes: eps(4, "201"+strconv.Itoa(sn)+"-05-04")})
+		}
+		return &metadata.SeriesDetails{SeriesResult: metadata.SeriesResult{TMDBID: id, Title: "Luther", Year: 2010}, Status: "Ended",
+			Seasons: seasons}, nil
+	}
+	if id != 95396 {
+		return nil, errors.New("unknown show")
 	}
 	return &metadata.SeriesDetails{SeriesResult: metadata.SeriesResult{TMDBID: id, Title: "Severance", Year: 2022}, Status: "Returning Series",
 		Seasons: []metadata.SeasonDetails{

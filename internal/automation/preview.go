@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/tristenlammi/arrmada/internal/books"
 	"github.com/tristenlammi/arrmada/internal/indexer"
@@ -79,6 +80,10 @@ type Preview struct {
 	// not checked").
 	Season      int    `json:"season,omitempty"`
 	SeasonsNote string `json:"seasons_note,omitempty"`
+	// CoveredSeasons are the seasons asked for that the releases shown fill — Season and,
+	// for a multi-season or complete pack, every other one it brings — for the header
+	// ("Seasons 1–5: 1 pack"). Empty with no releases.
+	CoveredSeasons []int `json:"covered_seasons,omitempty"`
 	// InLibrary: the title is in the library already, so it was ranked — and a search after
 	// approving it ranks — under its own profile, whatever the approval picks.
 	InLibrary bool `json:"in_library,omitempty"`
@@ -511,6 +516,7 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 	taken := map[string]bool{}
 	planSeriesGrabs(planInput{
 		eligible:      decision.Eligible,
+		ranking:       decision.Ranking,
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),
@@ -544,6 +550,7 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 	}
 	coveredSeasons := map[int]bool{}
 	var rels []indexer.Release
+	var avoided *quality.Evaluation // the first shown release from the avoided tier
 	for _, pk := range picks {
 		cand := parser.Parse(pk.name)
 		if len(c.coveredByFor(ctx, s, cand, firstEps)) == 0 {
@@ -558,6 +565,9 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 		pr.Kind, pr.Covers = previewSeriesKind(cand), previewCovers(cand)
 		if ev := evaluationOf(decision, pk.name); ev != nil {
 			pr.Matched, pr.Avoided = ev.Matched, ev.AvoidedFormats
+			if avoided == nil && quality.InAvoidedTier(decision.Ranking, *ev) {
+				avoided = ev
+			}
 		}
 		p.Releases = append(p.Releases, pr)
 		for _, sn := range wantSeasons {
@@ -570,6 +580,23 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 		p.Why, p.ChosenOver = decision.Why, decision.ChosenOver
 	} else if len(p.Releases) > 0 {
 		p.Why = []string{seriesPlanWhy(p.Releases)}
+	}
+	if avoided != nil {
+		// Said first and plainly, in place of Decide's generic line: a pick from the avoided
+		// tier is a last resort, and whoever approves should know what it falls short on.
+		why := []string{avoidedPickWhy(decision, *avoided)}
+		for _, w := range p.Why {
+			if w != quality.WhyOnlyAvoided {
+				why = append(why, w)
+			}
+		}
+		p.Why = why
+	}
+	if len(p.Releases) > 0 {
+		// The header names every season the shown releases fill ("Seasons 1–5: 1 pack"),
+		// not just the first: a complete pack is the whole request, not Season 1's.
+		coveredSeasons[first] = true
+		p.CoveredSeasons = sortedSeasons(coveredSeasons)
 	}
 	p.SeasonsNote = seasonsNote(wantSeasons, first, coveredSeasons)
 	c.issuePreview(&p, rels, ReleaseKindSeries, in.Key, nil)
@@ -650,34 +677,58 @@ func seriesPlanWhy(rels []PreviewRelease) string {
 	switch {
 	case packs == len(rels) && packs == 1:
 		return "One pack covers the season"
+	case packs == len(rels):
+		// A season pack and a bigger pack for the seasons it leaves (the bigger one also
+		// brings this season): no single episodes in it.
+		return fmt.Sprintf("%d packs between them cover what's asked for", packs)
 	case packs == 0:
 		return "No pack fit the profile, so it's taken episode by episode"
 	}
 	return "A pack where one fits, single episodes for the rest"
 }
 
-// seasonsNote is the line about the seasons wanted beyond the one previewed: covered by a
-// pack it found too, or not checked.
+// seasonsNote is the line about the seasons wanted that the releases shown don't fill: not
+// checked. The ones a pack fills too are named in the header (CoveredSeasons), so an
+// "Also covers…" here would only repeat it.
 func seasonsNote(want []int, first int, covered map[int]bool) string {
-	also, unchecked := 0, 0
+	unchecked := 0
 	for _, sn := range want {
-		switch {
-		case sn == first:
-		case covered[sn]:
-			also++
-		default:
+		if sn != first && !covered[sn] {
 			unchecked++
 		}
 	}
-	switch {
-	case also > 0 && unchecked > 0:
-		return fmt.Sprintf("Also covers %d more %s; %d more not checked", also, pluralize(also, "season"), unchecked)
-	case also > 0:
-		return fmt.Sprintf("Also covers the other %d %s asked for", also, pluralize(also, "season"))
-	case unchecked > 0:
+	if unchecked > 0 {
 		return fmt.Sprintf("%d more %s not checked", unchecked, pluralize(unchecked, "season"))
 	}
 	return ""
+}
+
+// avoidedPickWhy says why the plan took a release from the avoided tier, from the decision
+// rather than a guess: nothing clean fit at all, or clean releases did but none of them
+// covered what this one fills (the plan reaches the avoided tier only for that).
+func avoidedPickWhy(d quality.Decision, ev quality.Evaluation) string {
+	has := "it has something you avoid"
+	if len(ev.AvoidedFormats) > 0 {
+		has = "it has " + strings.Join(ev.AvoidedFormats, ", ") + ", which you avoid"
+	}
+	clean := 0
+	for _, e := range d.Eligible {
+		if !quality.InAvoidedTier(d.Ranking, e) {
+			clean++
+		}
+	}
+	switch {
+	case clean > 0:
+		were := "releases were"
+		if clean == 1 {
+			were = "release was"
+		}
+		return fmt.Sprintf("%d better %s found, but none of them covers everything asked for — this one fills the rest, and %s",
+			clean, were, has)
+	case len(d.Eligible) == 1:
+		return "Nothing better was found — this is the only release that fits, and " + has
+	}
+	return "Nothing better was found — every release that fits has something you avoid, and " + has
 }
 
 // ---- books -----------------------------------------------------------------

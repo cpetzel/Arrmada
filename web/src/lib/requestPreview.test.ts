@@ -35,6 +35,19 @@ describe("request previews", () => {
     expect(seasonLine(found())).toBe("");
   });
 
+  it("names every season a multi-season or complete pack fills", () => {
+    const luther = found({
+      season: 1, covered_seasons: [1, 2, 3, 4, 5],
+      releases: [{ ...found().releases[0], title: "Luther (2010) S01-S05 COMPLETE 1080p H265", kind: "complete series", covers: "all seasons", source: undefined, size_gb: 14.4 }],
+    });
+    expect(seasonLine(luther)).toBe("Seasons 1–5: 1 pack · 1080p · 14.4 GB");
+    expect(previewLine(preview(luther))).toBe("Would grab — Seasons 1–5: 1 pack · 1080p · 14.4 GB");
+    expect(seasonLine({ ...luther, covered_seasons: [1, 3, 5] })).toBe("Seasons 1, 3, 5: 1 pack · 1080p · 14.4 GB");
+    expect(seasonLine({ ...luther, covered_seasons: [1] })).toBe("Season 1: 1 pack · 1080p · 14.4 GB");
+    // A preview stored before the server named the seasons: the first one, as it said then.
+    expect(seasonLine({ ...luther, covered_seasons: undefined })).toBe("Season 1: 1 pack · 1080p · 14.4 GB");
+  });
+
   it("names the commonest reasons nothing fit", () => {
     const none = found({ outcome: "none", releases: [], top_reasons: [{ code: "wrong_title", label: "for other titles", count: 9 }, { code: "seeders", label: "too few seeders", count: 3 }] });
     expect(reasonsLine(none)).toBe("12 releases · 9 for other titles, 3 too few seeders");
