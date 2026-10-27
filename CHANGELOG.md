@@ -471,14 +471,17 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   the only release that covers a gap it's still grabbed. A torrent with no seeders is
   likewise only used for what nothing seeded covers. An oversized pack is still the last
   resort after all of that, so one missing episode is never filled with a whole series
-  when a single episode exists, avoided or not. An avoided or oversized pack that would
-  also bring episodes a better release is already fetching waits until those have
-  imported, then fills the rest; its copies of those episodes are turned away as worse.
-  This applies to the missing sweep, the Search and Grab buttons and the request preview.
-- **A request's release preview searches every season asked for**, as the missing sweep
-  does. It searched only the first, so a show whose season packs only turn up when asked
-  for by season was previewed — and, on **Approve & grab**, grabbed — with a worse pack
-  instead. The note under it now says whether releases were found for the other seasons.
+  when a single episode exists, avoided or not. An avoided pack that would mostly bring
+  episodes a better release is downloading right now waits until that download finishes,
+  so the better files land first; then it fills the rest. The import normally keeps the
+  better files over its copies. A download that stops moving, or is still going a day
+  after it was grabbed, holds nothing back. This applies to the missing sweep, the Search
+  and Grab buttons and the request preview; a Grab that leaves a pack waiting says so.
+- **A request's release preview searches the seasons asked for by number**, as the
+  missing sweep does: up to six, plus the broad search. It searched only the first, so a
+  show whose season packs only turn up when asked for by season was previewed — and, on
+  **Approve & grab**, grabbed — with a worse pack instead. The note under it says what was
+  found for the other seasons, and which weren't checked.
 - **A request's release preview names every season a pack covers.** A complete-series
   pack showed as "Season 1: 1 pack". It now reads "Seasons 1–5: 1 pack". When the pick is
   a release you avoid, **Why** says so plainly: that nothing better was found, or that
