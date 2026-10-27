@@ -469,8 +469,16 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   it can from releases you don't avoid first — complete packs, season packs, then single
   episodes — and only turns to an avoided release for what's still missing. If that is
   the only release that covers a gap it's still grabbed. A torrent with no seeders is
-  likewise only used for what nothing seeded covers. This applies to the missing sweep,
-  the Search and Grab buttons and the request preview.
+  likewise only used for what nothing seeded covers. An oversized pack is still the last
+  resort after all of that, so one missing episode is never filled with a whole series
+  when a single episode exists, avoided or not. An avoided or oversized pack that would
+  also bring episodes a better release is already fetching waits until those have
+  imported, then fills the rest; its copies of those episodes are turned away as worse.
+  This applies to the missing sweep, the Search and Grab buttons and the request preview.
+- **A request's release preview searches every season asked for**, as the missing sweep
+  does. It searched only the first, so a show whose season packs only turn up when asked
+  for by season was previewed — and, on **Approve & grab**, grabbed — with a worse pack
+  instead. The note under it now says whether releases were found for the other seasons.
 - **A request's release preview names every season a pack covers.** A complete-series
   pack showed as "Season 1: 1 pack". It now reads "Seasons 1–5: 1 pack". When the pick is
   a release you avoid, **Why** says so plainly: that nothing better was found, or that
