@@ -472,6 +472,16 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     lands beside it with the version's label (`Heat (1995) - 1080p BluRay - Default.mkv`).
     An upgrade still replaces the film's own file under the same name, through the bin,
     and re-importing the same file still does nothing.
+  - A file earlier versions moved into the originals hold beside a converted film is no
+    longer deleted when the hold is released. It goes back to the film's folder, or, if
+    its name there is taken, stays in the hold and Convert's log says where it is.
+  - A revert that fails part-way and can't put its files back now leaves them for the next
+    start to put right. Releasing the hold in the meantime used to delete both copies.
+  - An import that records a file already on record under another spelling (another case
+    on a case-insensitive disk, or a symlinked folder) no longer recycles the file it has
+    just imported. This applies to films and episodes.
+  - On a case-insensitive disk, converting `Heat (1995).MKV` no longer waits forever because
+    `Heat (1995).mkv`, which is the same file, seemed taken.
 - **A season pack whose episode titles disagree with the show's episode list waits in Needs
   you instead of landing on the wrong episodes.** A show's episode list can be out of date
   when a whole season is released at once. Moving a file to the episode its title names
