@@ -23,7 +23,8 @@ const (
 	SkipSourceGone  = "source_gone"  // the library file is missing
 	SkipTransient   = "transient"    // any other failure that should clear on its own
 	// The converted file's .mkv name is a file another library record points at (a second
-	// version, an episode filed under that name). Never moved aside; looked at again later.
+	// version, an episode filed under that name), or a file no record owns that has anything
+	// in it (someone's own copy). Never moved aside; looked at again later.
 	SkipNameTaken = "name_taken"
 	// There's nowhere to keep the original: the file is outside every library folder, the
 	// folder is inside the app's data folder, or its hold can't be made. Looked at again later.

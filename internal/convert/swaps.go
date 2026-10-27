@@ -378,8 +378,8 @@ func (s *Service) pendingParts(ctx context.Context) map[string]bool {
 
 // nameOwner says why the converted file may not take path, which already holds a file:
 // another library record points at it (a second version of a film, an episode filed under
-// the same name). "" means no record owns it, so it's a stray that can be moved aside. A
-// lookup that fails counts as owned — a file is never moved on a guess.
+// the same name). "" means no record owns it — strayInTheWay then decides whether it may
+// be moved aside. A lookup that fails counts as owned — a file is never moved on a guess.
 func (s *Service) nameOwner(ctx context.Context, path string) string {
 	name := filepath.Base(path)
 	if s.movies != nil {
@@ -401,6 +401,28 @@ func (s *Service) nameOwner(ctx context.Context, path string) string {
 		}
 	}
 	return ""
+}
+
+// strayInTheWay says why the converted file may not take path although no record owns it:
+// a file with anything in it there is someone's — a remux kept by hand beside the film, a
+// copy made outside Arrmada. Convert never leaves a file of its own at that name (its
+// staged copy is the .arrpart, the original goes to the hold), so it isn't a leftover.
+// Moved into the hold it would be deleted with the original when the hold is released,
+// so the conversion waits instead. Only an empty file, which holds nothing to lose, is
+// still moved aside. "" means the name is free or holds an empty file; a file that can't
+// be checked counts as in the way.
+func strayInTheWay(path string) string {
+	name := filepath.Base(path)
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ""
+	case err != nil:
+		return "couldn't check the file already at " + name
+	case fi.Mode().IsRegular() && fi.Size() == 0:
+		return ""
+	}
+	return "a file Arrmada doesn't track is already at " + name + " — rename or remove it to convert this one"
 }
 
 // finalPathFor is where a conversion of src lands: the same name as an .mkv (versions.go's
