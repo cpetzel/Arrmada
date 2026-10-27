@@ -352,6 +352,7 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 	g.scopeOf = byTitle
 	left := planSeriesGrabs(planInput{
 		eligible:      decision.Eligible,
+		ranking:       decision.Ranking,
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),

@@ -661,6 +661,7 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 	g := c.newSeriesGrabber(s, profile, byName, pending, false, WholeShow)
 	remaining = planSeriesGrabs(planInput{
 		eligible:      eligible,
+		ranking:       decision.Ranking,
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),

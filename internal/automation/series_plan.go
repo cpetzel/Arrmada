@@ -29,6 +29,9 @@ type planOpts struct {
 // the outside world, so the tier rules can be tested without an indexer or a client.
 type planInput struct {
 	eligible      []quality.Evaluation // ranked best-first
+	// ranking is the mode that ordered eligible (Decision.Ranking). It says which avoids put
+	// a release in the avoided tier, which the plan only reaches for what's still needed.
+	ranking string
 	wanted        []epKey
 	seriesSeasons map[int]bool
 	counts        map[int]int
@@ -48,6 +51,14 @@ type planInput struct {
 // planSeriesGrabs chooses which releases fill the wanted episodes, tier by tier, and
 // returns what it couldn't cover (sorted). It's the missing sweep's selection, shared with
 // the quick Grab/Replace buttons so a click obeys the same pack rules the sweep does.
+//
+// The releases are planned in quality tiers (quality.GrabTier): every pass runs over the
+// clean releases first, and only what they couldn't fill is looked for among the dead
+// torrents, then the avoided tier (under the bitrate floor, an avoided format, language or
+// Unwanted item). Decide never ranks an avoided release above a clean one, but the passes
+// below pick by kind and coverage, not rank — so without the tiers a starved complete pack
+// beat good season packs simply because it covered more. Avoided still means "last
+// resort", never "reject": a gap nothing clean covers is filled from the avoided tier.
 func planSeriesGrabs(in planInput) []epKey {
 	needed := setOf(in.wanted)
 	if len(needed) == 0 {
@@ -71,6 +82,35 @@ func planSeriesGrabs(in planInput) []epKey {
 		failed[name] = true
 		return false
 	}
+	for _, eligible := range grabTiers(in.eligible, in.ranking) {
+		if len(needed) == 0 {
+			break
+		}
+		planTier(in, eligible, needed, failed, try, log)
+	}
+	return sortedKeys(needed)
+}
+
+// grabTiers splits the eligible releases by quality.GrabTier, best tier first, each keeping
+// Decide's order — so within a tier the first complete pack is still the best-ranked one.
+func grabTiers(eligible []quality.Evaluation, ranking string) [][]quality.Evaluation {
+	var by [4][]quality.Evaluation
+	for _, ev := range eligible {
+		t := quality.GrabTier(ranking, ev)
+		by[t] = append(by[t], ev)
+	}
+	var out [][]quality.Evaluation
+	for _, t := range by {
+		if len(t) > 0 {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// planTier runs every pass over one tier's releases, deleting from needed what they cover.
+func planTier(in planInput, eligible []quality.Evaluation, needed map[epKey]bool, failed map[string]bool,
+	try func(name, label string) bool, log *slog.Logger) {
 	scoped := in.opts.Scoped
 	packsOK := !scoped || !in.opts.EpisodesOnly
 
@@ -79,9 +119,12 @@ func planSeriesGrabs(in planInput) []epKey {
 	// season is grabbed cleanly as its own release.
 
 	// Pass 1 — a complete-series pack that covers every needed season (ended shows only).
+	// In a later tier, needed is what the better tiers left: the pack must be mostly useful
+	// for that, so the proportionate rule decides whether it may re-download seasons a
+	// clean pack already brought.
 	neededSeasons := seasonsOf(needed)
 	if in.ended && packsOK {
-		for _, ev := range in.eligible {
+		for _, ev := range eligible {
 			r := ev.Candidate.Release
 			if r.Kind() != parser.KindCompleteShow {
 				continue
@@ -108,7 +151,8 @@ func planSeriesGrabs(in planInput) []epKey {
 			// The pack covers everything wanted: nothing is left uncovered. Reporting it
 			// as remaining made the anime absolute-number follow-up grab single episodes
 			// the pack already contains.
-			return nil
+			clear(needed)
+			return
 		}
 	}
 
@@ -123,11 +167,11 @@ func planSeriesGrabs(in planInput) []epKey {
 		for {
 			var best *quality.Evaluation
 			var bestCover int
-			for i := range in.eligible {
-				if failed[in.eligible[i].Candidate.Name] {
+			for i := range eligible {
+				if failed[eligible[i].Candidate.Name] {
 					continue // couldn't be grabbed this pass — re-selecting it would loop
 				}
-				r := in.eligible[i].Candidate.Release
+				r := eligible[i].Candidate.Release
 				if !isPackTier(r.Kind(), in.ended) {
 					continue
 				}
@@ -144,7 +188,7 @@ func planSeriesGrabs(in planInput) []epKey {
 					continue
 				}
 				if n > bestCover {
-					bestCover, best = n, &in.eligible[i]
+					bestCover, best = n, &eligible[i]
 				}
 			}
 			if best == nil || bestCover == 0 {
@@ -165,7 +209,7 @@ func planSeriesGrabs(in planInput) []epKey {
 	// Pass 3 — individual episodes for whatever's left. Cheaper and more targeted than a
 	// pack when only a few are missing, which is why the disproportionate packs were held
 	// back above.
-	for _, ev := range in.eligible {
+	for _, ev := range eligible {
 		if len(needed) == 0 {
 			break
 		}
@@ -185,11 +229,12 @@ func planSeriesGrabs(in planInput) []epKey {
 		}
 	}
 	// Pass 4 — last resort. Anything still missing had no single-episode release either, so
-	// take an oversized pack rather than leave the gap: an inefficient grab beats none.
+	// take an oversized pack rather than leave the gap: an inefficient grab beats none. It is
+	// the last resort of this tier only: an oversized clean pack still comes before anything
+	// avoided, as Decide would rank them.
 	if len(needed) > 0 && packsOK && (!scoped || in.opts.AllowPackFallback) {
 		takePacks(false)
 	}
-	return sortedKeys(needed)
 }
 
 // seriesGrabber makes the grabs a plan asks for and remembers what it did, so the plan

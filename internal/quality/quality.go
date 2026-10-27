@@ -900,12 +900,8 @@ func (e *Engine) Decide(p Profile, cands []Candidate) Decision {
 		// recommendation doesn't look like the avoid was ignored when it's simply all
 		// there was. Under v2 only the avoids that are a tier count: a negative custom
 		// score there is a score.
-		avoided := d.Winner.Avoided
-		if d.Ranking == RankingV2 {
-			avoided = d.Winner.TargetAvoided
-		}
-		if avoided {
-			d.Why = append([]string{"Only releases with a format you avoid were available"}, d.Why...)
+		if InAvoidedTier(d.Ranking, *d.Winner) {
+			d.Why = append([]string{WhyOnlyAvoided}, d.Why...)
 		}
 		if len(d.Eligible) > 1 {
 			ru := d.Eligible[1]
@@ -919,6 +915,37 @@ func (e *Engine) Decide(p Profile, cands []Candidate) Decision {
 		}
 	}
 	return d
+}
+
+// WhyOnlyAvoided is the line Decide puts first in Why when even the winner is in the
+// avoided tier, so a caller that says it better (a show's plan) can tell it apart.
+const WhyOnlyAvoided = "Only releases with a format you avoid were available"
+
+// InAvoidedTier reports whether an eligible release sits in the avoided tier under the
+// ranking that ordered it: anything carrying an avoid in classic ranking; under v2 only
+// the avoids that are a tier (TargetAvoided) — a negative custom score there is a score.
+func InAvoidedTier(ranking string, ev Evaluation) bool {
+	if NormalizeRanking(ranking) == RankingV2 {
+		return ev.TargetAvoided
+	}
+	return ev.Avoided
+}
+
+// GrabTier is where an eligible release stands on the two keys both rankings put ahead of
+// every preference: 0 a clean release that can download, 1 a clean dead torrent (no
+// seeders), 2 one in the avoided tier, 3 avoided and dead. Decide never ranks a release
+// above one in a lower-numbered tier, so a plan that takes several releases (a show's
+// packs and episodes) fills what it can from each tier before it looks at the next —
+// otherwise a starved complete pack could beat good season packs just by covering more.
+func GrabTier(ranking string, ev Evaluation) int {
+	t := 0
+	if InAvoidedTier(ranking, ev) {
+		t = 2
+	}
+	if !ev.Candidate.alive() {
+		t++
+	}
+	return t
 }
 
 // sortV1 is classic ranking: the avoided tier, dead torrents last, then the summed score,

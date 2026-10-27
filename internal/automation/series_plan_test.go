@@ -19,6 +19,27 @@ type planCase struct {
 	counts   map[int]int // season → episode count; also the set of seasons the show has
 	ended    bool
 	fail     map[string]bool
+	// avoided releases are in the avoided tier (here: under the bitrate floor); dead ones
+	// are torrents with no seeders. ranking is the mode that ordered them ("" is classic).
+	avoided map[string]bool
+	dead    map[string]bool
+	ranking string
+}
+
+// evaluations are the case's releases as Decide would hand them over, tiers marked.
+func (c planCase) evaluations() []quality.Evaluation {
+	out := evals(c.eligible...)
+	for i := range out {
+		n := out[i].Candidate.Name
+		if c.avoided[n] {
+			out[i].Avoided, out[i].TargetAvoided = true, true
+			out[i].AvoidedFormats = []string{"a bitrate under your 5 Mbps floor"}
+		}
+		if c.dead[n] {
+			out[i].Candidate.Seeders = 0
+		}
+	}
+	return out
 }
 
 func evals(names ...string) []quality.Evaluation {
@@ -50,7 +71,8 @@ func allSeasons(counts map[int]int) map[int]bool {
 func runPlan(c planCase, opts planOpts) ([]string, []epKey) {
 	var calls []string
 	left := planSeriesGrabs(planInput{
-		eligible:      evals(c.eligible...),
+		eligible:      c.evaluations(),
+		ranking:       c.ranking,
 		wanted:        c.wanted,
 		seriesSeasons: allSeasons(c.counts),
 		counts:        c.counts,
