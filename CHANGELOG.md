@@ -461,6 +461,17 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Convert and imports no longer remove a video Arrmada doesn't track.**
+  - Converting `Heat (1995).mp4` writes `Heat (1995).mkv`. A file you kept under that name
+    (a remux beside the film, say) used to be moved into the originals hold with the
+    original, and deleted with it when the hold expired. Now the conversion waits under
+    Convert's Problems until you rename or remove that file, and nothing is encoded until
+    then. An empty file there is still moved aside, as before.
+  - A film import whose name was taken by a file no record owns used to send that file to
+    the recycle bin, or overwrite it with the bin off. Now the file stays, and the import
+    lands beside it with the version's label (`Heat (1995) - 1080p BluRay - Version.mkv`).
+    An upgrade still replaces the film's own file under the same name, through the bin,
+    and re-importing the same file still does nothing.
 - **A season pack whose episode titles disagree with the show's episode list waits in Needs
   you instead of landing on the wrong episodes.** A show's episode list can be out of date
   when a whole season is released at once. Moving a file to the episode its title names

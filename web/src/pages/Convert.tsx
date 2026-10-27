@@ -799,7 +799,7 @@ const SKIP_LABEL: Record<string, string> = {
   transient: "These hit a problem that usually clears on its own (often a full disk). Each is tried again after an hour, then six, then once a day",
   reverted: "You reverted their conversions, so Convert leaves them alone. Converting one by hand from the Library still works",
   hold_full: "The originals hold is full: each converted file's original is kept for the undo window, and the hold has reached the size you set. Nothing is deleted to make room — these convert after the next original is released (its window ends, or you release some from History), or once you raise the hold's size in Convert's settings",
-  name_taken: "The converted file would take the name of a file another library record points at (a second version, say), so it was left alone and the originals kept. Each is tried again after an hour, then six, then once a day",
+  name_taken: "The converted file would take the name of a file that's already there: one another library record points at (a second version, say), or one Arrmada doesn't track (a copy you keep beside the film). That file was left alone and the originals kept. Rename or remove it to let these convert; each is tried again after an hour, then six, then once a day",
   no_hold: "There's nowhere on the file's own disk to keep the original while the conversion can be undone — usually the file is outside your library folders, or a library folder isn't mounted. The originals were kept; each is tried again after an hour, then six, then once a day",
 };
 
