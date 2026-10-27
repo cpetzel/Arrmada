@@ -29,7 +29,8 @@ func TestReleaseRestoresAHeldStray(t *testing.T) {
 	dir := filepath.Dir(e.HoldPath)
 	stray := filepath.Join(dir, filepath.Base(e.OutPath))
 	writeFile(t, stray, 700, 'r') // what an earlier version moved there
-	if err := os.Remove(e.OutPath); err != nil { // the converted file has moved on since
+	// The converted file has moved on since.
+	if err := os.Remove(e.OutPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.releaseHold(context.Background(), e.ID, "test"); err != nil {
