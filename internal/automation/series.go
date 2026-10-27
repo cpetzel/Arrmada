@@ -662,6 +662,7 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 	remaining = planSeriesGrabs(planInput{
 		eligible:      eligible,
 		ranking:       decision.Ranking,
+		inFlight:      c.fallbackHold(ctx, s, seriesSeasons),
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),

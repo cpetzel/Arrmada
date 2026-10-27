@@ -1,6 +1,42 @@
 package quality
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+
+	"github.com/tristenlammi/arrmada/internal/parser"
+)
+
+// The planner leaves a starved pack that overlaps better grabs for a later sweep, once the
+// better files are on disk (automation's planner.mustWait). That only works if the import
+// then refuses the starved pack's copies of those episodes, with upgrades on or off: no
+// bitrate gain (far smaller), and no quality gain. (IsQualityUpgrade scores the name
+// without a runtime, so it's the missing gain that refuses it there, not the floor.)
+func TestStarvedPackEpisodeIsNeverAnUpgrade(t *testing.T) {
+	s, ctx := testService(t)
+	for _, upgrades := range []bool{true, false} {
+		p, err := s.Create(ctx, StoredProfile{
+			MediaType: MediaSeries, Name: "floor " + strconv.FormatBool(upgrades),
+			UpgradesEnabled: upgrades, UpgradeMinPercent: 10,
+			Ideal: &IdealFile{Bitrate: map[string]BitrateWindow{"1080p": {Min: 5}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref := "custom:" + strconv.FormatInt(p.ID, 10)
+		const (
+			clean   = "Luther.S01E01.1080p.BluRay.x264-GRP"                        // 4 GB over 60 min: ~9 Mb/s
+			starved = "Luther (2010) S01-S05 COMPLETE 1080p H265 EAC3 2CH-MNKYDDL" // 0.72 GB an episode: ~1.6 Mb/s
+		)
+		cur := cf(clean, 4, 60)
+		if s.IsQualityUpgrade(ctx, ref, starved, 0.72, cur) {
+			t.Errorf("upgrades=%v: the starved pack's episode passed as a quality upgrade of the clean file", upgrades)
+		}
+		if s.IsBitrateUpgrade(ctx, ref, Encode{SizeGB: 0.72, Codec: parser.CodecX265}, Encode{SizeGB: 4, Codec: parser.CodecX264}, 60) {
+			t.Errorf("upgrades=%v: the starved pack's episode passed as a bitrate upgrade of the clean file", upgrades)
+		}
+	}
+}
 
 // GrabTier follows Decide's two leading keys: the avoided tier (by the ranking's own rule),
 // then health within it.

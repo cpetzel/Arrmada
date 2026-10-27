@@ -24,6 +24,8 @@ type planCase struct {
 	avoided map[string]bool
 	dead    map[string]bool
 	ranking string
+	// inFlight are seasons a download still in flight holds.
+	inFlight map[int]bool
 }
 
 // evaluations are the case's releases as Decide would hand them over, tiers marked.
@@ -73,6 +75,7 @@ func runPlan(c planCase, opts planOpts) ([]string, []epKey) {
 	left := planSeriesGrabs(planInput{
 		eligible:      c.evaluations(),
 		ranking:       c.ranking,
+		inFlight:      c.inFlight,
 		wanted:        c.wanted,
 		seriesSeasons: allSeasons(c.counts),
 		counts:        c.counts,

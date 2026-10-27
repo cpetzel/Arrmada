@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,8 +84,29 @@ type fakeTorznab struct {
 	mu       sync.Mutex
 	releases []string         // titles on offer
 	sizes    map[string]int64 // bytes by title; 4 GiB when unset
+	// bySeason are titles a search returns only when it asks for that season (tvsearch
+	// season=N), as an indexer's single page of a broad query misses a long show's packs.
+	bySeason map[int][]string
+	dead     map[string]bool // titles with no seeders; 25 otherwise
 	down     bool
 	searches int
+}
+
+// offerForSeason puts titles on offer, sized in GiB, to season sn's queries only.
+func (f *fakeTorznab) offerForSeason(sn int, gib map[string]float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bySeason == nil {
+		f.bySeason = map[int][]string{}
+	}
+	if f.sizes == nil {
+		f.sizes = map[string]int64{}
+	}
+	for title, g := range gib {
+		f.bySeason[sn] = append(f.bySeason[sn], title)
+		f.sizes[title] = int64(g * (1 << 30))
+	}
+	sort.Strings(f.bySeason[sn])
 }
 
 // offerSized puts titles on offer with their sizes in GiB.
@@ -110,13 +132,21 @@ func (f *fakeTorznab) handler() http.Handler {
 		}
 		var b strings.Builder
 		b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>`)
-		for _, title := range f.releases {
+		titles := f.releases
+		if sn, err := strconv.Atoi(r.URL.Query().Get("season")); err == nil {
+			titles = append(append([]string(nil), titles...), f.bySeason[sn]...)
+		}
+		for _, title := range titles {
 			size, ok := f.sizes[title]
 			if !ok {
 				size = 4 << 30
 			}
-			fmt.Fprintf(&b, `<item><title>%s</title><link>%s</link><size>%d</size><torznab:attr name="seeders" value="25"/></item>`,
-				html.EscapeString(title), html.EscapeString(magnetFor(title)), size)
+			seeders := 25
+			if f.dead[title] {
+				seeders = 0
+			}
+			fmt.Fprintf(&b, `<item><title>%s</title><link>%s</link><size>%d</size><torznab:attr name="seeders" value="%d"/></item>`,
+				html.EscapeString(title), html.EscapeString(magnetFor(title)), size, seeders)
 		}
 		b.WriteString(`</channel></rss>`)
 		w.Header().Set("Content-Type", "application/xml")

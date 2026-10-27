@@ -297,8 +297,8 @@ func TestGrabPreviewedFallsBackWhenExpired(t *testing.T) {
 }
 
 // A show's preview covers the first season asked for, deciding a season pack against
-// single episodes as the sweep does, and says the rest weren't checked. Two searches: the
-// broad one and the season's.
+// single episodes as the sweep does, and says what was found for the rest. Four searches:
+// the broad one and one for each season asked for.
 func TestPreviewSeriesFirstSeason(t *testing.T) {
 	h := newPreviewHarness(t)
 	h.ix.offer("Severance.S01.1080p.WEB-DL.x264-GRP", "Severance.S01E01.1080p.WEB-DL.x264-GRP", "Severance.S02E01.1080p.WEB-DL.x264-GRP")
@@ -312,7 +312,7 @@ func TestPreviewSeriesFirstSeason(t *testing.T) {
 	if r := p.Releases[0]; r.Title != "Severance.S01.1080p.WEB-DL.x264-GRP" || r.Kind != "pack" || r.Covers != "S01" {
 		t.Fatalf("release = %+v", r)
 	}
-	if p.SeasonsNote != "2 more seasons not checked" || p.Queries != 2 {
+	if p.SeasonsNote != "Releases found for 1 more season; nothing found for 1 more season" || p.Queries != 4 {
 		t.Fatalf("note %q, queries %d", p.SeasonsNote, p.Queries)
 	}
 	if calls := h.qbit.callLog(); len(calls) != 0 || previewRows(t, h, "series") != 0 {

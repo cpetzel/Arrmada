@@ -37,12 +37,17 @@ type planInput struct {
 	counts        map[int]int
 	ended         bool
 	opts          planOpts
+	// inFlight are the seasons a download still in flight holds (seriesInFlightFor). A
+	// fallback pack bringing one of them waits for it to import (planner.mustWait).
+	inFlight map[int]bool
 	// cover reports which of the still-needed episodes a release would fill.
 	cover func(r parser.Release, needed map[epKey]bool) []epKey
 	// try grabs a release and reports whether it's now in flight (freshly grabbed, taken
 	// earlier this pass, or still pending from an earlier one). Only then are its episodes
 	// counted as covered.
 	try func(name, label string) bool
+	// waited, optional, hears of each fallback pack held back this pass (planner.mustWait).
+	waited func(name string)
 
 	log   *slog.Logger // optional
 	title string       // for the log
@@ -52,67 +57,141 @@ type planInput struct {
 // returns what it couldn't cover (sorted). It's the missing sweep's selection, shared with
 // the quick Grab/Replace buttons so a click obeys the same pack rules the sweep does.
 //
-// The releases are planned in quality tiers (quality.GrabTier): every pass runs over the
-// clean releases first, and only what they couldn't fill is looked for among the dead
-// torrents, then the avoided tier (under the bitrate floor, an avoided format, language or
-// Unwanted item). Decide never ranks an avoided release above a clean one, but the passes
-// below pick by kind and coverage, not rank — so without the tiers a starved complete pack
-// beat good season packs simply because it covered more. Avoided still means "last
-// resort", never "reject": a gap nothing clean covers is filled from the avoided tier.
+// The releases are planned in quality tiers (quality.GrabTier): clean releases first, then
+// dead torrents, then the avoided tier (under the bitrate floor, an avoided format,
+// language or Unwanted item). Decide never ranks an avoided release above a clean one, but
+// the passes below pick by kind and coverage, not rank — so without the tiers a starved
+// complete pack beat good season packs simply because it covered more. Avoided still means
+// "last resort", never "reject": a gap nothing clean covers is filled from the avoided tier.
+//
+// The order is: the sensible passes (complete pack, packs worth their size, single
+// episodes) tier by tier through every tier, and only then the oversized-pack last resort,
+// tier by tier. So an oversized pack never beats a single episode from any tier — a whole
+// series for one missing episode just because the episode was avoided would be far worse
+// than the episode.
 func planSeriesGrabs(in planInput) []epKey {
-	needed := setOf(in.wanted)
-	if len(needed) == 0 {
+	p := &planner{in: in, needed: setOf(in.wanted), held: map[epKey]bool{}, failed: map[string]bool{}, waiting: map[string]bool{}}
+	if len(p.needed) == 0 {
 		return nil
 	}
-	log := in.log
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
+	p.log = in.log
+	if p.log == nil {
+		p.log = slog.New(slog.DiscardHandler)
 	}
+	tiers := grabTiers(in.eligible, in.ranking)
+	for _, t := range tiers {
+		if len(p.needed) == 0 {
+			break
+		}
+		p.sensiblePasses(t)
+	}
+	// Pass 4 — last resort. Anything still missing had no single-episode release in any
+	// tier either, so take an oversized pack rather than leave the gap: an inefficient grab
+	// beats none. A clean one still comes before anything avoided.
+	scoped := in.opts.Scoped
+	if len(p.needed) > 0 && p.packsOK() && (!scoped || in.opts.AllowPackFallback) {
+		for _, t := range tiers {
+			if len(p.needed) == 0 {
+				break
+			}
+			p.takePacks(t, false, true)
+		}
+	}
+	return sortedKeys(p.needed)
+}
+
+// planTierSet is one tier's releases, in Decide's order. lower: a tier below the clean,
+// live one (dead torrents, the avoided tier).
+type planTierSet struct {
+	evs   []quality.Evaluation
+	lower bool
+}
+
+// grabTiers splits the eligible releases by quality.GrabTier, best tier first, each keeping
+// Decide's order — so within a tier the first complete pack is still the best-ranked one.
+func grabTiers(eligible []quality.Evaluation, ranking string) []planTierSet {
+	var by [4][]quality.Evaluation
+	for _, ev := range eligible {
+		t := quality.GrabTier(ranking, ev)
+		by[t] = append(by[t], ev)
+	}
+	var out []planTierSet
+	for t, evs := range by {
+		if len(evs) > 0 {
+			out = append(out, planTierSet{evs: evs, lower: t > 0})
+		}
+	}
+	return out
+}
+
+// planner is one planSeriesGrabs run.
+type planner struct {
+	in     planInput
+	log    *slog.Logger
+	needed map[epKey]bool
+	// held is what this pass's grabs hold — fresh grabs and ones still in flight from an
+	// earlier pass alike. A fallback pack that overlaps it waits (mustWait).
+	held map[epKey]bool
 	// failed marks releases this pass tried and couldn't grab (indexer error, disk guard).
 	// The pack passes must both skip them when re-selecting AND not treat their episodes as
 	// covered — a transient error on the best pack used to delete its episodes from
 	// `needed`, hiding them from every fallback pass and the anime follow-up, then
 	// recording a "miss" that grew the backoff up to 12h. Kept here rather than by the
 	// caller so a pack that can't be grabbed for any reason can't be re-selected forever.
-	failed := map[string]bool{}
-	try := func(name, label string) bool {
-		if in.try(name, label) {
-			return true
-		}
-		failed[name] = true
+	failed map[string]bool
+	// waiting marks fallback packs held back this pass (mustWait), so they aren't
+	// re-selected either.
+	waiting map[string]bool
+}
+
+func (p *planner) packsOK() bool { return !p.in.opts.Scoped || !p.in.opts.EpisodesOnly }
+
+// take grabs a release; when it's in flight, what it covers is held, no longer needed.
+func (p *planner) take(name, label string, covers []epKey) bool {
+	if !p.in.try(name, label) {
+		p.failed[name] = true
 		return false
 	}
-	for _, eligible := range grabTiers(in.eligible, in.ranking) {
-		if len(needed) == 0 {
-			break
-		}
-		planTier(in, eligible, needed, failed, try, log)
+	for _, k := range covers {
+		delete(p.needed, k)
+		p.held[k] = true
 	}
-	return sortedKeys(needed)
+	return true
 }
 
-// grabTiers splits the eligible releases by quality.GrabTier, best tier first, each keeping
-// Decide's order — so within a tier the first complete pack is still the best-ranked one.
-func grabTiers(eligible []quality.Evaluation, ranking string) [][]quality.Evaluation {
-	var by [4][]quality.Evaluation
-	for _, ev := range eligible {
-		t := quality.GrabTier(ranking, ev)
-		by[t] = append(by[t], ev)
+// mustWait reports whether a fallback pack — the oversized last resort, or any pack from a
+// lower tier — has to wait for the better releases to import first: it brings episodes
+// another grab this pass holds, or a season still downloading. Taken now, both copies
+// race to the import: when the fallback lands first its worse files fill the episodes,
+// and the better ones are then refused (with upgrades off) or replace them a second time.
+// Left for the next pass, the better files are on disk and the fallback's copies of them
+// are refused as worse, so it's still taken for the gap it alone covers.
+func (p *planner) mustWait(r parser.Release) bool {
+	if len(p.in.cover(r, p.held)) > 0 {
+		return true
 	}
-	var out [][]quality.Evaluation
-	for _, t := range by {
-		if len(t) > 0 {
-			out = append(out, t)
+	for sn := range packSeasonsOf(r, p.in.seriesSeasons) {
+		if p.in.inFlight[sn] {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
-// planTier runs every pass over one tier's releases, deleting from needed what they cover.
-func planTier(in planInput, eligible []quality.Evaluation, needed map[epKey]bool, failed map[string]bool,
-	try func(name, label string) bool, log *slog.Logger) {
+// wait holds a fallback pack back for this pass, saying why.
+func (p *planner) wait(r parser.Release, name string) {
+	p.waiting[name] = true
+	if p.in.waited != nil {
+		p.in.waited(name)
+	}
+	p.log.Info("series: not taking a fallback pack yet — waiting for the better releases to import first",
+		"series", p.in.title, "release", r.Title)
+}
+
+// sensiblePasses runs passes 1–3 over one tier, deleting from needed what they cover.
+func (p *planner) sensiblePasses(t planTierSet) {
+	in := p.in
 	scoped := in.opts.Scoped
-	packsOK := !scoped || !in.opts.EpisodesOnly
 
 	// A whole-show / multi-season pack only makes sense once the show has actually
 	// finished — for a still-running series we stick to single-season packs so each new
@@ -120,11 +199,10 @@ func planTier(in planInput, eligible []quality.Evaluation, needed map[epKey]bool
 
 	// Pass 1 — a complete-series pack that covers every needed season (ended shows only).
 	// In a later tier, needed is what the better tiers left: the pack must be mostly useful
-	// for that, so the proportionate rule decides whether it may re-download seasons a
-	// clean pack already brought.
-	neededSeasons := seasonsOf(needed)
-	if in.ended && packsOK {
-		for _, ev := range eligible {
+	// for that, and must not bring what they're already fetching (mustWait).
+	neededSeasons := seasonsOf(p.needed)
+	if in.ended && p.packsOK() {
+		for _, ev := range t.evs {
 			r := ev.Candidate.Release
 			if r.Kind() != parser.KindCompleteShow {
 				continue
@@ -135,105 +213,103 @@ func planTier(in planInput, eligible []quality.Evaluation, needed map[epKey]bool
 			// Covering what's needed isn't enough — the pack has to be mostly useful.
 			// Otherwise one missing episode pulls down an entire six-season show.
 			if !packIsProportionate(neededSeasons, packSeasonsOf(r, in.seriesSeasons)) {
-				log.Info("series: skipping complete-series pack — too little of it is needed",
+				p.log.Info("series: skipping complete-series pack — too little of it is needed",
 					"series", in.title, "release", r.Title,
 					"needed_seasons", len(neededSeasons), "pack_seasons", len(packSeasonsOf(r, in.seriesSeasons)))
 				continue
 			}
 			// A click names one season, so "half the seasons are wanted" can still mean a
 			// whole second season downloaded for one gap. Weigh it by episodes as well.
-			if scoped && !packIsWorthIt(r, len(needed), in.seriesSeasons, in.counts) {
+			if scoped && !packIsWorthIt(r, len(p.needed), in.seriesSeasons, in.counts) {
 				continue
 			}
-			if !try(ev.Candidate.Name, "complete series") {
-				continue // this one couldn't be grabbed — try the next complete pack
+			if t.lower && p.mustWait(r) {
+				p.wait(r, ev.Candidate.Name)
+				continue
 			}
 			// The pack covers everything wanted: nothing is left uncovered. Reporting it
 			// as remaining made the anime absolute-number follow-up grab single episodes
 			// the pack already contains.
-			clear(needed)
+			if !p.take(ev.Candidate.Name, "complete series", sortedKeys(p.needed)) {
+				continue // this one couldn't be grabbed — try the next complete pack
+			}
 			return
 		}
 	}
 
-	// Pass 2 — packs, greedily taking the one that covers the most still-needed episodes.
-	// Ended shows may take multi-season (or leftover complete-show) packs so a multi-season
-	// pack beats separate season packs; running shows are restricted to single-season packs.
-	//
-	// worthItOnly first: prefer packs that are mostly useful. A second lap without that
-	// restriction runs later, so a gap is never left unfilled just because the only release
-	// covering it happens to be a big pack.
-	takePacks := func(worthItOnly bool) {
-		for {
-			var best *quality.Evaluation
-			var bestCover int
-			for i := range eligible {
-				if failed[eligible[i].Candidate.Name] {
-					continue // couldn't be grabbed this pass — re-selecting it would loop
-				}
-				r := eligible[i].Candidate.Release
-				if !isPackTier(r.Kind(), in.ended) {
-					continue
-				}
-				// A click never takes more seasons than it has a use for, even as a last
-				// resort: an inefficient grab is the sweep's call to make, not a button's.
-				if scoped && !packIsProportionate(seasonsOf(needed), packSeasonsOf(r, in.seriesSeasons)) {
-					continue
-				}
-				n := len(in.cover(r, needed))
-				if n == 0 {
-					continue
-				}
-				if worthItOnly && !packIsWorthIt(r, n, in.seriesSeasons, in.counts) {
-					continue
-				}
-				if n > bestCover {
-					bestCover, best = n, &eligible[i]
-				}
-			}
-			if best == nil || bestCover == 0 {
-				return
-			}
-			if !try(best.Candidate.Name, "pack") {
-				continue // grab failed — its episodes stay needed; the failed-set skips it next lap
-			}
-			for _, k := range in.cover(best.Candidate.Release, needed) {
-				delete(needed, k)
-			}
-		}
-	}
-	if packsOK {
-		takePacks(true)
+	// Pass 2 — packs, greedily taking the one that covers the most still-needed episodes,
+	// only while it's mostly useful (worth it). The oversized ones wait for the last resort.
+	if p.packsOK() {
+		p.takePacks(t, true, false)
 	}
 
 	// Pass 3 — individual episodes for whatever's left. Cheaper and more targeted than a
 	// pack when only a few are missing, which is why the disproportionate packs were held
 	// back above.
-	for _, ev := range eligible {
-		if len(needed) == 0 {
+	for _, ev := range t.evs {
+		if len(p.needed) == 0 {
 			break
 		}
 		r := ev.Candidate.Release
 		if r.Kind() != parser.KindEpisode {
 			continue
 		}
-		covered := in.cover(r, needed)
+		covered := in.cover(r, p.needed)
 		if len(covered) == 0 {
 			continue
 		}
-		if !try(ev.Candidate.Name, "episode") {
-			continue // grab failed — leave its episodes needed for the next candidate
-		}
-		for _, k := range covered {
-			delete(needed, k)
-		}
+		p.take(ev.Candidate.Name, "episode", covered) // a failed grab leaves its episodes needed
 	}
-	// Pass 4 — last resort. Anything still missing had no single-episode release either, so
-	// take an oversized pack rather than leave the gap: an inefficient grab beats none. It is
-	// the last resort of this tier only: an oversized clean pack still comes before anything
-	// avoided, as Decide would rank them.
-	if len(needed) > 0 && packsOK && (!scoped || in.opts.AllowPackFallback) {
-		takePacks(false)
+}
+
+// takePacks greedily takes, from one tier, the pack that covers the most still-needed
+// episodes, again and again. Ended shows may take multi-season (or leftover complete-show)
+// packs so a multi-season pack beats separate season packs; running shows are restricted
+// to single-season packs.
+//
+// worthItOnly: only packs that are mostly useful (pass 2). Without it (the last resort) a
+// gap is never left unfilled just because the only release covering it is a big pack.
+func (p *planner) takePacks(t planTierSet, worthItOnly, lastResort bool) {
+	in := p.in
+	scoped := in.opts.Scoped
+	for {
+		var best *quality.Evaluation
+		var bestCover int
+		for i := range t.evs {
+			name := t.evs[i].Candidate.Name
+			if p.failed[name] || p.waiting[name] {
+				continue // couldn't be grabbed, or waits, this pass — re-selecting it would loop
+			}
+			r := t.evs[i].Candidate.Release
+			if !isPackTier(r.Kind(), in.ended) {
+				continue
+			}
+			// A click never takes more seasons than it has a use for, even as a last
+			// resort: an inefficient grab is the sweep's call to make, not a button's.
+			if scoped && !packIsProportionate(seasonsOf(p.needed), packSeasonsOf(r, in.seriesSeasons)) {
+				continue
+			}
+			n := len(in.cover(r, p.needed))
+			if n == 0 {
+				continue
+			}
+			if worthItOnly && !packIsWorthIt(r, n, in.seriesSeasons, in.counts) {
+				continue
+			}
+			if n > bestCover {
+				bestCover, best = n, &t.evs[i]
+			}
+		}
+		if best == nil || bestCover == 0 {
+			return
+		}
+		r := best.Candidate.Release
+		if (t.lower || lastResort) && p.mustWait(r) {
+			p.wait(r, best.Candidate.Name)
+			continue
+		}
+		// A failed grab leaves its episodes needed; the failed-set skips it next lap.
+		p.take(best.Candidate.Name, "pack", in.cover(r, p.needed))
 	}
 }
 
@@ -317,4 +393,15 @@ func (g *seriesGrabber) try(ctx context.Context, name, label string) bool {
 	c.series.AddEvent(ctx, s.ID, "grabbed", label+": "+rel.Title+" · "+rel.Indexer)
 	c.log.Info("series: grabbing", "series", s.Title, "release", rel.Title, "tier", label)
 	return true
+}
+
+// fallbackHold is the seasons a plan's fallback packs must not bring yet (planInput.inFlight):
+// those a download still in flight holds. Every season when that can't be read, or when
+// one in flight covers the whole show — a fallback can wait a sweep, a race can't be undone.
+func (c *Coordinator) fallbackHold(ctx context.Context, s series.Series, seriesSeasons map[int]bool) map[int]bool {
+	seasons, whole, _, err := c.seriesInFlightFor(ctx, s, nil)
+	if err != nil || whole {
+		return seriesSeasons
+	}
+	return seasons
 }

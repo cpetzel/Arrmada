@@ -353,6 +353,7 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 	left := planSeriesGrabs(planInput{
 		eligible:      decision.Eligible,
 		ranking:       decision.Ranking,
+		inFlight:      c.fallbackHold(ctx, s, seriesSeasons),
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),
