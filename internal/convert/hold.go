@@ -120,6 +120,9 @@ func isHoldFile(path string, id int64) bool {
 	return filepath.Base(dir) == strconv.FormatInt(id, 10) && filepath.Base(filepath.Dir(dir)) == library.HoldDirName
 }
 
+// renameFn is os.Rename; tests make moves fail.
+var renameFn = os.Rename
+
 // moveKept moves a file Convert is keeping (an original into the hold, or back out) without
 // ever overwriting anything at to. On one filesystem it's a rename: instant, same inode.
 // Across filesystems (a library folder spanning mounts) it's a copy to a temporary name,
@@ -129,7 +132,7 @@ func (s *Service) moveKept(from, to string) error {
 	if exists(to) {
 		return fmt.Errorf("%s is already taken", to)
 	}
-	err := os.Rename(from, to)
+	err := renameFn(from, to)
 	if err == nil || !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
@@ -367,9 +370,7 @@ func (s *Service) releaseHold(ctx context.Context, id int64, why string) (Histor
 	default:
 		return e, err
 	}
-	// Anything else in the row's folder was moved aside with it (a stray file at the
-	// converted file's name); it goes with the original.
-	_ = os.RemoveAll(filepath.Dir(e.HoldPath))
+	s.emptyHoldFolder(e)
 	if err := s.history.endHold(ctx, id, state); err != nil {
 		return e, err
 	}
@@ -384,6 +385,47 @@ func (s *Service) releaseHold(ctx context.Context, id int64, why string) (Histor
 	s.holdFreed(ctx)
 	e.HoldState = state
 	return e, nil
+}
+
+// emptyHoldFolder clears a released row's hold folder without deleting anything that isn't
+// Convert's to delete. Earlier versions moved a file at the converted file's name into the
+// folder with the original, whatever was in it, and released the folder whole: a remux
+// kept by hand went with it. So what's left after the original goes back to the library:
+// a revert's converted-* copy to the converted file's path, anything else to the converted
+// file's folder under its own name. An empty file or an unfinished cross-drive copy
+// (.partial) holds nothing to keep and is removed. A file whose name is taken in the
+// library stays in the folder, and the log says where; the folder goes only once empty.
+func (s *Service) emptyHoldFolder(e HistoryEntry) {
+	dir := filepath.Dir(e.HoldPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		p := filepath.Join(dir, ent.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue // not a file Convert put there: left alone, with the folder
+		}
+		if fi.Size() == 0 || strings.HasSuffix(ent.Name(), ".partial") {
+			_ = os.Remove(p)
+			continue
+		}
+		to := ""
+		if e.OutPath != "" {
+			to = filepath.Join(filepath.Dir(e.OutPath), ent.Name())
+			if ent.Name() == filepath.Base(revertPartFor(e)) {
+				to = e.OutPath
+			}
+		}
+		if _, err := os.Lstat(to); to == "" || err == nil || !errors.Is(err, fs.ErrNotExist) || s.moveKept(p, to) != nil {
+			s.log.Warn("convert: kept a file in the originals hold — its name in the library is taken", "file", p, "library_name", to)
+			s.event("warn", fmt.Sprintf("%s: kept %s in the originals hold, at %s — a file in the library already has its name. Move it back by hand", e.Title, ent.Name(), p))
+			continue
+		}
+		s.event("info", fmt.Sprintf("%s: put %s back in the library from the originals hold", e.Title, ent.Name()))
+	}
+	_ = os.Remove(dir) // only if empty
 }
 
 // holdFreed is told when the hold shrinks (or its budget changes): files paused on a full

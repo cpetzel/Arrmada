@@ -84,7 +84,7 @@ func (s *Service) process(ctx context.Context, job *Job) {
 	}
 	// A file of someone's at the .mkv name (no record owns it) stops the swap (swapIn), so
 	// it's seen before hours go into an encode that would only be discarded.
-	if final := convertedPath(src); final != src && exists(final) {
+	if final := convertedPath(src); final != src && exists(final) && !nameIsSource(final, src) {
 		why := s.nameOwner(ctx, final)
 		if why == "" {
 			why = strayInTheWay(final)

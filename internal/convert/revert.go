@@ -39,6 +39,10 @@ const (
 // re-import replaced it), so putting the original back would undo that.
 var ErrRevertChanged = errors.New("the library file has changed since (an upgrade or re-import), so reverting would undo that")
 
+// errRevertUnsettled means a revert failed and couldn't put its files back either; the
+// next startup does (recoverRevert), from the journal row it keeps.
+var errRevertUnsettled = errors.New("the revert failed part-way and the files will be put right at the next startup")
+
 // ErrRevertBusy means the file is being converted (or reverted) right now.
 var ErrRevertBusy = errors.New("this file is being converted right now — try again once that's finished")
 
@@ -72,6 +76,11 @@ func (s *Service) Revert(ctx context.Context, id int64) (HistoryEntry, error) {
 		return e, fmt.Errorf("could not journal the revert (%v) — nothing was changed", err)
 	}
 	if err := s.revertMoves(w); err != nil {
+		if errors.Is(err, errRevertUnsettled) {
+			// The files are out of place: the journal row stays, so the hold can't be
+			// released in the meantime and the next startup puts them right.
+			return e, err
+		}
 		s.clearSwap(w.part) // revertMoves put everything back
 		return e, err
 	}
@@ -164,6 +173,7 @@ func (s *Service) revertMoves(w swapRow) error {
 		if err := s.moveKept(held, orig); err != nil {
 			if back := s.moveKept(conv, out); back != nil {
 				s.log.Error("convert: revert couldn't put the converted file back — the next startup will", "file", out, "err", back)
+				return fmt.Errorf("%w: could not move the original back (%v), nor the converted file (%v)", errRevertUnsettled, err, back)
 			}
 			return fmt.Errorf("could not move the original back: %v — nothing was changed", err)
 		}
@@ -175,6 +185,7 @@ func (s *Service) revertMoves(w swapRow) error {
 	if err := s.moveKept(out, conv); err != nil {
 		if back := s.moveKept(orig, held); back != nil {
 			s.log.Error("convert: revert couldn't return the original to the hold — the next startup will", "file", orig, "err", back)
+			return fmt.Errorf("%w: could not move the converted file aside (%v), nor the original back to the hold (%v)", errRevertUnsettled, err, back)
 		}
 		return fmt.Errorf("could not move the converted file aside: %v — nothing was changed", err)
 	}

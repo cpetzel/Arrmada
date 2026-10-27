@@ -425,6 +425,18 @@ func strayInTheWay(path string) string {
 	return "a file Arrmada doesn't track is already at " + name + " — rename or remove it to convert this one"
 }
 
+// nameIsSource reports whether the converted file's name is the source itself under
+// another spelling: Heat (1995).MKV and Heat (1995).mkv on a case-insensitive disk. That
+// name isn't taken by anyone else; it frees up when the original moves to the hold.
+func nameIsSource(final, src string) bool {
+	a, err := os.Stat(final)
+	if err != nil {
+		return false
+	}
+	b, err := os.Stat(src)
+	return err == nil && os.SameFile(a, b)
+}
+
 // finalPathFor is where a conversion of src lands: the same name as an .mkv (versions.go's
 // convertedPath — one rule for both).
 func finalPathFor(src string) string { return convertedPath(src) }
