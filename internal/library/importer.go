@@ -1858,6 +1858,39 @@ func OwnedByOther(path string, protected []string) bool {
 	return false
 }
 
+// SamePlace reports whether a and b are one directory entry spelt two ways: equal once
+// symlinks are resolved (a symlinked folder), or differing only in case on a disk that
+// ignores case (both spellings name one file). A second hardlink is another name, and
+// isn't the same place: an import that replaces one still recycles it.
+func SamePlace(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
+	}
+	rb, err := filepath.EvalSymlinks(b)
+	if err != nil {
+		return false
+	}
+	if ra == rb {
+		return true
+	}
+	if !strings.EqualFold(ra, rb) {
+		return false
+	}
+	fa, err := os.Lstat(ra)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Lstat(rb)
+	return err == nil && os.SameFile(fa, fb)
+}
+
 // ErrProtectedTarget is an import aimed at a file another track of the movie owns. It
 // can't come from MovieTrackTarget; it's the last guard before anything is placed.
 var ErrProtectedTarget = errors.New("that file belongs to another version of this movie")

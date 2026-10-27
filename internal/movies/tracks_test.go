@@ -285,3 +285,27 @@ func TestMarkImportedSameFileSpeltTwoWays(t *testing.T) {
 		t.Fatalf("recorded %q, want %q", got, real)
 	}
 }
+
+// A second hardlink is another name, not the same file spelt another way: re-importing
+// the file under a new naming scheme still recycles the old name, leaving no duplicate.
+func TestMarkImportedRecyclesTheOldHardlinkName(t *testing.T) {
+	svc, ctx, lib := trackService(t)
+	m, _ := svc.repo.Create(ctx, Movie{TMDBID: 7, Title: "Heat", Year: 1995, Monitored: true})
+	old := touch(t, filepath.Join(lib, "Heat (1995)", "Heat (1995) - 720p.mkv"))
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, old, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(lib, "Heat (1995)", "Heat (1995) - 1080p BluRay.mkv")
+	if err := os.Link(old, renamed); err != nil {
+		t.Skipf("no hardlinks here: %v", err)
+	}
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, renamed, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(old); err == nil {
+		t.Fatal("the old name was left behind as an untracked duplicate")
+	}
+	if _, err := os.Stat(renamed); err != nil || mustGet(t, svc, m.ID).MovieFilePath != renamed {
+		t.Fatalf("the new name isn't the film's file: %v", err)
+	}
+}

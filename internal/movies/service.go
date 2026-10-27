@@ -992,7 +992,7 @@ func (s *Service) MarkImportedTo(ctx context.Context, id, versionID int64, path,
 	// The recorded path can be the new file spelt another way (another case on a
 	// case-insensitive disk, a symlinked folder): that's no upgrade, and removing the "old"
 	// file would remove the new one.
-	if target.HasFile && target.FilePath != "" && target.FilePath != path && !library.OwnedByOther(path, []string{target.FilePath}) {
+	if target.HasFile && target.FilePath != "" && target.FilePath != path && !library.SamePlace(path, target.FilePath) {
 		// Quality gate (auto imports only): never replace a file with a KNOWN
 		// lower resolution — a mislabeled or wrongly-routed 720p grab must not
 		// clobber the 2160p already on disk. Unknown resolutions can't be judged,

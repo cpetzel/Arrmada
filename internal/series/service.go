@@ -2116,7 +2116,7 @@ func (s *Service) SupersedeEpisodeFile(ctx context.Context, seriesID int64, seas
 	}
 	// The recorded path can be the new file spelt another way (another case on a
 	// case-insensitive disk, a symlinked folder): recycling the "old" one would recycle it.
-	if old != "" && old != path && !library.OwnedByOther(path, []string{old}) {
+	if old != "" && old != path && !library.SamePlace(path, old) {
 		// A double-episode file serves several episode rows. If any sibling still
 		// points at the old path, recycling it would yank the file out from under
 		// them — the library would claim a file that's sitting in the recycle bin.
