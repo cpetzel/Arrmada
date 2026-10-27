@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PreviewResult, RequestPreview } from "./api";
-import { checkedAgo, forOtherProfile, grabApplies, previewHeadline, previewLine, reasonsLine, releaseFacts, seasonLine } from "./requestPreview";
+import { checkedAgo, forOtherProfile, grabApplies, previewHeadline, previewLine, reasonsLine, releaseFacts, seasonLine, seasonsLabel } from "./requestPreview";
 
 const found = (over: Partial<PreviewResult> = {}): PreviewResult => ({
   outcome: "found", reason: "grabbed", profile: "hd", returned: 12, matching: 5, eligible: 3, searched: 2, queries: 1,
@@ -33,6 +33,26 @@ describe("request previews", () => {
     const eps = found({ season: 2, releases: [1, 2].map((n) => ({ ...found().releases[0], title: `Show.S02E0${n}`, kind: "episode" as const, size_gb: 1.5 })) });
     expect(seasonLine(eps)).toBe("Season 2: 2 episodes · 1080p BluRay · 3.0 GB in all");
     expect(seasonLine(found())).toBe("");
+  });
+
+  it("names every season a multi-season or complete pack fills", () => {
+    const luther = found({
+      season: 1, covered_seasons: [1, 2, 3, 4, 5],
+      releases: [{ ...found().releases[0], title: "Luther (2010) S01-S05 COMPLETE 1080p H265", kind: "complete series", covers: "all seasons", source: undefined, size_gb: 14.4 }],
+    });
+    expect(seasonLine(luther)).toBe("Seasons 1–5: 1 pack · 1080p · 14.4 GB");
+    expect(previewLine(preview(luther))).toBe("Would grab — Seasons 1–5: 1 pack · 1080p · 14.4 GB");
+    expect(seasonLine({ ...luther, covered_seasons: [1, 3, 5] })).toBe("Seasons 1, 3, 5: 1 pack · 1080p · 14.4 GB");
+    expect(seasonLine({ ...luther, covered_seasons: [1] })).toBe("Season 1: 1 pack · 1080p · 14.4 GB");
+    // A preview stored before the server named the seasons: the first one, as it said then.
+    expect(seasonLine({ ...luther, covered_seasons: undefined })).toBe("Season 1: 1 pack · 1080p · 14.4 GB");
+  });
+
+  it("names Specials when a pack genuinely covers season 0", () => {
+    const r = found({ season: 1, covered_seasons: [0, 1, 2, 3] });
+    expect(seasonsLabel(r)).toBe("Specials + Seasons 1–3");
+    expect(seasonsLabel(found({ season: 1, covered_seasons: [0, 1] }))).toBe("Specials + Season 1");
+    expect(seasonsLabel(found({ season: 0, covered_seasons: [0] }))).toBe("Specials");
   });
 
   it("names the commonest reasons nothing fit", () => {

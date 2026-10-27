@@ -41,8 +41,28 @@ export function formatGB(gb: number): string {
 }
 
 /**
- * A show's preview in one line: "Season 1: 1 pack · 1080p WEB-DL · 22.4 GB" or "Season 2:
- * 10 episodes · 1080p WEB-DL · 14.0 GB in all". "" for anything but a show's found preview.
+ * The seasons a show's preview fills: "Season 1", or every season a multi-season or
+ * complete pack brings — "Seasons 1–5", "Seasons 1, 3, 5". A preview from before the
+ * server named them says the first season only.
+ */
+export function seasonsLabel(r: PreviewResult): string {
+  const all = [...new Set([...(r.season != null ? [r.season] : []), ...(r.covered_seasons ?? [])])].sort((a, b) => a - b);
+  // Season 0 is Specials: named, never folded into a range ("Seasons 0–3").
+  const specials = all.includes(0) ? ["Specials"] : [];
+  const nums = all.filter((n) => n > 0);
+  let seasons = "";
+  if (nums.length === 1) seasons = `Season ${nums[0]}`;
+  if (nums.length > 1) {
+    const run = nums.every((n, i) => i === 0 || n === nums[i - 1] + 1);
+    seasons = `Seasons ${run ? `${nums[0]}–${nums[nums.length - 1]}` : nums.join(", ")}`;
+  }
+  return [...specials, seasons].filter(Boolean).join(" + ");
+}
+
+/**
+ * A show's preview in one line: "Season 1: 1 pack · 1080p WEB-DL · 22.4 GB", "Seasons 1–5:
+ * 1 pack · 1080p · 14.4 GB" or "Season 2: 10 episodes · 1080p WEB-DL · 14.0 GB in all". ""
+ * for anything but a show's found preview.
  */
 export function seasonLine(r: PreviewResult): string {
   if (!r.season || r.outcome !== "found" || r.releases.length === 0) return "";
@@ -55,7 +75,7 @@ export function seasonLine(r: PreviewResult): string {
   const quality = [first.resolution === "2160p" ? "4K" : first.resolution, first.source].filter(Boolean).join(" ");
   const total = r.releases.reduce((n, x) => n + x.size_gb, 0);
   const size = total > 0 ? `${formatGB(total)}${r.releases.length > 1 ? " in all" : ""}` : "";
-  return `Season ${r.season}: ${[parts.join(" + "), quality, size].filter(Boolean).join(" · ")}`;
+  return `${seasonsLabel(r)}: ${[parts.join(" + "), quality, size].filter(Boolean).join(" · ")}`;
 }
 
 /** Why nothing was found: "12 releases · 9 for other titles, 3 too few seeders". */

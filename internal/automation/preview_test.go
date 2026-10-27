@@ -40,15 +40,33 @@ func (previewMeta) SearchSeries(context.Context, string) ([]metadata.SeriesResul
 	return nil, nil
 }
 func (previewMeta) GetSeries(_ context.Context, id int) (*metadata.SeriesDetails, error) {
-	if id != 95396 {
-		return nil, errors.New("unknown show")
-	}
 	eps := func(n int, aired string) []metadata.EpisodeDetails {
 		var out []metadata.EpisodeDetails
 		for i := 1; i <= n; i++ {
 			out = append(out, metadata.EpisodeDetails{EpisodeNumber: i, AirDate: aired, Runtime: 50})
 		}
 		return out
+	}
+	if id == lutherTMDB {
+		// An ended show of five four-episode seasons: 20 episodes, 1000 minutes.
+		var seasons []metadata.SeasonDetails
+		for sn := 1; sn <= 5; sn++ {
+			seasons = append(seasons, metadata.SeasonDetails{SeasonNumber: sn, Episodes: eps(4, "201"+strconv.Itoa(sn)+"-05-04")})
+		}
+		return &metadata.SeriesDetails{SeriesResult: metadata.SeriesResult{TMDBID: id, Title: "Luther", Year: 2010}, Status: "Ended",
+			Seasons: seasons}, nil
+	}
+	if id == longShowTMDB {
+		// An ended show of eight two-episode seasons: more than a preview searches by number.
+		var seasons []metadata.SeasonDetails
+		for sn := 1; sn <= 8; sn++ {
+			seasons = append(seasons, metadata.SeasonDetails{SeasonNumber: sn, Episodes: eps(2, "2015-01-0"+strconv.Itoa(sn))})
+		}
+		return &metadata.SeriesDetails{SeriesResult: metadata.SeriesResult{TMDBID: id, Title: "Longrun", Year: 2015}, Status: "Ended",
+			Seasons: seasons}, nil
+	}
+	if id != 95396 {
+		return nil, errors.New("unknown show")
 	}
 	return &metadata.SeriesDetails{SeriesResult: metadata.SeriesResult{TMDBID: id, Title: "Severance", Year: 2022}, Status: "Returning Series",
 		Seasons: []metadata.SeasonDetails{
@@ -288,8 +306,8 @@ func TestGrabPreviewedFallsBackWhenExpired(t *testing.T) {
 }
 
 // A show's preview covers the first season asked for, deciding a season pack against
-// single episodes as the sweep does, and says the rest weren't checked. Two searches: the
-// broad one and the season's.
+// single episodes as the sweep does, and says what was found for the rest. Four searches:
+// the broad one and one for each season asked for.
 func TestPreviewSeriesFirstSeason(t *testing.T) {
 	h := newPreviewHarness(t)
 	h.ix.offer("Severance.S01.1080p.WEB-DL.x264-GRP", "Severance.S01E01.1080p.WEB-DL.x264-GRP", "Severance.S02E01.1080p.WEB-DL.x264-GRP")
@@ -303,7 +321,7 @@ func TestPreviewSeriesFirstSeason(t *testing.T) {
 	if r := p.Releases[0]; r.Title != "Severance.S01.1080p.WEB-DL.x264-GRP" || r.Kind != "pack" || r.Covers != "S01" {
 		t.Fatalf("release = %+v", r)
 	}
-	if p.SeasonsNote != "2 more seasons not checked" || p.Queries != 2 {
+	if p.SeasonsNote != "Releases found for 1 more season; nothing found for 1 more season" || p.Queries != 4 {
 		t.Fatalf("note %q, queries %d", p.SeasonsNote, p.Queries)
 	}
 	if calls := h.qbit.callLog(); len(calls) != 0 || previewRows(t, h, "series") != 0 {

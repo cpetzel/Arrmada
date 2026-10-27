@@ -350,8 +350,16 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 	}
 	g := c.newSeriesGrabber(s, profile, byName, pending, sc.Replace, scope)
 	g.scopeOf = byTitle
+	waits := 0
+	waited := func(name string) {
+		waits++
+		notes.waited(name)
+	}
 	left := planSeriesGrabs(planInput{
 		eligible:      decision.Eligible,
+		ranking:       decision.Ranking,
+		inFlight:      c.fallbackHold(ctx, s, nil),
+		waited:        waited,
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),
@@ -374,6 +382,7 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 	case len(left) > 0 && len(left) < len(wanted):
 		out.Note = fmt.Sprintf("%d episode%s still missing", len(left), plural(len(left)))
 	}
+	out.Note = withWaitingNote(out.Note, waits)
 	return out, nil
 }
 
@@ -398,4 +407,18 @@ func (c *Coordinator) reportSearched(ctx context.Context, s series.Series, sc Se
 	if c.bus != nil {
 		c.bus.Publish("series.searched", map[string]any{"id": s.ID, "scope": out.Scope, "outcome": out})
 	}
+}
+
+// withWaitingNote adds to a click's note that the plan found a pack for the rest but holds
+// it back until the downloads in progress finish (planner.mustWait) — without it the click
+// reads as having found nothing.
+func withWaitingNote(note string, waits int) string {
+	if waits == 0 {
+		return note
+	}
+	const waiting = "a lower-quality pack is waiting for the downloads in progress to finish"
+	if note == "" {
+		return strings.ToUpper(waiting[:1]) + waiting[1:]
+	}
+	return note + " — " + waiting
 }

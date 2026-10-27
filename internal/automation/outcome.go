@@ -35,6 +35,9 @@ type SearchOutcome struct {
 	Example       string            `json:"example,omitempty"`
 	IndexerErrors map[string]string `json:"indexer_errors,omitempty"` // indexer -> redacted error
 	AttemptID     int64             `json:"attempt_id,omitempty"`     // its search_attempts row, once stored
+	// Waiting counts fallback packs held back until the downloads in progress finish
+	// (planner.mustWait): found, and taken by a later pass once those have imported.
+	Waiting int `json:"waiting,omitempty"`
 }
 
 // Why a search ended the way it did. Other features read these; never rename one.

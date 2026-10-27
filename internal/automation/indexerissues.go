@@ -41,6 +41,22 @@ type searchNotes struct {
 	examples map[string]string   // reject code -> the first release it applied to
 	took     []string            // releases grabbed, in order
 	picks    map[string]pickInfo // release title -> what decided its pick (pickkey.go)
+	// waits are the fallback packs a plan held back until the downloads in progress
+	// finish (planner.mustWait): found, and taken by a later pass.
+	waits map[string]bool
+}
+
+// waited records a fallback pack a plan held back until better grabs import.
+func (n *searchNotes) waited(title string) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.waits == nil {
+		n.waits = map[string]bool{}
+	}
+	n.waits[title] = true
 }
 
 type searchNotesKey struct{}

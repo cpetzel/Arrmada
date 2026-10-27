@@ -485,6 +485,32 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   - On a case-insensitive disk, converting `Heat (1995).MKV` no longer waits forever because
     `Heat (1995).mkv`, which is the same file, seemed taken, and the conversion can be
     reverted.
+- **A show's search no longer picks a release you avoid over good season packs.** A
+  release under your bitrate floor, or with a format, language or Unwanted item you avoid,
+  is meant to be a last resort. For shows it wasn't: the search took the release that
+  covered the most, so a starved complete-series pack (14.4 GB for five seasons, under a
+  5 Mbps floor) beat good season packs for every season. Now the search fills everything
+  it can from releases you don't avoid first — complete packs, season packs, then single
+  episodes — and only turns to an avoided release for what's still missing. If that is
+  the only release that covers a gap it's still grabbed. A torrent with no seeders is
+  likewise only used for what nothing seeded covers. An oversized pack is still the last
+  resort after all of that, so one missing episode is never filled with a whole series
+  when a single episode exists, avoided or not. An avoided pack that would mostly bring
+  episodes a better release is downloading right now waits until that download finishes,
+  so the better files land first; then it fills the rest. The import normally keeps the
+  better files over its copies. A download that stops moving, or is still going a day
+  after it was grabbed, holds nothing back. This applies to the missing sweep, the Search
+  and Grab buttons and the request preview; a Grab that leaves a pack waiting says so.
+- **A request's release preview searches the seasons asked for by number**, as the
+  missing sweep does: up to six, plus the broad search. It searched only the first, so a
+  show whose season packs only turn up when asked for by season was previewed — and, on
+  **Approve & grab**, grabbed — with a worse pack instead. The note under it says what was
+  found for the other seasons, and which weren't checked.
+- **A request's release preview names every season a pack covers.** A complete-series
+  pack showed as "Season 1: 1 pack". It now reads "Seasons 1–5: 1 pack". When the pick is
+  a release you avoid, **Why** says so plainly: that nothing better was found, or that
+  better releases were found but none covered everything asked for, and what it falls
+  short on.
 - **A season pack whose episode titles disagree with the show's episode list waits in Needs
   you instead of landing on the wrong episodes.** A show's episode list can be out of date
   when a whole season is released at once. Moving a file to the episode its title names

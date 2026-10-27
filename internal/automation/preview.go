@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/tristenlammi/arrmada/internal/books"
 	"github.com/tristenlammi/arrmada/internal/indexer"
@@ -79,6 +81,10 @@ type Preview struct {
 	// not checked").
 	Season      int    `json:"season,omitempty"`
 	SeasonsNote string `json:"seasons_note,omitempty"`
+	// CoveredSeasons are the seasons asked for that the releases shown fill — Season and,
+	// for a multi-season or complete pack, every other one it brings — for the header
+	// ("Seasons 1–5: 1 pack"). Empty with no releases.
+	CoveredSeasons []int `json:"covered_seasons,omitempty"`
 	// InLibrary: the title is in the library already, so it was ranked — and a search after
 	// approving it ranks — under its own profile, whatever the approval picks.
 	InLibrary bool `json:"in_library,omitempty"`
@@ -423,12 +429,14 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 		return held, nil
 	}
 	wanted, seriesSeasons := wantedEpisodes(s)
+	var inFlight map[int]bool
 	if s.ID > 0 && len(wanted) > 0 {
 		// What's already on its way is held back, as the Search button holds it back.
 		inSeasons, whole, _, err := c.seriesInFlightFor(ctx, s, nil)
 		if err != nil {
 			return Preview{}, err
 		}
+		inFlight = c.fallbackHold(ctx, s, nil) // what a lower-tier pack would wait for, as the search after approval does
 		if whole {
 			held.Outcome, held.Reason = PreviewBusy, ReasonAlreadyDownloading
 			return held, nil
@@ -468,8 +476,16 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 		return previewSearchErr(p, notes, err)
 	}
 	releases := res.Releases
+	// Every season asked for is searched by number, as the sweep searches them, capped
+	// alike: a clean season pack often only turns up in its own season's results, and
+	// without it the plan settles for a worse pack that the broad query did return.
+	var searched map[int]bool // the seasons whose own query answered
 	if !s.IsAnime() {
-		releases = c.searchSeasons(ctx, s, title, []int{first}, releases)
+		seasons := wantSeasons
+		if len(seasons) > previewSeasonQueries {
+			seasons = seasons[:previewSeasonQueries]
+		}
+		releases, searched = c.searchSeasonsAtOnce(ctx, s, title, seasons, releases)
 	}
 	notes.consider(releases)
 
@@ -508,13 +524,16 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 	// The plan a search would make over everything wanted, with every grab a dry run: the
 	// season pack against single episodes is decided exactly as the sweep decides it.
 	var picks []previewPick
+	var waits []string
 	taken := map[string]bool{}
 	planSeriesGrabs(planInput{
 		eligible:      decision.Eligible,
+		ranking:       decision.Ranking,
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),
 		ended:         showEnded(s.Status),
+		inFlight:      inFlight,
 		cover: func(r parser.Release, needed map[epKey]bool) []epKey {
 			return c.coveredByFor(ctx, s, r, needed)
 		},
@@ -533,6 +552,9 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 			}
 			return true
 		},
+		// A fallback pack held back until the better grabs import is still found: the
+		// search after a later sweep takes it.
+		waited: func(name string) { waits = append(waits, name) },
 	})
 
 	// The releases for the first season, and what they say about the rest.
@@ -542,8 +564,20 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 			firstEps[k] = true
 		}
 	}
+	wantSet := setOf(wanted)
+	planned := map[int]bool{} // seasons asked for that some pick, or a pack that waits, fills part of
+	found := append([]string(nil), waits...)
+	for _, pk := range picks {
+		found = append(found, pk.name)
+	}
+	for _, name := range found {
+		for _, k := range c.coveredByFor(ctx, s, parser.Parse(name), wantSet) {
+			planned[k.season] = true
+		}
+	}
 	coveredSeasons := map[int]bool{}
 	var rels []indexer.Release
+	var avoided *quality.Evaluation // the first shown release from the avoided tier
 	for _, pk := range picks {
 		cand := parser.Parse(pk.name)
 		if len(c.coveredByFor(ctx, s, cand, firstEps)) == 0 {
@@ -558,6 +592,9 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 		pr.Kind, pr.Covers = previewSeriesKind(cand), previewCovers(cand)
 		if ev := evaluationOf(decision, pk.name); ev != nil {
 			pr.Matched, pr.Avoided = ev.Matched, ev.AvoidedFormats
+			if avoided == nil && quality.InAvoidedTier(decision.Ranking, *ev) {
+				avoided = ev
+			}
 		}
 		p.Releases = append(p.Releases, pr)
 		for _, sn := range wantSeasons {
@@ -571,7 +608,27 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 	} else if len(p.Releases) > 0 {
 		p.Why = []string{seriesPlanWhy(p.Releases)}
 	}
-	p.SeasonsNote = seasonsNote(wantSeasons, first, coveredSeasons)
+	if avoided != nil {
+		// Said first and plainly, in place of Decide's generic line: a pick from the avoided
+		// tier is a last resort, and whoever approves should know what it falls short on.
+		coversWanted := func(ev quality.Evaluation) bool {
+			return len(c.coveredByFor(ctx, s, ev.Candidate.Release, wantSet)) > 0
+		}
+		why := []string{avoidedPickWhy(decision, *avoided, coversWanted)}
+		for _, w := range p.Why {
+			if w != quality.WhyOnlyAvoided {
+				why = append(why, w)
+			}
+		}
+		p.Why = why
+	}
+	if len(p.Releases) > 0 {
+		// The header names every season the shown releases fill ("Seasons 1–5: 1 pack"),
+		// not just the first: a complete pack is the whole request, not Season 1's.
+		coveredSeasons[first] = true
+		p.CoveredSeasons = sortedSeasons(coveredSeasons)
+	}
+	p.SeasonsNote = seasonsNote(wantSeasons, first, coveredSeasons, planned, searched)
 	c.issuePreview(&p, rels, ReleaseKindSeries, in.Key, nil)
 	finishPreview(&p, notes)
 	return p, nil
@@ -650,34 +707,136 @@ func seriesPlanWhy(rels []PreviewRelease) string {
 	switch {
 	case packs == len(rels) && packs == 1:
 		return "One pack covers the season"
+	case packs == len(rels):
+		// A season pack and a bigger pack for the seasons it leaves (the bigger one also
+		// brings this season): no single episodes in it.
+		return fmt.Sprintf("%d packs between them cover what's asked for", packs)
 	case packs == 0:
 		return "No pack fit the profile, so it's taken episode by episode"
 	}
 	return "A pack where one fits, single episodes for the rest"
 }
 
-// seasonsNote is the line about the seasons wanted beyond the one previewed: covered by a
-// pack it found too, or not checked.
-func seasonsNote(want []int, first int, covered map[int]bool) string {
-	also, unchecked := 0, 0
+// seasonsNote is the line about the seasons asked for beyond those the releases shown fill
+// (the header names those): releases found for them too — approving grabs the shown ones,
+// and the search that follows takes the rest — nothing found, or not searched by number
+// (past maxSeasonQueries, or anime).
+func seasonsNote(want []int, first int, covered, planned, searched map[int]bool) string {
+	found, none, unchecked := 0, 0, 0
 	for _, sn := range want {
 		switch {
-		case sn == first:
-		case covered[sn]:
-			also++
+		case sn == first || covered[sn]:
+		case planned[sn]:
+			found++
+		case searched[sn]:
+			none++
 		default:
 			unchecked++
 		}
 	}
-	switch {
-	case also > 0 && unchecked > 0:
-		return fmt.Sprintf("Also covers %d more %s; %d more not checked", also, pluralize(also, "season"), unchecked)
-	case also > 0:
-		return fmt.Sprintf("Also covers the other %d %s asked for", also, pluralize(also, "season"))
-	case unchecked > 0:
-		return fmt.Sprintf("%d more %s not checked", unchecked, pluralize(unchecked, "season"))
+	var parts []string
+	if found > 0 {
+		parts = append(parts, fmt.Sprintf("releases found for %d more %s", found, pluralize(found, "season")))
 	}
-	return ""
+	if none > 0 {
+		parts = append(parts, fmt.Sprintf("nothing found for %d more %s", none, pluralize(none, "season")))
+	}
+	if unchecked > 0 {
+		parts = append(parts, fmt.Sprintf("%d more %s not checked", unchecked, pluralize(unchecked, "season")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	out := strings.Join(parts, "; ")
+	return strings.ToUpper(out[:1]) + out[1:]
+}
+
+const (
+	// previewSeasonQueries caps a preview's per-season queries, below the sweep's
+	// maxSeasonQueries. The request-preview budget (requests.previewPerMinute) counts
+	// previews, not queries, so it's what a preview costs that has to stay small: at most
+	// this plus the broad query, sent to every indexer. Seasons past it say "not checked";
+	// the search after approval asks for every one.
+	previewSeasonQueries = 6
+	// previewSeasonWorkers is how many season searches a preview runs at once. Each indexer
+	// still throttles its own host, so this only overlaps the waits across indexers.
+	previewSeasonWorkers = 3
+)
+
+// searchSeasonsAtOnce is searchSeasons for a preview: the same queries, a few at a time,
+// merged in season order (deduped by title) so the result doesn't depend on which answered
+// first. answered are the seasons whose query came back: one that failed or timed out was
+// not checked, which isn't the same as nothing found. The sweep keeps the one-at-a-time
+// version.
+func (c *Coordinator) searchSeasonsAtOnce(ctx context.Context, s series.Series, title string, seasons []int, have []indexer.Release) (_ []indexer.Release, answered map[int]bool) {
+	results := make([][]indexer.Release, len(seasons))
+	ok := make([]bool, len(seasons))
+	sem := make(chan struct{}, previewSeasonWorkers)
+	var wg sync.WaitGroup
+	for i, sn := range seasons {
+		wg.Add(1)
+		go func(i, sn int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+			q := seriesQuery(s, title, 100)
+			q.Season = sn
+			if sr, err := c.search(ctx, q); err == nil { // one season failing shouldn't sink the rest
+				results[i], ok[i] = sr.Releases, true
+			}
+		}(i, sn)
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	for _, r := range have {
+		seen[r.Title] = true
+	}
+	answered = map[int]bool{}
+	for i, rs := range results {
+		if ok[i] {
+			answered[seasons[i]] = true
+		}
+		for _, r := range rs {
+			if !seen[r.Title] {
+				seen[r.Title] = true
+				have = append(have, r)
+			}
+		}
+	}
+	return have, answered
+}
+
+// avoidedPickWhy says why the plan took a release from the avoided tier, from the decision
+// rather than a guess: nothing better fit at all, or better releases did but none of them
+// covered what this one fills (the plan reaches the avoided tier only for that). "Better"
+// counts only clean releases that can download (quality.GrabTier 0) and bring something
+// asked for (coversWanted) — a dead torrent or a season nobody asked for is no alternative.
+func avoidedPickWhy(d quality.Decision, ev quality.Evaluation, coversWanted func(quality.Evaluation) bool) string {
+	has := "it has something you avoid"
+	if len(ev.AvoidedFormats) > 0 {
+		has = "it has " + strings.Join(ev.AvoidedFormats, ", ") + ", which you avoid"
+	}
+	clean := 0
+	for _, e := range d.Eligible {
+		if quality.GrabTier(d.Ranking, e) == 0 && coversWanted(e) {
+			clean++
+		}
+	}
+	switch {
+	case clean > 0:
+		were := "releases were"
+		if clean == 1 {
+			were = "release was"
+		}
+		return fmt.Sprintf("%d better %s found, but none of them covers everything asked for — this one fills the rest, and %s",
+			clean, were, has)
+	case len(d.Eligible) == 1:
+		return "Nothing better was found — this is the only release that fits, and " + has
+	}
+	return "Nothing better was found — every release that fits has something you avoid, and " + has
 }
 
 // ---- books -----------------------------------------------------------------

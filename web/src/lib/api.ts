@@ -1788,6 +1788,8 @@ export interface PreviewResult {
   queries: number;
   season?: number;
   seasons_note?: string;
+  /** The seasons asked for that the releases shown fill: a complete pack's are all of them. */
+  covered_seasons?: number[];
   /** The title is in the library already: ranked under its own profile, whatever the approval picks. */
   in_library?: boolean;
   /** A caveat about this preview ("Preview may miss anime not yet in the library"). */
