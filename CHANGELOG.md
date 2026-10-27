@@ -469,7 +469,7 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     then. An empty file there is still moved aside, as before.
   - A film import whose name was taken by a file no record owns used to send that file to
     the recycle bin, or overwrite it with the bin off. Now the file stays, and the import
-    lands beside it with the version's label (`Heat (1995) - 1080p BluRay - Version.mkv`).
+    lands beside it with the version's label (`Heat (1995) - 1080p BluRay - Default.mkv`).
     An upgrade still replaces the film's own file under the same name, through the bin,
     and re-importing the same file still does nothing.
 - **A season pack whose episode titles disagree with the show's episode list waits in Needs
