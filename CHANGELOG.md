@@ -461,6 +461,21 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **A show's search no longer picks a release you avoid over good season packs.** A
+  release under your bitrate floor, or with a format, language or Unwanted item you avoid,
+  is meant to be a last resort. For shows it wasn't: the search took the release that
+  covered the most, so a starved complete-series pack (14.4 GB for five seasons, under a
+  5 Mbps floor) beat good season packs for every season. Now the search fills everything
+  it can from releases you don't avoid first — complete packs, season packs, then single
+  episodes — and only turns to an avoided release for what's still missing. If that is
+  the only release that covers a gap it's still grabbed. A torrent with no seeders is
+  likewise only used for what nothing seeded covers. This applies to the missing sweep,
+  the Search and Grab buttons and the request preview.
+- **A request's release preview names every season a pack covers.** A complete-series
+  pack showed as "Season 1: 1 pack". It now reads "Seasons 1–5: 1 pack". When the pick is
+  a release you avoid, **Why** says so plainly: that nothing better was found, or that
+  better releases were found but none covered everything asked for, and what it falls
+  short on.
 - **A season pack whose episode titles disagree with the show's episode list waits in Needs
   you instead of landing on the wrong episodes.** A show's episode list can be out of date
   when a whole season is released at once. Moving a file to the episode its title names
