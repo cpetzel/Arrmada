@@ -1112,22 +1112,26 @@ func (a *api) handleManualImport(w http.ResponseWriter, r *http.Request) {
 		version = *req.VersionID
 	}
 	if err := a.deps.Movies.ManualImportTo(r.Context(), id, version, src); err != nil {
-		if errors.Is(err, movies.ErrNotFound) {
-			a.writeError(w, http.StatusNotFound, "movie not found")
-			return
-		}
-		if errors.Is(err, movies.ErrVersionNotFound) {
-			a.writeError(w, http.StatusNotFound, "that version isn't one of this movie's")
-			return
-		}
-		if errors.Is(err, movies.ErrPathOwnedByOtherTrack) || errors.Is(err, library.ErrProtectedTarget) {
-			a.writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		a.writeError(w, http.StatusBadGateway, err.Error())
+		code, msg := manualImportError(err)
+		a.writeError(w, code, msg)
 		return
 	}
 	a.writeJSON(w, http.StatusOK, map[string]any{"status": "imported"})
+}
+
+// manualImportError is the status and message for a manual movie import that failed.
+func manualImportError(err error) (int, string) {
+	switch {
+	case errors.Is(err, movies.ErrNotFound):
+		return http.StatusNotFound, "movie not found"
+	case errors.Is(err, movies.ErrVersionNotFound):
+		return http.StatusNotFound, "that version isn't one of this movie's"
+	case errors.Is(err, movies.ErrPathOwnedByOtherTrack) || errors.Is(err, library.ErrProtectedTarget):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, library.ErrUntrackedTarget):
+		return http.StatusConflict, "files Arrmada doesn't track already have every name this file could take in the movie's folder — rename or move some of them, then import again"
+	}
+	return http.StatusBadGateway, err.Error()
 }
 
 // handleMovieDeletePreview says what deleting a movie with its files would move and where
