@@ -208,6 +208,7 @@ func (n *searchNotes) grabbed(title string) {
 // tally is the counts a collector adds up to.
 type tally struct {
 	returned, wrongTitle, blocklisted, pending, outOfScope, rejected, eligible int
+	waiting                                                                    int
 	reasons                                                                    map[string]int
 	topReason, example                                                         string
 	grabbed                                                                    []string
@@ -222,6 +223,7 @@ func (n *searchNotes) tally() tally {
 	defer n.mu.Unlock()
 	t.returned = len(n.seen)
 	t.grabbed = append([]string(nil), n.took...)
+	t.waiting = len(n.waits)
 	for _, code := range n.class {
 		switch code {
 		case classGrabbed, classEligible, DropPending:
@@ -289,6 +291,9 @@ func (o *SearchOutcome) absorb(n *searchNotes) {
 	}
 	o.WrongTitle, o.Blocklisted, o.Pending, o.OutOfScope = t.wrongTitle, t.blocklisted, t.pending, t.outOfScope
 	o.Rejected, o.Eligible = t.rejected, t.eligible
+	if o.Waiting == 0 {
+		o.Waiting = t.waiting
+	}
 	o.Reasons = t.reasons
 	if o.Example == "" {
 		o.Example = t.example

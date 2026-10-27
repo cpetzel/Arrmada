@@ -56,6 +56,15 @@ func (previewMeta) GetSeries(_ context.Context, id int) (*metadata.SeriesDetails
 		return &metadata.SeriesDetails{SeriesResult: metadata.SeriesResult{TMDBID: id, Title: "Luther", Year: 2010}, Status: "Ended",
 			Seasons: seasons}, nil
 	}
+	if id == longShowTMDB {
+		// An ended show of eight two-episode seasons: more than a preview searches by number.
+		var seasons []metadata.SeasonDetails
+		for sn := 1; sn <= 8; sn++ {
+			seasons = append(seasons, metadata.SeasonDetails{SeasonNumber: sn, Episodes: eps(2, "2015-01-0"+strconv.Itoa(sn))})
+		}
+		return &metadata.SeriesDetails{SeriesResult: metadata.SeriesResult{TMDBID: id, Title: "Longrun", Year: 2015}, Status: "Ended",
+			Seasons: seasons}, nil
+	}
 	if id != 95396 {
 		return nil, errors.New("unknown show")
 	}

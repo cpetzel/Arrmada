@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/tristenlammi/arrmada/internal/indexer"
 	"github.com/tristenlammi/arrmada/internal/parser"
@@ -37,8 +38,8 @@ type planInput struct {
 	counts        map[int]int
 	ended         bool
 	opts          planOpts
-	// inFlight are the seasons a download still in flight holds (seriesInFlightFor). A
-	// fallback pack bringing one of them waits for it to import (planner.mustWait).
+	// inFlight are the seasons a download in progress holds (fallbackHold). A lower-tier
+	// pack that would mostly re-fetch them waits for it to import (planner.mustWait).
 	inFlight map[int]bool
 	// cover reports which of the still-needed episodes a release would fill.
 	cover func(r parser.Release, needed map[epKey]bool) []epKey
@@ -94,7 +95,7 @@ func planSeriesGrabs(in planInput) []epKey {
 			if len(p.needed) == 0 {
 				break
 			}
-			p.takePacks(t, false, true)
+			p.takePacks(t, false)
 		}
 	}
 	return sortedKeys(p.needed)
@@ -159,23 +160,27 @@ func (p *planner) take(name, label string, covers []epKey) bool {
 	return true
 }
 
-// mustWait reports whether a fallback pack — the oversized last resort, or any pack from a
-// lower tier — has to wait for the better releases to import first: it brings episodes
-// another grab this pass holds, or a season still downloading. Taken now, both copies
-// race to the import: when the fallback lands first its worse files fill the episodes,
-// and the better ones are then refused (with upgrades off) or replace them a second time.
-// Left for the next pass, the better files are on disk and the fallback's copies of them
-// are refused as worse, so it's still taken for the gap it alone covers.
+// mustWait reports whether a lower-tier pack (dead or avoided) has to wait for better
+// grabs to import first: when most of what it would bring that matters is a copy of what
+// those grabs are fetching — episodes another grab this pass holds, or seasons a download
+// in flight holds (fallbackHold) — rather than gaps nothing else fills. Taken now, both
+// copies race to the import, and when the worse one lands first its files fill those
+// episodes. Left for a later pass, the better files are on disk first. When the gaps are
+// the larger part, waiting would cost more than the duplicate download, so it's taken.
+// A clean pack never waits: it's no worse than what it would duplicate.
 func (p *planner) mustWait(r parser.Release) bool {
-	if len(p.in.cover(r, p.held)) > 0 {
-		return true
-	}
+	overlap := setOf(p.in.cover(r, p.held))
 	for sn := range packSeasonsOf(r, p.in.seriesSeasons) {
-		if p.in.inFlight[sn] {
-			return true
+		if !p.in.inFlight[sn] {
+			continue
+		}
+		n := max(p.in.counts[sn], 1)
+		for e := 1; e <= n; e++ {
+			overlap[epKey{sn, e}] = true
 		}
 	}
-	return false
+	gap := len(p.in.cover(r, p.needed))
+	return len(overlap) > gap
 }
 
 // wait holds a fallback pack back for this pass, saying why.
@@ -240,7 +245,7 @@ func (p *planner) sensiblePasses(t planTierSet) {
 	// Pass 2 — packs, greedily taking the one that covers the most still-needed episodes,
 	// only while it's mostly useful (worth it). The oversized ones wait for the last resort.
 	if p.packsOK() {
-		p.takePacks(t, true, false)
+		p.takePacks(t, true)
 	}
 
 	// Pass 3 — individual episodes for whatever's left. Cheaper and more targeted than a
@@ -269,7 +274,7 @@ func (p *planner) sensiblePasses(t planTierSet) {
 //
 // worthItOnly: only packs that are mostly useful (pass 2). Without it (the last resort) a
 // gap is never left unfilled just because the only release covering it is a big pack.
-func (p *planner) takePacks(t planTierSet, worthItOnly, lastResort bool) {
+func (p *planner) takePacks(t planTierSet, worthItOnly bool) {
 	in := p.in
 	scoped := in.opts.Scoped
 	for {
@@ -304,7 +309,7 @@ func (p *planner) takePacks(t planTierSet, worthItOnly, lastResort bool) {
 			return
 		}
 		r := best.Candidate.Release
-		if (t.lower || lastResort) && p.mustWait(r) {
+		if t.lower && p.mustWait(r) {
 			p.wait(r, best.Candidate.Name)
 			continue
 		}
@@ -395,13 +400,65 @@ func (g *seriesGrabber) try(ctx context.Context, name, label string) bool {
 	return true
 }
 
-// fallbackHold is the seasons a plan's fallback packs must not bring yet (planInput.inFlight):
-// those a download still in flight holds. Every season when that can't be read, or when
-// one in flight covers the whole show — a fallback can wait a sweep, a race can't be undone.
-func (c *Coordinator) fallbackHold(ctx context.Context, s series.Series, seriesSeasons map[int]bool) map[int]bool {
-	seasons, whole, _, err := c.seriesInFlightFor(ctx, s, nil)
-	if err != nil || whole {
-		return seriesSeasons
+// fallbackHold is the seasons a lower-tier fallback pack must not bring yet
+// (planInput.inFlight): those an Arrmada grab of the show is actively downloading. Only
+// while the hold can end soon — a grab that has stopped moving, or is older than
+// fallbackHoldMax, holds nothing, or a paused torrent or a dead swarm under the stall
+// window would keep the gap open for good. exclude names releases (normTitle) that don't
+// count: the stall fail-over's own stalled grab, which the replacement is for. Nothing is
+// held when the record can't be read: the pack is then taken, as before the hold existed.
+func (c *Coordinator) fallbackHold(ctx context.Context, s series.Series, exclude map[string]bool) map[int]bool {
+	acqs, err := c.Active(ctx, "series", s.ID)
+	if err != nil {
+		return nil
 	}
-	return seasons
+	_, seriesSeasons := wantedEpisodes(s)
+	now := c.clock()
+	held := map[int]bool{}
+	for _, a := range acqs {
+		if exclude[normTitle(a.Title)] || !holdsFallback(a, now) {
+			continue
+		}
+		scope := a.Scope
+		if scope == "" {
+			scope = seriesAcqScope(a.Title, s)
+		}
+		sn, whole := scopeSeason(scope)
+		if !whole {
+			held[sn] = true
+			continue
+		}
+		for sn := range seriesSeasons {
+			held[sn] = true
+		}
+	}
+	return held
+}
+
+// The bounds on fallbackHold: a grab holds its seasons while it moved in the last
+// fallbackHoldIdle (or was grabbed that recently and hasn't been seen moving yet), and
+// never past fallbackHoldMax after it was grabbed.
+const (
+	fallbackHoldIdle = 2 * time.Hour
+	fallbackHoldMax  = 24 * time.Hour
+)
+
+// holdsFallback reports whether in-flight grab a still holds back a fallback pack.
+func holdsFallback(a Acquisition, now time.Time) bool {
+	if a.MediaType != "series" || a.Status == grabStatusHeld {
+		return false
+	}
+	switch a.Phase {
+	case phaseComplete, phaseMissing, "seeding", "error", "paused", "stalled":
+		return false // finished, gone, or not moving
+	}
+	grabbed := parseTime(a.GrabbedAt)
+	if grabbed.IsZero() || now.Sub(grabbed) > fallbackHoldMax {
+		return false
+	}
+	last := a.ProgressAt
+	if last.IsZero() {
+		last = grabbed
+	}
+	return now.Sub(last) <= fallbackHoldIdle
 }

@@ -149,3 +149,40 @@ func TestPreviewSeriesCleanPacksBeatStarvedComplete(t *testing.T) {
 		t.Fatalf("covered %v, why %q, note %q", p.CoveredSeasons, p.Why, p.SeasonsNote)
 	}
 }
+
+// longShowTMDB is previewMeta's ended show of eight two-episode seasons.
+const longShowTMDB = 4242
+
+// A preview asks for at most previewSeasonQueries seasons by number, plus the broad query:
+// the request-preview budget counts previews, so each one's cost stays small. The seasons
+// past the cap read "not checked".
+func TestPreviewSeriesCapsItsSeasonQueries(t *testing.T) {
+	h := newPreviewHarness(t)
+	h.ix.offer("Longrun.S01.1080p.WEB-DL.x264-GRP")
+	p, err := h.c.PreviewTitle(h.ctx, PreviewInput{MediaType: "series", TMDBID: longShowTMDB, Key: "request:11"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Outcome != PreviewFound || p.Queries != 7 {
+		t.Fatalf("outcome %s, queries %d; want the broad query and 6 seasons", p.Outcome, p.Queries)
+	}
+	if p.SeasonsNote != "Nothing found for 5 more seasons; 2 more seasons not checked" {
+		t.Fatalf("note %q", p.SeasonsNote)
+	}
+}
+
+// A season whose own query failed wasn't checked — it isn't "nothing found".
+func TestPreviewSeriesFailedSeasonQueryIsNotChecked(t *testing.T) {
+	h := newPreviewHarness(t)
+	h.ix.offer("Severance.S01.1080p.WEB-DL.x264-GRP")
+	h.ix.mu.Lock()
+	h.ix.failSeason = map[int]bool{3: true}
+	h.ix.mu.Unlock()
+	p, err := h.c.PreviewTitle(h.ctx, PreviewInput{MediaType: "series", TMDBID: 95396, Seasons: []int{1, 2, 3}, Key: "request:12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Outcome != PreviewFound || p.SeasonsNote != "Nothing found for 1 more season; 1 more season not checked" {
+		t.Fatalf("outcome %s, note %q", p.Outcome, p.SeasonsNote)
+	}
+}

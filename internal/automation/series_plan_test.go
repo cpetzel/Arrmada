@@ -239,10 +239,20 @@ var sweepCases = []planCase{
 		wanted:   []epKey{{3, 4}, {3, 5}}, counts: fiveSeasons},
 	{name: "nothing eligible",
 		eligible: nil, wanted: []epKey{{3, 4}}, counts: fiveSeasons},
+	// A clean last-resort pack that overlaps a grab of the same pass is still taken, as on
+	// main: only a lower-tier pack waits (planner.mustWait).
+	{name: "running show, S03E01 single + S03E05 only in the season pack → both",
+		eligible: []string{"Show.S03E01.1080p", "Show.S03.1080p"},
+		wanted:   []epKey{{3, 1}, {3, 5}}, counts: fiveSeasons},
+	{name: "ended show, S03E01 single + S05E02 only in the complete pack → both",
+		eligible: []string{"Show.S03E01.1080p", "Show.Complete.Series.1080p"},
+		wanted:   []epKey{{3, 1}, {5, 2}}, counts: fiveSeasons, ended: true},
 }
 
-// The extraction must not change one grab the sweep makes: same releases, same order,
-// same leftovers.
+// The sweep over clean releases only — no avoided or dead ones, the setup every show had
+// before the tiers — makes exactly the grabs main made: same releases, same order, same
+// leftovers. The tiers (and the waiting rule, which applies to lower tiers only) change
+// nothing there.
 func TestPlanUnscopedMatchesLegacyPasses(t *testing.T) {
 	for _, c := range sweepCases {
 		t.Run(c.name, func(t *testing.T) {

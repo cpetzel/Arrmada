@@ -436,7 +436,7 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 		if err != nil {
 			return Preview{}, err
 		}
-		inFlight = inSeasons
+		inFlight = c.fallbackHold(ctx, s, nil) // what a lower-tier pack would wait for, as the search after approval does
 		if whole {
 			held.Outcome, held.Reason = PreviewBusy, ReasonAlreadyDownloading
 			return held, nil
@@ -479,16 +479,13 @@ func (c *Coordinator) previewSeries(ctx context.Context, in PreviewInput) (Previ
 	// Every season asked for is searched by number, as the sweep searches them, capped
 	// alike: a clean season pack often only turns up in its own season's results, and
 	// without it the plan settles for a worse pack that the broad query did return.
-	searched := map[int]bool{}
+	var searched map[int]bool // the seasons whose own query answered
 	if !s.IsAnime() {
 		seasons := wantSeasons
-		if len(seasons) > maxSeasonQueries {
-			seasons = seasons[:maxSeasonQueries]
+		if len(seasons) > previewSeasonQueries {
+			seasons = seasons[:previewSeasonQueries]
 		}
-		for _, sn := range seasons {
-			searched[sn] = true
-		}
-		releases = c.searchSeasonsAtOnce(ctx, s, title, seasons, releases)
+		releases, searched = c.searchSeasonsAtOnce(ctx, s, title, seasons, releases)
 	}
 	notes.consider(releases)
 
@@ -754,15 +751,26 @@ func seasonsNote(want []int, first int, covered, planned, searched map[int]bool)
 	return strings.ToUpper(out[:1]) + out[1:]
 }
 
-// previewSeasonWorkers is how many season searches a preview runs at once. Each indexer
-// still throttles its own host, so this only overlaps the waits across indexers.
-const previewSeasonWorkers = 4
+const (
+	// previewSeasonQueries caps a preview's per-season queries, below the sweep's
+	// maxSeasonQueries. The request-preview budget (requests.previewPerMinute) counts
+	// previews, not queries, so it's what a preview costs that has to stay small: at most
+	// this plus the broad query, sent to every indexer. Seasons past it say "not checked";
+	// the search after approval asks for every one.
+	previewSeasonQueries = 6
+	// previewSeasonWorkers is how many season searches a preview runs at once. Each indexer
+	// still throttles its own host, so this only overlaps the waits across indexers.
+	previewSeasonWorkers = 3
+)
 
 // searchSeasonsAtOnce is searchSeasons for a preview: the same queries, a few at a time,
 // merged in season order (deduped by title) so the result doesn't depend on which answered
-// first. The sweep keeps the one-at-a-time version.
-func (c *Coordinator) searchSeasonsAtOnce(ctx context.Context, s series.Series, title string, seasons []int, have []indexer.Release) []indexer.Release {
+// first. answered are the seasons whose query came back: one that failed or timed out was
+// not checked, which isn't the same as nothing found. The sweep keeps the one-at-a-time
+// version.
+func (c *Coordinator) searchSeasonsAtOnce(ctx context.Context, s series.Series, title string, seasons []int, have []indexer.Release) (_ []indexer.Release, answered map[int]bool) {
 	results := make([][]indexer.Release, len(seasons))
+	ok := make([]bool, len(seasons))
 	sem := make(chan struct{}, previewSeasonWorkers)
 	var wg sync.WaitGroup
 	for i, sn := range seasons {
@@ -777,7 +785,7 @@ func (c *Coordinator) searchSeasonsAtOnce(ctx context.Context, s series.Series, 
 			q := seriesQuery(s, title, 100)
 			q.Season = sn
 			if sr, err := c.search(ctx, q); err == nil { // one season failing shouldn't sink the rest
-				results[i] = sr.Releases
+				results[i], ok[i] = sr.Releases, true
 			}
 		}(i, sn)
 	}
@@ -786,7 +794,11 @@ func (c *Coordinator) searchSeasonsAtOnce(ctx context.Context, s series.Series, 
 	for _, r := range have {
 		seen[r.Title] = true
 	}
-	for _, rs := range results {
+	answered = map[int]bool{}
+	for i, rs := range results {
+		if ok[i] {
+			answered[seasons[i]] = true
+		}
 		for _, r := range rs {
 			if !seen[r.Title] {
 				seen[r.Title] = true
@@ -794,7 +806,7 @@ func (c *Coordinator) searchSeasonsAtOnce(ctx context.Context, s series.Series, 
 			}
 		}
 	}
-	return have
+	return have, answered
 }
 
 // avoidedPickWhy says why the plan took a release from the avoided tier, from the decision

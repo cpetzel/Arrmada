@@ -88,6 +88,8 @@ type fakeTorznab struct {
 	// season=N), as an indexer's single page of a broad query misses a long show's packs.
 	bySeason map[int][]string
 	dead     map[string]bool // titles with no seeders; 25 otherwise
+	// failSeason are seasons whose tvsearch fails (a timeout, an indexer error).
+	failSeason map[int]bool
 	down     bool
 	searches int
 }
@@ -134,6 +136,10 @@ func (f *fakeTorznab) handler() http.Handler {
 		b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>`)
 		titles := f.releases
 		if sn, err := strconv.Atoi(r.URL.Query().Get("season")); err == nil {
+			if f.failSeason[sn] {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
 			titles = append(append([]string(nil), titles...), f.bySeason[sn]...)
 		}
 		for _, title := range titles {

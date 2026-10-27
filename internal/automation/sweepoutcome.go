@@ -27,6 +27,17 @@ func sweepOutcome(err error, searched bool, grabbed int) (resetMisses, recordMis
 	}
 }
 
+// seriesSweepOutcome is sweepOutcome for a show's search. Nothing grabbed only because a
+// fallback pack waits for the downloads in progress (out.Waiting) is neither a miss — the
+// backoff would push the wait out by hours — nor a reset, like a show skipped for a
+// download in flight.
+func seriesSweepOutcome(err error, out SearchOutcome) (resetMisses, recordMiss bool) {
+	if err == nil && out.Grabbed == 0 && out.Waiting > 0 {
+		return false, false
+	}
+	return sweepOutcome(err, out.Searched, out.Grabbed)
+}
+
 // outageStopAfter is how many searches in a row may hit an indexer outage before a sweep
 // gives up for this cycle. One is tolerated so a single query that times out on its own
 // doesn't stall every title queued behind it; two in a row means the indexers are down.

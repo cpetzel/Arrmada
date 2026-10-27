@@ -200,7 +200,6 @@ func (c *Coordinator) SearchSeriesMissing(ctx context.Context) {
 			continue // imported in bulk: its turn comes in a later run
 		}
 		out, err := c.searchSeriesOnceScoped(ctx, s.ID, held)
-		n := out.Grabbed
 		if errors.Is(err, ErrAlreadySearching) {
 			c.log.Debug("series: skipping a show that is already being searched", "series", s.Title)
 			continue
@@ -215,7 +214,7 @@ func (c *Coordinator) SearchSeriesMissing(ctx context.Context) {
 		if err != nil {
 			c.log.Warn("series: search failed", "series", s.Title, "err", err)
 		}
-		reset, miss := sweepOutcome(err, out.Searched, n)
+		reset, miss := seriesSweepOutcome(err, out)
 		if reset {
 			c.series.ResetSearchMisses(ctx, s.ID)
 		}
@@ -662,7 +661,8 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 	remaining = planSeriesGrabs(planInput{
 		eligible:      eligible,
 		ranking:       decision.Ranking,
-		inFlight:      c.fallbackHold(ctx, s, seriesSeasons),
+		inFlight:      c.fallbackHold(ctx, s, exclude),
+		waited:        notes.waited,
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),
