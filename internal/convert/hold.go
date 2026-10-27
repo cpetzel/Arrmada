@@ -394,7 +394,9 @@ func (s *Service) releaseHold(ctx context.Context, id int64, why string) (Histor
 // a revert's converted-* copy to the converted file's path, anything else to the converted
 // file's folder under its own name. An empty file or an unfinished cross-drive copy
 // (.partial) holds nothing to keep and is removed. A file whose name is taken in the
-// library stays in the folder, and the log says where; the folder goes only once empty.
+// library goes beside it as "<stem> (kept by Convert).<ext>" (then " … 2", …); only one
+// that can't be moved at all stays in the folder, and the log says where. The folder goes
+// only once empty.
 func (s *Service) emptyHoldFolder(e HistoryEntry) {
 	dir := filepath.Dir(e.HoldPath)
 	entries, err := os.ReadDir(dir)
@@ -418,14 +420,43 @@ func (s *Service) emptyHoldFolder(e HistoryEntry) {
 				to = e.OutPath
 			}
 		}
-		if _, err := os.Lstat(to); to == "" || err == nil || !errors.Is(err, fs.ErrNotExist) || s.moveKept(p, to) != nil {
-			s.log.Warn("convert: kept a file in the originals hold — its name in the library is taken", "file", p, "library_name", to)
-			s.event("warn", fmt.Sprintf("%s: kept %s in the originals hold, at %s — a file in the library already has its name. Move it back by hand", e.Title, ent.Name(), p))
+		if to != "" && !nameFree(to) {
+			// Usually the converted file itself has the name: the file goes beside it under
+			// a name that says where it came from, rather than staying hidden in the hold.
+			to = keptName(to)
+		}
+		if to == "" || s.moveKept(p, to) != nil {
+			s.log.Warn("convert: kept a file in the originals hold — it couldn't be given back to the library", "file", p, "library_folder", filepath.Dir(e.OutPath))
+			s.event("warn", fmt.Sprintf("%s: kept %s in the originals hold, at %s — it couldn't be given back to the library. Move it back by hand", e.Title, ent.Name(), p))
 			continue
 		}
-		s.event("info", fmt.Sprintf("%s: put %s back in the library from the originals hold", e.Title, ent.Name()))
+		s.log.Info("convert: gave a file in the originals hold back to the library", "from", p, "to", to)
+		s.event("info", fmt.Sprintf("%s: a file was given back from the originals hold as %s", e.Title, to))
 	}
 	_ = os.Remove(dir) // only if empty
+}
+
+// nameFree reports whether nothing at all is at path (a broken link counts as something).
+func nameFree(path string) bool {
+	_, err := os.Lstat(path)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// keptName is the first free "<stem> (kept by Convert).<ext>", "… (kept by Convert 2)…"
+// beside path; "" when none up to 99 is free.
+func keptName(path string) string {
+	ext := filepath.Ext(path)
+	stem := strings.TrimSuffix(path, ext)
+	for n := 1; n < 100; n++ {
+		mark := " (kept by Convert)"
+		if n > 1 {
+			mark = fmt.Sprintf(" (kept by Convert %d)", n)
+		}
+		if p := stem + mark + ext; nameFree(p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // holdFreed is told when the hold shrinks (or its budget changes): files paused on a full

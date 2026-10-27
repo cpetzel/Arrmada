@@ -473,8 +473,9 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     An upgrade still replaces the film's own file under the same name, through the bin,
     and re-importing the same file still does nothing.
   - A file earlier versions moved into the originals hold beside a converted film is no
-    longer deleted when the hold is released. It goes back to the film's folder, or, if
-    its name there is taken, stays in the hold and Convert's log says where it is.
+    longer deleted when the hold is released. It goes back to the film's folder. If its
+    name there is taken (usually by the converted file), it goes back as
+    `<name> (kept by Convert).mkv`, and Convert's log says so.
   - A revert that fails part-way and can't put its files back now leaves them for the next
     start to put right. Releasing the hold in the meantime used to delete both copies.
   - An import that records a file already on record under another spelling (another case

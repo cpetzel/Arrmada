@@ -44,7 +44,10 @@ func TestReleaseRestoresAHeldStray(t *testing.T) {
 	}
 }
 
-func TestReleaseKeepsAHeldStrayWhoseNameIsTaken(t *testing.T) {
+// The usual case: the stray had the converted file's name, which the converted file still
+// has. It's given back beside it under a name that says where it came from, not left
+// hidden in the hold.
+func TestReleaseGivesBackAHeldStrayWhoseNameIsTaken(t *testing.T) {
 	r, e := legacyHold(t)
 	dir := filepath.Dir(e.HoldPath)
 	stray := filepath.Join(dir, filepath.Base(e.OutPath))
@@ -52,11 +55,52 @@ func TestReleaseKeepsAHeldStrayWhoseNameIsTaken(t *testing.T) {
 	if _, err := r.releaseHold(context.Background(), e.ID, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if exists(e.HoldPath) {
-		t.Fatal("the held original wasn't released")
+	if exists(e.HoldPath) || exists(dir) {
+		t.Fatal("the held original or its folder is still there")
 	}
-	if sizeOf(stray) != 700 || sizeOf(e.OutPath) != 500 {
-		t.Fatalf("stray %d bytes, converted file %d bytes", sizeOf(stray), sizeOf(e.OutPath))
+	kept := filepath.Join(filepath.Dir(e.OutPath), "Heat (1995) (kept by Convert).mkv")
+	if sizeOf(kept) != 700 || sizeOf(e.OutPath) != 500 {
+		t.Fatalf("given back %d bytes, converted file %d bytes", sizeOf(kept), sizeOf(e.OutPath))
+	}
+	if !strings.Contains(strings.Join(logMsgs(r.Service), "\n"), kept) {
+		t.Fatal("nothing says where the file was given back")
+	}
+}
+
+// The marked name taken as well: the next number.
+func TestReleaseGivesBackUnderTheNextFreeKeptName(t *testing.T) {
+	r, e := legacyHold(t)
+	writeFile(t, filepath.Join(filepath.Dir(e.HoldPath), filepath.Base(e.OutPath)), 700, 'r')
+	lib := filepath.Dir(e.OutPath)
+	writeFile(t, filepath.Join(lib, "Heat (1995) (kept by Convert).mkv"), 600, 'k')
+	if _, err := r.releaseHold(context.Background(), e.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if sizeOf(filepath.Join(lib, "Heat (1995) (kept by Convert 2).mkv")) != 700 ||
+		sizeOf(filepath.Join(lib, "Heat (1995) (kept by Convert).mkv")) != 600 {
+		t.Fatal("not given back under the next free name, or the first one was touched")
+	}
+}
+
+// A file that can't be moved at all stays in the hold, and the log says where.
+func TestReleaseKeepsAHeldStrayThatCantMove(t *testing.T) {
+	r, e := legacyHold(t)
+	dir := filepath.Dir(e.HoldPath)
+	stray := filepath.Join(dir, filepath.Base(e.OutPath))
+	writeFile(t, stray, 700, 'r')
+	orig := renameFn
+	renameFn = func(from, to string) error {
+		if from == stray {
+			return errors.New("injected")
+		}
+		return orig(from, to)
+	}
+	t.Cleanup(func() { renameFn = orig })
+	if _, err := r.releaseHold(context.Background(), e.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if exists(e.HoldPath) || sizeOf(stray) != 700 {
+		t.Fatalf("original released %v, stray %d bytes", !exists(e.HoldPath), sizeOf(stray))
 	}
 	if !strings.Contains(strings.Join(logMsgs(r.Service), "\n"), stray) {
 		t.Fatal("nothing says where the kept file is")
