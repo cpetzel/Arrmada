@@ -104,6 +104,16 @@ func TestTargetThatIsTheSourceIsFree(t *testing.T) {
 	if err := os.Symlink(src, final); err != nil {
 		t.Skipf("no symlinks here: %v", err)
 	}
+	// On a case-insensitive disk the other spelling goes when the source moves.
+	orig := renameFn
+	renameFn = func(from, to string) error {
+		err := orig(from, to)
+		if err == nil && from == src {
+			_ = os.Remove(final)
+		}
+		return err
+	}
+	t.Cleanup(func() { renameFn = orig })
 	job := r.convertNow(t, 1, "Heat", src, dst, mi, plan)
 	if job.State != StateDone {
 		t.Fatalf("state %s (%s), want done", job.State, job.Note)
