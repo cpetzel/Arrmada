@@ -315,6 +315,7 @@ func (s *Service) ExpireHolds(ctx context.Context) error {
 	if s.history == nil || s.history.db == nil {
 		return nil
 	}
+	s.retryUnsettledReverts(ctx) // revert.go: before anything is released
 	ids, err := s.history.dueHolds(ctx, time.Now().Unix())
 	if err != nil {
 		return err
@@ -324,7 +325,7 @@ func (s *Service) ExpireHolds(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if _, err := s.releaseHold(ctx, id, "its undo window ended"); err != nil && !errors.Is(err, ErrNotHeld) && !errors.Is(err, ErrSwapBusy) {
+		if _, err := s.releaseHold(ctx, id, "its undo window ended"); err != nil && !errors.Is(err, ErrNotHeld) && !errors.Is(err, ErrSwapBusy) && !errors.Is(err, ErrRevertUnsettled) {
 			s.log.Warn("convert: couldn't release a held original", "history_id", id, "err", err)
 			if firstErr == nil {
 				firstErr = err
@@ -352,10 +353,7 @@ func (s *Service) releaseHold(ctx context.Context, id int64, why string) (Histor
 	if e.HoldState != HoldHeld || e.Outcome != OutcomeDone || e.HoldPath == "" {
 		return e, ErrNotHeld
 	}
-	if busy, err := s.swapInFlight(ctx, id); err != nil || busy {
-		if err == nil {
-			err = ErrSwapBusy
-		}
+	if err := s.swapBusy(ctx, id); err != nil {
 		return e, err
 	}
 	if !isHoldFile(e.HoldPath, id) {
@@ -474,6 +472,25 @@ func (s *Service) swapInFlight(ctx context.Context, id int64) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM convert_swaps WHERE history_id = ?`, id).Scan(&n)
 	return n > 0, err
+}
+
+// swapBusy says why ledger row id's hold can't be touched now: a conversion still being
+// swapped in (ErrSwapBusy), or a revert that couldn't finish and waits to be put right
+// (ErrRevertUnsettled). Called under holdMu, which a revert holds throughout, so a revert
+// row seen here is never one in progress.
+func (s *Service) swapBusy(ctx context.Context, id int64) error {
+	var n, reverts int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(op = ?), 0) FROM convert_swaps WHERE history_id = ?`, opRevert, id).Scan(&n, &reverts); err != nil {
+		return err
+	}
+	switch {
+	case reverts > 0:
+		return ErrRevertUnsettled
+	case n > 0:
+		return ErrSwapBusy
+	}
+	return nil
 }
 
 // --- the ledger's hold columns ----------------------------------------------------------

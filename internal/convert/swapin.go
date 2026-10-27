@@ -129,7 +129,9 @@ func (s *Service) swapIn(ctx context.Context, job *Job, src, dst string, mi *Med
 	// skip, when set, is the kind the file then waits under rather than failing.
 	putBackAs := func(skip, why string) {
 		restored := true
-		if finalPath != src && exists(strayHeld) {
+		// On a case-insensitive disk the stray's name in the hold can be the held original's
+		// other spelling: that's the original, not a stray.
+		if finalPath != src && exists(strayHeld) && !sameName(strayHeld, held) {
 			if err := s.moveKept(strayHeld, finalPath); err != nil {
 				restored = false
 			}

@@ -140,25 +140,47 @@ func TestReleaseStillClearsEmptyLeftovers(t *testing.T) {
 	}
 }
 
-// On a case-insensitive disk Heat (1995).MKV converts to Heat (1995).mkv: the same file.
-// That name isn't taken by anyone else. A symlink to the source stands in for it here
-// (Linux disks are case-sensitive): the name disappears with the source, as it would.
-func TestTargetThatIsTheSourceIsFree(t *testing.T) {
-	r, src, dst, mi, plan := finalizeRigFor(t, "Heat (1995).mp4")
-	final := finalPathFor(src)
-	if err := os.Symlink(src, final); err != nil {
-		t.Skipf("no symlinks here: %v", err)
-	}
-	// On a case-insensitive disk the other spelling goes when the source moves.
-	orig := renameFn
-	renameFn = func(from, to string) error {
-		err := orig(from, to)
-		if err == nil && from == src {
-			_ = os.Remove(final)
+// caseInsensitive makes "Heat (1995).MKV" and "Heat (1995).mkv" one name in every folder
+// for the rest of the test, as on a disk that ignores case (Linux disks don't): the name
+// check sees one file under both spellings, and moving either spelling moves both — a
+// hardlink keeps the other spelling visible, as the disk would.
+func caseInsensitive(t *testing.T) {
+	t.Helper()
+	other := func(p string) string {
+		switch filepath.Base(p) {
+		case "Heat (1995).MKV":
+			return filepath.Join(filepath.Dir(p), "Heat (1995).mkv")
+		case "Heat (1995).mkv":
+			return filepath.Join(filepath.Dir(p), "Heat (1995).MKV")
 		}
-		return err
+		return ""
 	}
-	t.Cleanup(func() { renameFn = orig })
+	oa, or := caseAliasFn, renameFn
+	caseAliasFn = func(a, b string) bool { return other(a) == b && exists(a) && exists(b) }
+	renameFn = func(from, to string) error {
+		if o := other(from); o != "" {
+			_ = os.Remove(o)
+		}
+		if err := or(from, to); err != nil {
+			return err
+		}
+		if o := other(to); o != "" && !exists(o) {
+			_ = os.Link(to, o)
+		}
+		return nil
+	}
+	t.Cleanup(func() { caseAliasFn, renameFn = oa, or })
+}
+
+// On a case-insensitive disk Heat (1995).MKV converts to Heat (1995).mkv: the same file.
+// That name isn't taken by anyone else.
+func TestTargetThatIsTheSourceIsFree(t *testing.T) {
+	caseInsensitive(t)
+	r, src, dst, mi, plan := finalizeRigFor(t, "Heat (1995).MKV")
+	final := finalPathFor(src)
+	if err := os.Link(src, final); err != nil {
+		t.Skipf("no hardlinks here: %v", err)
+	}
 	job := r.convertNow(t, 1, "Heat", src, dst, mi, plan)
 	if job.State != StateDone {
 		t.Fatalf("state %s (%s), want done", job.State, job.Note)
@@ -167,12 +189,11 @@ func TestTargetThatIsTheSourceIsFree(t *testing.T) {
 		t.Fatal("the conversion didn't land with the original in the hold")
 	}
 
-	// And before the encode.
+	// And before the encode. A copy stands in for the other spelling: a second hardlink
+	// would read as still seeding.
 	r2 := newSpaceRig(t)
-	src2 := r2.addMovieFile(t, 1, "Heat (1995).mp4", 1000)
-	if err := os.Symlink(src2, finalPathFor(src2)); err != nil {
-		t.Fatal(err)
-	}
+	src2 := r2.addMovieFile(t, 1, "Heat (1995).MKV", 1000)
+	writeFile(t, finalPathFor(src2), 1000, 'x')
 	stubProbe(t, film("h264", 1920, 1080, 35000, aud("truehd", "eng", 8)))
 	stubDisks(t, r2.scratch, 1<<50, 1<<50)
 	it, _ := parseKey(movieKey(1))
@@ -196,22 +217,25 @@ func TestRevertKeepsItsJournalWhenItCantPutThingsBack(t *testing.T) {
 		return orig(from, to)
 	}
 	t.Cleanup(func() { renameFn = orig })
-	if _, err := r.Revert(context.Background(), e.ID); err == nil {
-		t.Fatal("the revert reported success")
+	if _, err := r.Revert(context.Background(), e.ID); !errors.Is(err, ErrRevertUnsettled) {
+		t.Fatalf("revert: %v, want ErrRevertUnsettled", err)
 	}
 	if r.swapCount(t) != 1 {
 		t.Fatal("the journal row went, though the files are out of place")
 	}
-	if _, err := r.releaseHold(context.Background(), e.ID, "test"); !errors.Is(err, ErrSwapBusy) {
+	if _, err := r.releaseHold(context.Background(), e.ID, "test"); !errors.Is(err, ErrRevertUnsettled) {
 		t.Fatalf("release while the revert is unsettled: %v", err)
 	}
 	if sizeOf(e.HoldPath) != 1000 || sizeOf(conv) != 500 {
 		t.Fatal("a file was lost")
 	}
+	// The hourly hold tick tries again — no restart needed.
 	renameFn = orig
-	r.recoverSwaps(context.Background())
+	if err := r.ExpireHolds(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if sizeOf(e.OutPath) != 500 || r.swapCount(t) != 0 || sizeOf(e.HoldPath) != 1000 {
-		t.Fatalf("recovery didn't put the converted file back: %d bytes, %d rows", sizeOf(e.OutPath), r.swapCount(t))
+		t.Fatalf("the retry didn't put the converted file back: %d bytes, %d rows", sizeOf(e.OutPath), r.swapCount(t))
 	}
 }
 
