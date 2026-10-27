@@ -349,16 +349,17 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 		}
 	}
 	g := c.newSeriesGrabber(s, profile, byName, pending, sc.Replace, scope)
-	waits := 0
 	g.scopeOf = byTitle
+	waits := 0
+	waited := func(name string) {
+		waits++
+		notes.waited(name)
+	}
 	left := planSeriesGrabs(planInput{
 		eligible:      decision.Eligible,
 		ranking:       decision.Ranking,
 		inFlight:      c.fallbackHold(ctx, s, nil),
-		waited: func(name string) {
-			waits++
-			notes.waited(name)
-		},
+		waited:        waited,
 		wanted:        wanted,
 		seriesSeasons: seriesSeasons,
 		counts:        seasonEpisodeCounts(s),

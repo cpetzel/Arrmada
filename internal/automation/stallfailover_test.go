@@ -90,8 +90,8 @@ type fakeTorznab struct {
 	dead     map[string]bool // titles with no seeders; 25 otherwise
 	// failSeason are seasons whose tvsearch fails (a timeout, an indexer error).
 	failSeason map[int]bool
-	down     bool
-	searches int
+	down       bool
+	searches   int
 }
 
 // offerForSeason puts titles on offer, sized in GiB, to season sn's queries only.
