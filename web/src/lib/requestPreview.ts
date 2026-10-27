@@ -46,10 +46,17 @@ export function formatGB(gb: number): string {
  * server named them says the first season only.
  */
 export function seasonsLabel(r: PreviewResult): string {
-  const all = [...new Set([r.season ?? 0, ...(r.covered_seasons ?? [])])].filter((n) => n > 0).sort((a, b) => a - b);
-  if (all.length <= 1) return `Season ${r.season}`;
-  const run = all.every((n, i) => i === 0 || n === all[i - 1] + 1);
-  return `Seasons ${run ? `${all[0]}–${all[all.length - 1]}` : all.join(", ")}`;
+  const all = [...new Set([...(r.season != null ? [r.season] : []), ...(r.covered_seasons ?? [])])].sort((a, b) => a - b);
+  // Season 0 is Specials: named, never folded into a range ("Seasons 0–3").
+  const specials = all.includes(0) ? ["Specials"] : [];
+  const nums = all.filter((n) => n > 0);
+  let seasons = "";
+  if (nums.length === 1) seasons = `Season ${nums[0]}`;
+  if (nums.length > 1) {
+    const run = nums.every((n, i) => i === 0 || n === nums[i - 1] + 1);
+    seasons = `Seasons ${run ? `${nums[0]}–${nums[nums.length - 1]}` : nums.join(", ")}`;
+  }
+  return [...specials, seasons].filter(Boolean).join(" + ");
 }
 
 /**
