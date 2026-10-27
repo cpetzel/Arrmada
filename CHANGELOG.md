@@ -461,6 +461,30 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Convert and imports no longer remove a video Arrmada doesn't track.**
+  - Converting `Heat (1995).mp4` writes `Heat (1995).mkv`. A file you kept under that name
+    (a remux beside the film, say) used to be moved into the originals hold with the
+    original, and deleted with it when the hold expired. Now the conversion waits under
+    Convert's Problems until you rename or remove that file, and nothing is encoded until
+    then. An empty file there is still moved aside, as before.
+  - A film import whose name was taken by a file no record owns used to send that file to
+    the recycle bin, or overwrite it with the bin off. Now the file stays, and the import
+    lands beside it with the version's label (`Heat (1995) - 1080p BluRay - Default.mkv`).
+    An upgrade still replaces the film's own file under the same name, through the bin,
+    and re-importing the same file still does nothing.
+  - A file earlier versions moved into the originals hold beside a converted film is no
+    longer deleted when the hold is released. It goes back to the film's folder. If its
+    name there is taken (usually by the converted file), it goes back as
+    `<name> (kept by Convert).mkv`, and Convert's log says so.
+  - A revert that fails part-way and can't put its files back keeps both copies, and
+    Arrmada tries again within the hour. Releasing the hold in the meantime used to delete
+    both copies.
+  - An import that records a file already on record under another spelling (another case
+    on a case-insensitive disk, or a symlinked folder) no longer recycles the file it has
+    just imported. This applies to films and episodes.
+  - On a case-insensitive disk, converting `Heat (1995).MKV` no longer waits forever because
+    `Heat (1995).mkv`, which is the same file, seemed taken, and the conversion can be
+    reverted.
 - **A season pack whose episode titles disagree with the show's episode list waits in Needs
   you instead of landing on the wrong episodes.** A show's episode list can be out of date
   when a whole season is released at once. Moving a file to the episode its title names

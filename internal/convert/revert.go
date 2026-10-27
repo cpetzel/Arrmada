@@ -39,6 +39,40 @@ const (
 // re-import replaced it), so putting the original back would undo that.
 var ErrRevertChanged = errors.New("the library file has changed since (an upgrade or re-import), so reverting would undo that")
 
+// ErrRevertUnsettled means a revert failed and couldn't put its files back either; the
+// next startup does (recoverRevert), from the journal row it keeps.
+var ErrRevertUnsettled = errors.New("the revert couldn't finish; Arrmada will try again within the hour, and both files are kept")
+
+// retryUnsettledReverts puts right reverts that couldn't finish (ErrRevertUnsettled), as
+// startup recovery does, so they aren't left until a restart — run by the hourly hold
+// tick. Under holdMu a revert row is never one in progress (Revert holds it throughout);
+// the item is claimed too, so no conversion starts on its files meanwhile.
+func (s *Service) retryUnsettledReverts(ctx context.Context) {
+	rows, err := s.swapRows(ctx)
+	if err != nil {
+		return
+	}
+	for _, w := range rows {
+		if w.op != opRevert {
+			continue
+		}
+		e, err := s.history.get(ctx, w.historyID)
+		if err != nil {
+			continue
+		}
+		release, ok := s.claimItem(e.Key)
+		if !ok {
+			continue
+		}
+		s.holdMu.Lock()
+		if s.swapJournalled(ctx, w.part) { // not put right meanwhile
+			s.recoverRevert(ctx, w)
+		}
+		s.holdMu.Unlock()
+		release()
+	}
+}
+
 // ErrRevertBusy means the file is being converted (or reverted) right now.
 var ErrRevertBusy = errors.New("this file is being converted right now — try again once that's finished")
 
@@ -72,6 +106,11 @@ func (s *Service) Revert(ctx context.Context, id int64) (HistoryEntry, error) {
 		return e, fmt.Errorf("could not journal the revert (%v) — nothing was changed", err)
 	}
 	if err := s.revertMoves(w); err != nil {
+		if errors.Is(err, ErrRevertUnsettled) {
+			// The files are out of place: the journal row stays, so the hold can't be
+			// released in the meantime and the next startup puts them right.
+			return e, err
+		}
 		s.clearSwap(w.part) // revertMoves put everything back
 		return e, err
 	}
@@ -96,10 +135,7 @@ func (s *Service) revertable(ctx context.Context, e HistoryEntry) error {
 	if e.Outcome != OutcomeDone || e.HoldState != HoldHeld || e.HoldPath == "" || e.OutPath == "" || e.SrcPath == "" {
 		return ErrNotHeld
 	}
-	if busy, err := s.swapInFlight(ctx, e.ID); err != nil || busy {
-		if err == nil {
-			err = ErrSwapBusy
-		}
+	if err := s.swapBusy(ctx, e.ID); err != nil {
 		return err
 	}
 	if !isHoldFile(e.HoldPath, e.ID) {
@@ -116,7 +152,7 @@ func (s *Service) revertable(ctx context.Context, e HistoryEntry) error {
 	if !owned || !exists(e.OutPath) || (e.OutSize > 0 && fileSize(e.OutPath) != e.OutSize) {
 		return ErrRevertChanged
 	}
-	if e.SrcPath != e.OutPath && exists(e.SrcPath) {
+	if !sameName(e.SrcPath, e.OutPath) && exists(e.SrcPath) {
 		return fmt.Errorf("a file is already at %s — left as it is", filepath.Base(e.SrcPath))
 	}
 	if exists(revertPartFor(e)) {
@@ -157,13 +193,14 @@ func (s *Service) journalRevert(ctx context.Context, w swapRow) error {
 //   - Otherwise: the original back first (its name is free), then the converted file away.
 func (s *Service) revertMoves(w swapRow) error {
 	out, conv, orig, held := w.src, w.part, w.final, w.holdPath
-	if out == orig {
+	if sameName(out, orig) {
 		if err := s.moveKept(out, conv); err != nil {
 			return fmt.Errorf("could not move the converted file aside: %v — nothing was changed", err)
 		}
 		if err := s.moveKept(held, orig); err != nil {
 			if back := s.moveKept(conv, out); back != nil {
 				s.log.Error("convert: revert couldn't put the converted file back — the next startup will", "file", out, "err", back)
+				return fmt.Errorf("%w: could not move the original back (%v), nor the converted file (%v)", ErrRevertUnsettled, err, back)
 			}
 			return fmt.Errorf("could not move the original back: %v — nothing was changed", err)
 		}
@@ -175,6 +212,7 @@ func (s *Service) revertMoves(w swapRow) error {
 	if err := s.moveKept(out, conv); err != nil {
 		if back := s.moveKept(orig, held); back != nil {
 			s.log.Error("convert: revert couldn't return the original to the hold — the next startup will", "file", orig, "err", back)
+			return fmt.Errorf("%w: could not move the converted file aside (%v), nor the original back to the hold (%v)", ErrRevertUnsettled, err, back)
 		}
 		return fmt.Errorf("could not move the converted file aside: %v — nothing was changed", err)
 	}
@@ -186,12 +224,12 @@ func (s *Service) revertMoves(w swapRow) error {
 func (s *Service) undoRevertMoves(w swapRow) bool {
 	out, conv, orig, held := w.src, w.part, w.final, w.holdPath
 	ok := true
-	if out != orig && exists(orig) && !exists(held) {
+	if !sameName(out, orig) && exists(orig) && !exists(held) {
 		if err := s.moveKept(orig, held); err != nil {
 			ok = false
 		}
 	}
-	if out == orig && exists(orig) && !exists(held) && exists(conv) {
+	if sameName(out, orig) && exists(orig) && !exists(held) && exists(conv) {
 		// Both had moved for an MKV source: the original goes back to the hold first.
 		if err := s.moveKept(orig, held); err != nil {
 			return false
@@ -249,7 +287,7 @@ func (s *Service) finishRevert(ctx context.Context, e HistoryEntry, w swapRow) e
 		s.log.Warn("convert: couldn't delete the converted copy after a revert", "file", w.part, "err", err)
 	}
 	// A stray moved aside when this was converted gets its name back.
-	if stray := filepath.Join(filepath.Dir(e.HoldPath), filepath.Base(e.OutPath)); e.OutPath != e.SrcPath && exists(stray) && !exists(e.OutPath) {
+	if stray := filepath.Join(filepath.Dir(e.HoldPath), filepath.Base(e.OutPath)); !sameName(e.OutPath, e.SrcPath) && exists(stray) && !exists(e.OutPath) {
 		if err := s.moveKept(stray, e.OutPath); err != nil {
 			s.log.Warn("convert: couldn't put back a file moved aside by the conversion", "file", stray, "err", err)
 		}
@@ -318,7 +356,7 @@ func (s *Service) recoverRevert(ctx context.Context, w swapRow) {
 	}
 	out, orig, held := w.src, w.final, w.holdPath
 	origBack := exists(orig) && !exists(held)
-	if origBack && (out == orig || !exists(out)) {
+	if origBack && (sameName(out, orig) || !exists(out)) {
 		if err := s.finishRevert(ctx, e, w); err != nil {
 			s.log.Warn("convert: could not finish an interrupted revert — will try again at the next startup", "file", orig, "err", err)
 			return
@@ -327,7 +365,15 @@ func (s *Service) recoverRevert(ctx context.Context, w swapRow) {
 		return
 	}
 	if !s.undoRevertMoves(w) {
-		s.log.Warn("convert: could not roll back an interrupted revert — will try again at the next startup", "file", orig)
+		s.log.Warn("convert: could not roll back an interrupted revert — will try again later", "file", orig)
+		return
+	}
+	if !exists(out) || !exists(held) {
+		// Nothing put the converted file back in the library and the original in the hold
+		// (moved or removed by hand?). The row stays: without it the hold could be released
+		// over a library with no file.
+		s.log.Warn("convert: an interrupted revert's files aren't where it can put them right — left for a look; the held original is kept",
+			"converted", out, "held", held)
 		return
 	}
 	s.clearSwap(w.part)

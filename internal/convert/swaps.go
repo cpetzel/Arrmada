@@ -131,6 +131,10 @@ func exists(path string) bool {
 //     MKV source had its original stamped as converted); otherwise the rename is completed
 //     and the record repointed.
 func (s *Service) recoverSwaps(ctx context.Context) {
+	// The hourly hold tick also runs at start: a release must never land between a
+	// recovery's steps (a row cleared, its hold not yet settled).
+	s.holdMu.Lock()
+	defer s.holdMu.Unlock()
 	swaps, err := s.swapRows(ctx)
 	if err != nil {
 		return // table may predate the migration runner in tests; nothing to recover
@@ -251,6 +255,12 @@ func (s *Service) recoverRetired(ctx context.Context, w swapRow) {
 			// the bin took it — the rename only ever follows that, and replaces the part).
 			// Keep it; the converted copy is discarded.
 			s.abandonSwap(w, "an interrupted conversion was rolled back — the original was still in place")
+			if w.holdPath != "" && w.historyID > 0 {
+				// The ledger may already call the original held: it isn't, and a held row
+				// would count against the hold's size for good.
+				_ = s.history.setHold(ctx, w.historyID, "", 0, "")
+				s.history.setOutcome(ctx, w.historyID, OutcomeFailed, "interrupted by a restart before the swap — the original was kept")
+			}
 			return
 		case exists(w.final):
 			// The final name is taken by a file that isn't the original: the rename happened
@@ -378,8 +388,8 @@ func (s *Service) pendingParts(ctx context.Context) map[string]bool {
 
 // nameOwner says why the converted file may not take path, which already holds a file:
 // another library record points at it (a second version of a film, an episode filed under
-// the same name). "" means no record owns it, so it's a stray that can be moved aside. A
-// lookup that fails counts as owned — a file is never moved on a guess.
+// the same name). "" means no record owns it — strayInTheWay then decides whether it may
+// be moved aside. A lookup that fails counts as owned — a file is never moved on a guess.
 func (s *Service) nameOwner(ctx context.Context, path string) string {
 	name := filepath.Base(path)
 	if s.movies != nil {
@@ -401,6 +411,54 @@ func (s *Service) nameOwner(ctx context.Context, path string) string {
 		}
 	}
 	return ""
+}
+
+// strayInTheWay says why the converted file may not take path although no record owns it:
+// a file with anything in it there is someone's — a remux kept by hand beside the film, a
+// copy made outside Arrmada. Convert never leaves a file of its own at that name (its
+// staged copy is the .arrpart, the original goes to the hold), so it isn't a leftover.
+// Moved into the hold it would be deleted with the original when the hold is released,
+// so the conversion waits instead. Only an empty file, which holds nothing to lose, is
+// still moved aside. "" means the name is free or holds an empty file; a file that can't
+// be checked counts as in the way.
+func strayInTheWay(path string) string {
+	name := filepath.Base(path)
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ""
+	case err != nil:
+		return "couldn't check the file already at " + name
+	case fi.Mode().IsRegular() && fi.Size() == 0:
+		return ""
+	}
+	return "a file Arrmada doesn't track is already at " + name + " — rename or remove it to convert this one"
+}
+
+// nameIsSource reports whether the converted file's name is the source itself under
+// another spelling: Heat (1995).MKV and Heat (1995).mkv on a case-insensitive disk. That
+// name isn't taken by anyone else; it frees up when the original moves to the hold.
+func nameIsSource(final, src string) bool { return sameName(final, src) }
+
+// sameName reports whether a and b are one name: the same path, or the same path in
+// another case on a disk that ignores case — both spellings there, one file. A symlink or
+// a second hardlink is another name, never this: it stays when the file moves.
+func sameName(a, b string) bool { return a == b || caseAliasFn(a, b) }
+
+// caseAliasFn is sameName's case-insensitive-disk test; tests stand in for such a disk.
+var caseAliasFn = func(a, b string) bool {
+	if a == b || !strings.EqualFold(a, b) {
+		return false
+	}
+	fa, err := os.Lstat(a)
+	if err != nil || fa.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	fb, err := os.Lstat(b)
+	if err != nil || fb.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	return os.SameFile(fa, fb)
 }
 
 // finalPathFor is where a conversion of src lands: the same name as an .mkv (versions.go's

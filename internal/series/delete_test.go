@@ -428,3 +428,45 @@ func TestSupersedeKeepsOldOnRecycleFailure(t *testing.T) {
 		t.Errorf("no file.kept event in %+v", evs)
 	}
 }
+
+// The episode's recorded path and the new one are one file spelt two ways (a symlinked
+// folder, or another case on a case-insensitive disk): nothing is superseded.
+func TestSupersedeSameFileSpeltTwoWays(t *testing.T) {
+	f := newDeleteFixture(t)
+	real := f.episode(t, 1)
+	alias := filepath.Join(f.root, "Alias")
+	if err := os.Symlink(f.show, alias); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	spelt := filepath.Join(alias, "Season 1", filepath.Base(real))
+	ctx := context.Background()
+	if err := f.svc.SupersedeEpisodeFile(ctx, f.id, 1, 1, spelt, 5, "The.Bear.S01E01.1080p"); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(real) {
+		t.Fatal("the file was recycled as its own old copy")
+	}
+	if p, _ := f.svc.repo.EpisodeFilePath(ctx, f.id, 1, 1); p != spelt {
+		t.Errorf("episode file = %q, want %q", p, spelt)
+	}
+}
+
+// A second hardlink is another name: the old one is still recycled, as before.
+func TestSupersedeRecyclesTheOldHardlinkName(t *testing.T) {
+	f := newDeleteFixture(t)
+	old := f.episode(t, 1)
+	renamed := filepath.Join(filepath.Dir(old), "The Bear - S01E01 - System - 1080p WEB-DL.mkv")
+	if err := os.Link(old, renamed); err != nil {
+		t.Skipf("no hardlinks here: %v", err)
+	}
+	ctx := context.Background()
+	if err := f.svc.SupersedeEpisodeFile(ctx, f.id, 1, 1, renamed, 5, "The.Bear.S01E01.1080p"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(old); err == nil {
+		t.Fatal("the old name was left behind as an untracked duplicate")
+	}
+	if !exists(renamed) {
+		t.Fatal("the new name was removed")
+	}
+}

@@ -989,7 +989,10 @@ func (s *Service) MarkImportedTo(ctx context.Context, id, versionID int64, path,
 	// Upgrade is scoped to the target version: replacing the 1080p track's file
 	// never touches the 4K track's file.
 	upgrade := false
-	if target.HasFile && target.FilePath != "" && target.FilePath != path {
+	// The recorded path can be the new file spelt another way (another case on a
+	// case-insensitive disk, a symlinked folder): that's no upgrade, and removing the "old"
+	// file would remove the new one.
+	if target.HasFile && target.FilePath != "" && target.FilePath != path && !library.SamePlace(path, target.FilePath) {
 		// Quality gate (auto imports only): never replace a file with a KNOWN
 		// lower resolution — a mislabeled or wrongly-routed 720p grab must not
 		// clobber the 2160p already on disk. Unknown resolutions can't be judged,
@@ -1474,7 +1477,8 @@ func releaseEdition(sourceRelease, path string) string {
 }
 
 // TrackNaming is how track v of movie m names its file: the movie's title and year, the
-// track's edition and label, and every other track's file as protected. With the
+// track's edition and label, its own recorded file (the only file an import may replace),
+// and every other track's file as protected. With the
 // importer's MovieTrackTarget it's the one name builder for movie files — the import,
 // manual import and rename all go through TrackTarget.
 func (s *Service) TrackNaming(m Movie, versions []Version, v Version) library.MovieTrack {
@@ -1482,6 +1486,7 @@ func (s *Service) TrackNaming(m Movie, versions []Version, v Version) library.Mo
 		Title: m.Title, Year: m.Year, Edition: v.Edition, Label: v.Label,
 		IDs:  library.MovieIDs{TMDB: m.TMDBID, IMDB: m.IMDBID},
 		Root: s.rootFor(m),
+		Own:  v.FilePath,
 	}
 	for _, o := range versions {
 		if o.ID != v.ID && o.FilePath != "" {

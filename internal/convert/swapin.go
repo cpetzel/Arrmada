@@ -19,7 +19,8 @@ import (
 //  1. the ledger row's id names the original's folder in the hold;
 //  2. journal (staging) → copy the encode next to the original as .arrpart → staged;
 //  3. journal the hold path (holding) → move the original into the hold;
-//  4. a stray file already at the .mkv name (no record owns it) joins it there;
+//  4. an empty stray file already at the .mkv name (no record owns it) joins it there —
+//     one with anything in it stops the swap before step 2 (strayInTheWay);
 //  5. journal held, record the hold in the ledger → rename the .arrpart into place;
 //  6. repoint the library record, clear the journal.
 //
@@ -54,8 +55,12 @@ func (s *Service) swapIn(ctx context.Context, job *Job, src, dst string, mi *Med
 		s.finishSkip(job, SkipTransient, otherTrackNote(finalPath))
 		return
 	}
-	if finalPath != src && exists(finalPath) {
+	if finalPath != src && exists(finalPath) && !nameIsSource(finalPath, src) {
 		if why := s.nameOwner(ctx, finalPath); why != "" {
+			s.finishSkip(job, SkipNameTaken, why+" — the encode was discarded and the original kept")
+			return
+		}
+		if why := strayInTheWay(finalPath); why != "" {
 			s.finishSkip(job, SkipNameTaken, why+" — the encode was discarded and the original kept")
 			return
 		}
@@ -121,9 +126,12 @@ func (s *Service) swapIn(ctx context.Context, job *Job, src, dst string, mi *Med
 	}
 
 	// From here the original is in the hold. Until the rename, any failure puts it back.
-	putBack := func(why string) {
+	// skip, when set, is the kind the file then waits under rather than failing.
+	putBackAs := func(skip, why string) {
 		restored := true
-		if finalPath != src && exists(strayHeld) {
+		// On a case-insensitive disk the stray's name in the hold can be the held original's
+		// other spelling: that's the original, not a stray.
+		if finalPath != src && exists(strayHeld) && !sameName(strayHeld, held) {
 			if err := s.moveKept(strayHeld, finalPath); err != nil {
 				restored = false
 			}
@@ -140,14 +148,24 @@ func (s *Service) swapIn(ctx context.Context, job *Job, src, dst string, mi *Med
 		}
 		_ = s.history.setHold(context.Background(), id, "", 0, "")
 		discard()
+		if skip != "" {
+			s.finishSkip(job, skip, why+" — the encode was discarded and the original kept")
+			return
+		}
 		s.finish(job, StateFailed, why+" — kept the original")
 	}
+	putBack := func(why string) { putBackAs("", why) }
 	if finalPath != src && exists(finalPath) {
-		// A stray at the .mkv name (no record owns it, checked above) waits in the hold with
-		// the original rather than being overwritten — unless another track of this film
-		// took that name meanwhile: then nothing of that track's is touched.
+		// An empty stray at the .mkv name (no record owns it, checked above) waits in the
+		// hold with the original rather than being overwritten — unless another track of
+		// this film took that name meanwhile, or a file with something in it turned up
+		// there: then nothing of theirs is touched.
 		if s.otherTrackOwns(ctx, job, finalPath) {
 			putBack(otherTrackNote(finalPath))
+			return
+		}
+		if why := strayInTheWay(finalPath); why != "" {
+			putBackAs(SkipNameTaken, why)
 			return
 		}
 		if err := s.moveKept(finalPath, strayHeld); err != nil {

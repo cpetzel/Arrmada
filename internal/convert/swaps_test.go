@@ -176,8 +176,8 @@ func TestOrphanPartSweep(t *testing.T) {
 	}
 }
 
-// A converted MP4 never moves aside an .mkv another library record points at; a stray one
-// nobody owns is moved out of the way as before.
+// A converted MP4 never moves aside an .mkv another library record points at; an empty
+// stray nobody owns is moved out of the way as before.
 func TestSameStemGuard(t *testing.T) {
 	r, _, dst, mi, plan := finalizeRig(t)
 	src := r.addMovieFile(t, 2, "Other.mp4", 1000)
@@ -196,10 +196,12 @@ func TestSameStemGuard(t *testing.T) {
 		t.Fatal("a file was moved, or the staged copy was left behind")
 	}
 
-	// Nobody owns it: it waits in the hold beside the original and the conversion lands.
+	// Nobody owns it and it's empty: it waits in the hold beside the original and the
+	// conversion lands. (One with anything in it is never moved: untracked_test.go.)
 	if _, err := r.db.Exec(`DELETE FROM movies WHERE id = 3`); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, taken, 0, 't')
 	r.skips.clear(context.Background(), movieKey(2))
 	writeFile(t, dst, 500, 'y')
 	job = r.convertNow(t, 2, "Other", src, dst, mi, plan)
@@ -210,7 +212,7 @@ func TestSameStemGuard(t *testing.T) {
 		t.Fatalf("the converted file isn't in place: %d bytes, record %s", sizeOf(taken), r.moviePath(t, 2))
 	}
 	held := r.ledger(t, job).HoldPath
-	if sizeOf(held) != 1000 || sizeOf(filepath.Join(filepath.Dir(held), "Other.mkv")) != 700 {
+	if fi, err := os.Stat(filepath.Join(filepath.Dir(held), "Other.mkv")); sizeOf(held) != 1000 || err != nil || fi.Size() != 0 {
 		t.Fatal("the original and the stray should both be in the hold")
 	}
 }

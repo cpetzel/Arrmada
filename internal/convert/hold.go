@@ -120,6 +120,9 @@ func isHoldFile(path string, id int64) bool {
 	return filepath.Base(dir) == strconv.FormatInt(id, 10) && filepath.Base(filepath.Dir(dir)) == library.HoldDirName
 }
 
+// renameFn is os.Rename; tests make moves fail.
+var renameFn = os.Rename
+
 // moveKept moves a file Convert is keeping (an original into the hold, or back out) without
 // ever overwriting anything at to. On one filesystem it's a rename: instant, same inode.
 // Across filesystems (a library folder spanning mounts) it's a copy to a temporary name,
@@ -129,7 +132,7 @@ func (s *Service) moveKept(from, to string) error {
 	if exists(to) {
 		return fmt.Errorf("%s is already taken", to)
 	}
-	err := os.Rename(from, to)
+	err := renameFn(from, to)
 	if err == nil || !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
@@ -312,6 +315,7 @@ func (s *Service) ExpireHolds(ctx context.Context) error {
 	if s.history == nil || s.history.db == nil {
 		return nil
 	}
+	s.retryUnsettledReverts(ctx) // revert.go: before anything is released
 	ids, err := s.history.dueHolds(ctx, time.Now().Unix())
 	if err != nil {
 		return err
@@ -321,7 +325,7 @@ func (s *Service) ExpireHolds(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if _, err := s.releaseHold(ctx, id, "its undo window ended"); err != nil && !errors.Is(err, ErrNotHeld) && !errors.Is(err, ErrSwapBusy) {
+		if _, err := s.releaseHold(ctx, id, "its undo window ended"); err != nil && !errors.Is(err, ErrNotHeld) && !errors.Is(err, ErrSwapBusy) && !errors.Is(err, ErrRevertUnsettled) {
 			s.log.Warn("convert: couldn't release a held original", "history_id", id, "err", err)
 			if firstErr == nil {
 				firstErr = err
@@ -349,10 +353,7 @@ func (s *Service) releaseHold(ctx context.Context, id int64, why string) (Histor
 	if e.HoldState != HoldHeld || e.Outcome != OutcomeDone || e.HoldPath == "" {
 		return e, ErrNotHeld
 	}
-	if busy, err := s.swapInFlight(ctx, id); err != nil || busy {
-		if err == nil {
-			err = ErrSwapBusy
-		}
+	if err := s.swapBusy(ctx, id); err != nil {
 		return e, err
 	}
 	if !isHoldFile(e.HoldPath, id) {
@@ -367,9 +368,7 @@ func (s *Service) releaseHold(ctx context.Context, id int64, why string) (Histor
 	default:
 		return e, err
 	}
-	// Anything else in the row's folder was moved aside with it (a stray file at the
-	// converted file's name); it goes with the original.
-	_ = os.RemoveAll(filepath.Dir(e.HoldPath))
+	s.emptyHoldFolder(e)
 	if err := s.history.endHold(ctx, id, state); err != nil {
 		return e, err
 	}
@@ -384,6 +383,78 @@ func (s *Service) releaseHold(ctx context.Context, id int64, why string) (Histor
 	s.holdFreed(ctx)
 	e.HoldState = state
 	return e, nil
+}
+
+// emptyHoldFolder clears a released row's hold folder without deleting anything that isn't
+// Convert's to delete. Earlier versions moved a file at the converted file's name into the
+// folder with the original, whatever was in it, and released the folder whole: a remux
+// kept by hand went with it. So what's left after the original goes back to the library:
+// a revert's converted-* copy to the converted file's path, anything else to the converted
+// file's folder under its own name. An empty file or an unfinished cross-drive copy
+// (.partial) holds nothing to keep and is removed. A file whose name is taken in the
+// library goes beside it as "<stem> (kept by Convert).<ext>" (then " … 2", …); only one
+// that can't be moved at all stays in the folder, and the log says where. The folder goes
+// only once empty.
+func (s *Service) emptyHoldFolder(e HistoryEntry) {
+	dir := filepath.Dir(e.HoldPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		p := filepath.Join(dir, ent.Name())
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue // not a file Convert put there: left alone, with the folder
+		}
+		if fi.Size() == 0 || strings.HasSuffix(ent.Name(), ".partial") {
+			_ = os.Remove(p)
+			continue
+		}
+		to := ""
+		if e.OutPath != "" {
+			to = filepath.Join(filepath.Dir(e.OutPath), ent.Name())
+			if ent.Name() == filepath.Base(revertPartFor(e)) {
+				to = e.OutPath
+			}
+		}
+		if to != "" && !nameFree(to) {
+			// Usually the converted file itself has the name: the file goes beside it under
+			// a name that says where it came from, rather than staying hidden in the hold.
+			to = keptName(to)
+		}
+		if to == "" || s.moveKept(p, to) != nil {
+			s.log.Warn("convert: kept a file in the originals hold — it couldn't be given back to the library", "file", p, "library_folder", filepath.Dir(e.OutPath))
+			s.event("warn", fmt.Sprintf("%s: kept %s in the originals hold, at %s — it couldn't be given back to the library. Move it back by hand", e.Title, ent.Name(), p))
+			continue
+		}
+		s.log.Info("convert: gave a file in the originals hold back to the library", "from", p, "to", to)
+		s.event("info", fmt.Sprintf("%s: a file was given back from the originals hold as %s", e.Title, to))
+	}
+	_ = os.Remove(dir) // only if empty
+}
+
+// nameFree reports whether nothing at all is at path (a broken link counts as something).
+func nameFree(path string) bool {
+	_, err := os.Lstat(path)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// keptName is the first free "<stem> (kept by Convert).<ext>", "… (kept by Convert 2)…"
+// beside path; "" when none up to 99 is free.
+func keptName(path string) string {
+	ext := filepath.Ext(path)
+	stem := strings.TrimSuffix(path, ext)
+	for n := 1; n < 100; n++ {
+		mark := " (kept by Convert)"
+		if n > 1 {
+			mark = fmt.Sprintf(" (kept by Convert %d)", n)
+		}
+		if p := stem + mark + ext; nameFree(p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // holdFreed is told when the hold shrinks (or its budget changes): files paused on a full
@@ -401,6 +472,25 @@ func (s *Service) swapInFlight(ctx context.Context, id int64) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM convert_swaps WHERE history_id = ?`, id).Scan(&n)
 	return n > 0, err
+}
+
+// swapBusy says why ledger row id's hold can't be touched now: a conversion still being
+// swapped in (ErrSwapBusy), or a revert that couldn't finish and waits to be put right
+// (ErrRevertUnsettled). Called under holdMu, which a revert holds throughout, so a revert
+// row seen here is never one in progress.
+func (s *Service) swapBusy(ctx context.Context, id int64) error {
+	var n, reverts int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(op = ?), 0) FROM convert_swaps WHERE history_id = ?`, opRevert, id).Scan(&n, &reverts); err != nil {
+		return err
+	}
+	switch {
+	case reverts > 0:
+		return ErrRevertUnsettled
+	case n > 0:
+		return ErrSwapBusy
+	}
+	return nil
 }
 
 // --- the ledger's hold columns ----------------------------------------------------------

@@ -174,6 +174,50 @@ func TestManualImportIntoTrack(t *testing.T) {
 	}
 }
 
+// The naming carries the track's own recorded file: an import may replace that file under
+// its name (an upgrade), and keeps clear of any other file sitting at the name.
+func TestImportKeepsUntrackedFileButUpgradesOwn(t *testing.T) {
+	svc, ctx, lib := trackService(t)
+	m, _ := svc.repo.Create(ctx, Movie{TMDBID: 5, Title: "Heat", Year: 1995, Monitored: true})
+	at := filepath.Join(lib, "Heat (1995)", "Heat (1995) - 1080p BluRay.mkv")
+	if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at, []byte("a remux kept by hand"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := touch(t, filepath.Join(t.TempDir(), "Heat.1995.1080p.BluRay.x264-GRP.mkv"))
+	if err := svc.ManualImportTo(ctx, m.ID, 0, src); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(at); string(b) != "a remux kept by hand" {
+		t.Fatal("the untracked file was replaced")
+	}
+	placed := filepath.Join(lib, "Heat (1995)", "Heat (1995) - 1080p BluRay - Default.mkv")
+	if got := mustGet(t, svc, m.ID).MovieFilePath; got != placed {
+		t.Fatalf("recorded %q, want %q", got, placed)
+	}
+	n, err := svc.ImportNaming(ctx, m.ID, 0, "", "Heat.1995.1080p.BluRay.x264-GRP")
+	if err != nil || n.Track.Own != placed {
+		t.Fatalf("own = %q (%v), want %q", n.Track.Own, err, placed)
+	}
+
+	// An upgrade under the same name replaces the film's own file there, not beside it.
+	src2 := filepath.Join(t.TempDir(), "Heat.1995.1080p.BluRay.x264-BETTER.mkv")
+	if err := os.WriteFile(src2, []byte("the better copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ManualImportTo(ctx, m.ID, 0, src2); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(placed); string(b) != "the better copy" || mustGet(t, svc, m.ID).MovieFilePath != placed {
+		t.Fatalf("the upgrade didn't replace the film's own file: %q, recorded %q", b, mustGet(t, svc, m.ID).MovieFilePath)
+	}
+	if b, _ := os.ReadFile(at); string(b) != "a remux kept by hand" {
+		t.Fatal("the untracked file was replaced by the upgrade")
+	}
+}
+
 // PLEX-13: the import naming carries the movie's ids, and keeps a movie that already has
 // a folder in it (only a rename moves it); a movie with no file gets no folder pinned.
 func TestTitleResolverReturnsIDs(t *testing.T) {
@@ -214,4 +258,54 @@ func mustGet(t *testing.T, svc *Service, id int64) Movie {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// The recorded path and the new one can be one file spelt two ways: a symlinked folder, or
+// another case on a case-insensitive disk. Attaching it again is no upgrade, and nothing
+// is removed — removing the "old" file used to recycle the new one.
+func TestMarkImportedSameFileSpeltTwoWays(t *testing.T) {
+	svc, ctx, lib := trackService(t)
+	m, _ := svc.repo.Create(ctx, Movie{TMDBID: 6, Title: "Heat", Year: 1995, Monitored: true})
+	real := touch(t, filepath.Join(lib, "Heat (1995)", "Heat (1995) - 1080p BluRay.mkv"))
+	alias := filepath.Join(lib, "Alias")
+	if err := os.Symlink(filepath.Join(lib, "Heat (1995)"), alias); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	old := filepath.Join(alias, filepath.Base(real))
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, old, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, real, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(real); err != nil {
+		t.Fatalf("the file was removed: %v", err)
+	}
+	if got := mustGet(t, svc, m.ID).MovieFilePath; got != real {
+		t.Fatalf("recorded %q, want %q", got, real)
+	}
+}
+
+// A second hardlink is another name, not the same file spelt another way: re-importing
+// the file under a new naming scheme still recycles the old name, leaving no duplicate.
+func TestMarkImportedRecyclesTheOldHardlinkName(t *testing.T) {
+	svc, ctx, lib := trackService(t)
+	m, _ := svc.repo.Create(ctx, Movie{TMDBID: 7, Title: "Heat", Year: 1995, Monitored: true})
+	old := touch(t, filepath.Join(lib, "Heat (1995)", "Heat (1995) - 720p.mkv"))
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, old, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(lib, "Heat (1995)", "Heat (1995) - 1080p BluRay.mkv")
+	if err := os.Link(old, renamed); err != nil {
+		t.Skipf("no hardlinks here: %v", err)
+	}
+	if err := svc.MarkImportedTo(ctx, m.ID, 0, renamed, "Heat.1995.1080p.BluRay", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(old); err == nil {
+		t.Fatal("the old name was left behind as an untracked duplicate")
+	}
+	if _, err := os.Stat(renamed); err != nil || mustGet(t, svc, m.ID).MovieFilePath != renamed {
+		t.Fatalf("the new name isn't the film's file: %v", err)
+	}
 }

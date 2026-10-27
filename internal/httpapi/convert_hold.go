@@ -65,6 +65,9 @@ func (a *api) convertHoldError(w http.ResponseWriter, err error, fallback string
 		return false
 	case errors.Is(err, convert.ErrNoHistory):
 		a.writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, convert.ErrRevertUnsettled):
+		// Both files are kept; the hourly hold tick puts them right.
+		a.writeError(w, http.StatusConflict, convert.ErrRevertUnsettled.Error())
 	case errors.Is(err, convert.ErrNotHeld), errors.Is(err, convert.ErrSwapBusy),
 		errors.Is(err, convert.ErrRevertChanged), errors.Is(err, convert.ErrRevertBusy):
 		a.writeError(w, http.StatusConflict, err.Error())
