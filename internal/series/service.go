@@ -1992,7 +1992,7 @@ func (s *Service) importSeriesFolder(ctx context.Context, dir string, videos []l
 		if !keep(v.Path) || library.InExtrasFolder(dir, v.Path) {
 			continue
 		}
-		p := parser.Parse(filepath.Base(v.Path))
+		p := library.ParseEpisodeFile(v.Path)
 		// ResolveEpisodes handles multi-episode files, and — for anime — absolute
 		// numbering and the per-cour positional fallback.
 		for _, ref := range s.ResolveEpisodes(ctx, added.ID, p) {

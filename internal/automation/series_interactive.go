@@ -613,7 +613,7 @@ func (c *Coordinator) RescanSeries(ctx context.Context, seriesID int64) error {
 	for _, v := range c.showEpisodeVideos(ctx, s, imp, folder) {
 		// Run each file through the full resolver: SxxExx, multi-episode, and — for anime
 		// — absolute ("S2 29") and per-cour numbering all map onto the metadata's episodes.
-		for _, ref := range c.series.ResolveEpisodes(ctx, seriesID, parser.Parse(filepath.Base(v.Path))) {
+		for _, ref := range c.series.ResolveEpisodes(ctx, seriesID, library.ParseEpisodeFile(v.Path)) {
 			key := [2]int{ref.Season, ref.Episode}
 			byEpisode[key] = append(byEpisode[key], v)
 		}
@@ -817,7 +817,7 @@ func (c *Coordinator) SeriesImportCandidates(ctx context.Context, dir string) (c
 	partly = errors.Is(err, library.ErrPartlyUnreadable)
 	out := make([]SeriesImportCandidate, 0, len(vids))
 	for _, v := range vids {
-		p := parser.Parse(filepath.Base(v.Path))
+		p := library.ParseEpisodeFile(v.Path)
 		ep := 0
 		if len(p.Episodes) > 0 {
 			ep = p.Episodes[0]
@@ -1005,10 +1005,10 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 	}
 	byEpisode := map[[2]int][]library.FoundVideo{}
 	for _, v := range c.showEpisodeVideos(ctx, s, imp, folder) {
-		if !recorded[filepath.Clean(v.Path)] && !series.NameFitsShow(filepath.Base(v.Path), s) {
+		if !recorded[filepath.Clean(v.Path)] && !series.FileFitsShow(v.Path, s) {
 			continue
 		}
-		for _, ref := range c.series.ResolveEpisodes(ctx, seriesID, parser.Parse(filepath.Base(v.Path))) {
+		for _, ref := range c.series.ResolveEpisodes(ctx, seriesID, library.ParseEpisodeFile(v.Path)) {
 			key := [2]int{ref.Season, ref.Episode}
 			byEpisode[key] = append(byEpisode[key], v)
 		}

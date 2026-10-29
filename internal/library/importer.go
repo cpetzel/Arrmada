@@ -1317,8 +1317,12 @@ func (im *Importer) ImportEpisode(seriesTitle string, year int, videoPath string
 // the episode under (relative to the TV root). When non-empty it overrides the
 // derived "<Title> (<Year>)" folder, so new episodes join the show's existing
 // on-disk folder instead of spawning a duplicate.
+//
+// It is the manual import of one file the user picked from a folder's listing, whose
+// season and episode that listing showed: the file is read as one on disk
+// (ParseEpisodeFile), so a "Show - 1x8 - Title.mkv" imports as the 1x08 it was listed as.
 func (im *Importer) ImportEpisodeInto(seriesFolder, seriesTitle string, year int, videoPath string) (*EpisodeImport, bool, error) {
-	return im.ImportEpisodeIntoWith(seriesFolder, seriesTitle, year, videoPath, parser.Release{})
+	return im.importEpisodeRead(seriesFolder, seriesTitle, year, videoPath, ParseEpisodeFile(videoPath), parser.Release{})
 }
 
 // ImportEpisodeIntoWith is ImportEpisodeInto with quality inherited from the release the
@@ -1330,7 +1334,11 @@ func (im *Importer) ImportEpisodeInto(seriesFolder, seriesTitle string, year int
 // the rest of the library carries. A file that names its own quality still wins; a pack
 // can hold mixed encodes and the file is the more specific claim.
 func (im *Importer) ImportEpisodeIntoWith(seriesFolder, seriesTitle string, year int, videoPath string, hint parser.Release) (*EpisodeImport, bool, error) {
-	rel := parser.Parse(filepath.Base(videoPath))
+	return im.importEpisodeRead(seriesFolder, seriesTitle, year, videoPath, parser.Parse(filepath.Base(videoPath)), hint)
+}
+
+// importEpisodeRead places videoPath as the episode rel reads it as.
+func (im *Importer) importEpisodeRead(seriesFolder, seriesTitle string, year int, videoPath string, rel, hint parser.Release) (*EpisodeImport, bool, error) {
 	// Likewise an inferred resolution (an HDTV file read as SD) yields to a stated one.
 	if rel.Resolution == parser.ResUnknown || (rel.ResolutionInferred && hint.StatedResolution() != parser.ResUnknown) {
 		rel.Resolution, rel.ResolutionInferred = hint.Resolution, hint.ResolutionInferred

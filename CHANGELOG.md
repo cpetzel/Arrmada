@@ -499,6 +499,22 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Library episodes named "1x8" are read** (reported in #81). A show whose files are
+  named with a single-digit episode — "11.22.63 - 1x8- The Day in Question [HDTVMux1080p
+  Ita 5.1].mkv" in an "S01" folder — had none of them read: the "1x08" form needed a
+  two-digit episode so an aspect ratio ("16x9") or a dimension ("4x4") is never taken for
+  one, and **Refresh & rescan** found 0 of 8 episodes. Files already on disk (the library
+  scan, a rescan, the duplicate check, and the file list and single-file import of
+  **Manual import**) now read a single-digit "NxE" when it can't be anything else: set off
+  by dashes ("Title - 1x8 - Episode", "Title - 1x8- Episode", "Title - 1x8"), or inside
+  the season folder of the same season ("S01", "Season 1", "Stagione 1"…). Never inside
+  brackets or after the release tags, never "0x5" outside a Specials or Season 0 folder,
+  never against a season folder saying another season, never "16x9"/"4x3"/"4x4" unless
+  both dashed and in that season's folder, and never "1x8x9" or "1x8-9", whose other
+  episodes can't be told. Release names (searches, grabs, download imports) read exactly
+  as before. Where a newly read file is a second copy of an episode that already has one,
+  a rescan keeps the better of the two as it does for any duplicate; the other stays on
+  disk and is listed under duplicates.
 - **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
   (reported in #94 by cpetzel). With qBittorrent's **Default Download Path (incomplete
   torrents)** on, a finished torrent is moved from that folder to its save folder, and
