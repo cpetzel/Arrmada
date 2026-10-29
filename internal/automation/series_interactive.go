@@ -966,17 +966,30 @@ func recordedPaths(s series.Series) map[string]bool {
 }
 
 // episodeClaims is the files of one episode that may be kept as its file or offered as its
-// duplicates: those show s recorded, and those whose name is the show's (series.
-// NameFitsShow). The rest — read on the benefit of the doubt ("Other Show - 1x08" in the
-// show's own Season 1, "S01E08.mkv") — are left out.
+// duplicates. Those whose name is the show's (series.NameFitsShow) come first, with the
+// show's recorded files whose name has no title ("S01E02.mkv"); only when there are none of
+// those does a recorded file named as something else count — so another show's file an
+// earlier rescan recorded as the episode gives way to the show's own copy, and is never
+// offered for deletion beside it. A file read only on the benefit of the doubt ("Other
+// Show - 1x08" in the show's own Season 1, "S01E08.mkv"), unrecorded, is left out.
 func episodeClaims(files []library.FoundVideo, recorded map[string]bool, s series.Series) []library.FoundVideo {
-	var out []library.FoundVideo
+	var own, other []library.FoundVideo
 	for _, f := range files {
-		if recorded[filepath.Clean(f.Path)] || series.NameFitsShow(filepath.Base(f.Path), s) {
-			out = append(out, f)
+		name := filepath.Base(f.Path)
+		switch {
+		case series.NameFitsShow(name, s):
+			own = append(own, f)
+		case !recorded[filepath.Clean(f.Path)]:
+		case parser.TitleKey(parser.Parse(name).Title) == "":
+			own = append(own, f)
+		default:
+			other = append(other, f)
 		}
 	}
-	return out
+	if len(own) > 0 {
+		return own
+	}
+	return other
 }
 
 // bestLibraryVideo picks which of several files claiming one episode to keep as that
@@ -1043,12 +1056,12 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 		return nil, ferr
 	}
 
-	// Offered for deletion: only a file the show recorded, or one whose name says it's the
-	// show's — never one a rescan reads on the benefit of the doubt ("Other Show - S01E01"
-	// in the show's own Season 1).
+	// Offered for deletion: only what a rescan would weigh as the episode's file
+	// (episodeClaims) — never one it reads on the benefit of the doubt ("Other Show -
+	// S01E01" in the show's own Season 1), nor another show's file beside the show's own.
 	recorded := recordedPaths(s)
 	byEpisode := map[[2]int][]library.FoundVideo{}
-	for _, v := range episodeClaims(c.showEpisodeVideos(ctx, s, imp, folder), recorded, s) {
+	for _, v := range c.showEpisodeVideos(ctx, s, imp, folder) {
 		for _, ref := range c.series.ResolveEpisodes(ctx, seriesID, parser.Parse(filepath.Base(v.Path))) {
 			key := [2]int{ref.Season, ref.Episode}
 			byEpisode[key] = append(byEpisode[key], v)
@@ -1056,14 +1069,15 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 	}
 
 	out := make([]DuplicateEpisodeFile, 0)
-	for key, files := range byEpisode {
+	for key, found := range byEpisode {
+		files := episodeClaims(found, recorded, s)
 		if len(files) < 2 {
 			continue
 		}
 		best := bestLibraryVideo(files)
-		// A copy named as the show is never offered for deletion in favour of one whose name
-		// isn't (another show's file an earlier rescan recorded as the episode): which is the
-		// episode's real file is for the owner to say.
+		// A copy named as the show is never offered for deletion in favour of a recorded one
+		// whose name has no title ("S01E02.mkv"): which is the episode's real file is for the
+		// owner to say.
 		if !series.NameFitsShow(filepath.Base(best.Path), s) && slices.ContainsFunc(files, func(f library.FoundVideo) bool {
 			return series.NameFitsShow(filepath.Base(f.Path), s)
 		}) {
