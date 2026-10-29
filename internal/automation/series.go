@@ -53,14 +53,19 @@ func (c *Coordinator) removeIfNoVideo(ctx context.Context, hash, name, contentPa
 	if hash == "" || contentPath == "" || c.downloads == nil {
 		return
 	}
+	// "Can't tell" includes any folder inside it that couldn't be read: FindVideos and
+	// hasAnyVideoFile report those as errors, never as "no video", so a download with one
+	// folder Arrmada isn't allowed into is kept, whatever the rest of it holds.
 	if vids, err := library.FindVideos(contentPath); err != nil || len(vids) > 0 {
 		return // has video (or we can't tell) — leave it for manual import
 	}
 	// FindVideos floors at ~50MB to skip samples — but before DELETING data, check
 	// again without the floor: legitimate small episodes (shorts, mini-episodes)
 	// were being destroyed as "no video" when they merely failed the size floor.
-	if hasAnyVideoFile(contentPath) {
-		c.log.Info("import: download has only small video files — keeping it for manual import", "release", name)
+	if found, err := hasAnyVideoFile(contentPath); err != nil || found {
+		if err == nil {
+			c.log.Info("import: download has only small video files — keeping it for manual import", "release", name)
+		}
 		return
 	}
 	if err := c.downloads.Remove(ctx, hash, true); err != nil {
@@ -72,22 +77,32 @@ func (c *Coordinator) removeIfNoVideo(ctx context.Context, hash, name, contentPa
 
 // hasAnyVideoFile reports whether ANY video-extension file exists under path,
 // with no size floor — the last check before deleting a download's data.
-func hasAnyVideoFile(path string) bool {
+//
+// Any part of path it can't read is an error, not "no video": the walk used to skip a
+// folder it wasn't allowed into, and a download whose episodes were all in it read as
+// empty, one step from being deleted. It stops at the first video, or the first error.
+func hasAnyVideoFile(path string) (bool, error) {
 	found := false
-	_ = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-		if err != nil || found || d.IsDir() {
+	err := filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(p))
 		for _, e := range videoExts {
 			if ext == e {
 				found = true
-				break
+				return filepath.SkipAll
 			}
 		}
 		return nil
 	})
-	return found
+	if found {
+		return true, nil
+	}
+	return false, err
 }
 
 // grabIndexer returns the indexer a release was grabbed from ("" if untracked), for
@@ -1275,11 +1290,23 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 		// A release the user picked by hand imports regardless of what it scores against
 		// the current file — but only for the season or episode it was picked for. See
 		// importSeriesInto.
-		placed, matched, unresolved, importFailed, conflict := c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+		placed, matched, unresolved, importFailed, conflict, scanErr := c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
 		if conflict != "" && c.refreshForTitleConflict(ctx, s, it.Hash, it.Name) {
 			// The usual cause is an episode list from before the season came out; a fresh
 			// one may settle it. Nothing was placed by the first try, so it's simply rerun.
-			placed, matched, unresolved, importFailed, conflict = c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+			placed, matched, unresolved, importFailed, conflict, scanErr = c.importSeriesInto(ctx, s, it.ContentPath, c.grabForce(ctx, it.Hash))
+		}
+		if scanErr != nil {
+			// The folder, or one inside it, couldn't be read. That isn't a release with no
+			// video: it used to fall through to the junk branch below, which blocklisted a
+			// good season pack, failed its grab, and let the next search fetch another copy
+			// that could go the same way. The causes are the setup's (a share that dropped,
+			// a folder Arrmada isn't allowed into, a path mapping that's missing) and most
+			// clear up by themselves, so nothing is decided: the grab stays grabbed, the
+			// download is tried again next sweep, and Needs you shows the folder and the
+			// error if it stays unreadable.
+			c.noteSeriesImportUnreadable(it, s.Title, scanErr)
+			continue
 		}
 		if conflict != "" {
 			// Its titles and numbers disagree, so nothing was placed. A person maps the
@@ -1363,7 +1390,8 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 				"series", s.Title, "release", it.Name, "video_files", unresolved)
 		} else {
 			// No video at all: junk, a fake, or an archive set that won't unpack. This one
-			// can never import, so blocklist it and stop re-scanning.
+			// can never import, so blocklist it and stop re-scanning. The whole folder was
+			// read to say so: one that couldn't be (scanErr) never gets here.
 			reason := "downloaded but contained no video"
 			if hasExecutable(it.ContentPath) {
 				reason = "download contained executables and no video (possible fake/malware)"

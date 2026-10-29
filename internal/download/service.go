@@ -1117,8 +1117,9 @@ func (s *Service) ClientStates(ctx context.Context) ([]ClientState, error) {
 	return out, nil
 }
 
-// CompletedInCategory returns finished (100%) downloads in the given category
-// (empty = any) — the candidates for import.
+// CompletedInCategory returns finished downloads in the given category (empty = any) that
+// are ready to import: the candidates for import. A torrent qBittorrent is still moving out
+// of its incomplete folder isn't one yet (Item.ReadyToImport); a later sweep finds it.
 func (s *Service) CompletedInCategory(ctx context.Context, category string) ([]Item, error) {
 	all, err := s.Queue(ctx)
 	if err != nil {
@@ -1126,7 +1127,7 @@ func (s *Service) CompletedInCategory(ctx context.Context, category string) ([]I
 	}
 	var out []Item
 	for _, it := range all {
-		if it.Complete() && (category == "" || it.Category == category) {
+		if it.ReadyToImport() && (category == "" || it.Category == category) {
 			out = append(out, it)
 		}
 	}

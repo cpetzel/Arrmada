@@ -73,7 +73,7 @@ func TestSeasonUpgradeLandsInTheShowsOwnS13Folder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	placed, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll)
+	placed, _, _, failed, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll)
 	if failed != 0 || len(placed) != 2 {
 		t.Fatalf("placed %v, failed %d — want both season 13 episodes", placed, failed)
 	}
@@ -121,7 +121,7 @@ func TestImportIntoSharedFolderGoesToReview(t *testing.T) {
 	// Importing it from Review is refused the same way, as are rescans, renames and the
 	// duplicate check, which would walk the shared folder.
 	s, _ := h.c.series.Get(h.ctx, h.seriesID)
-	if _, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 1 {
+	if _, _, _, failed, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 1 {
 		t.Errorf("importSeriesInto failed=%d, want the one file refused", failed)
 	}
 	if err := h.c.ManualImportSeries(h.ctx, h.seriesID, filepath.Join(dl, name+".mkv")); !errors.Is(err, series.ErrNoShowFolder) {
@@ -149,7 +149,7 @@ func TestImportIntoAShowInsideACategoryFolder(t *testing.T) {
 	const name = "Show.S01E02.1080p.WEB-DL-GRP"
 	dl := h.download(t, name, name+".mkv")
 	s, _ := h.c.series.Get(h.ctx, h.seriesID)
-	if placed, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 || len(placed) != 1 {
+	if placed, _, _, failed, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 || len(placed) != 1 {
 		t.Fatalf("placed %v failed %d", placed, failed)
 	}
 	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); filepath.Dir(cur.Path) != filepath.Join(own, "Season 1") {
@@ -170,7 +170,7 @@ func TestImportFlatShowInsideACategory(t *testing.T) {
 		const name = "Show.S01E02.1080p.WEB-DL-GRP"
 		dl := h.download(t, name, name+".mkv")
 		s, _ := h.c.series.Get(h.ctx, h.seriesID)
-		if placed, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 || len(placed) != 1 {
+		if placed, _, _, failed, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); failed != 0 || len(placed) != 1 {
 			t.Fatalf("placed %v failed %d", placed, failed)
 		}
 		if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); filepath.Dir(filepath.Dir(cur.Path)) != own {
@@ -224,7 +224,7 @@ func TestImportFollowsTheShowsFolderPastMisplacedFiles(t *testing.T) {
 	const name = "Show.S01E02.1080p.WEB-DL-GRP"
 	dl := h.download(t, name, name+".mkv")
 	s, _ := h.c.series.Get(h.ctx, h.seriesID)
-	placed, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll)
+	placed, _, _, failed, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll)
 	if failed != 0 || len(placed) != 1 {
 		t.Fatalf("placed %v failed %d", placed, failed)
 	}

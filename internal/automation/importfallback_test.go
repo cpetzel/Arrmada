@@ -77,7 +77,7 @@ func TestImportRetriesWhenNumberingSourceFails(t *testing.T) {
 			_ = f.Close()
 
 			c := &Coordinator{db: st.DB(), log: log, series: svc, imp: library.NewImporter(root, log)}
-			placed, _, unresolved, failed, _ := c.importSeriesInto(ctx, s, dl, forceRule{})
+			placed, _, unresolved, failed, _, _ := c.importSeriesInto(ctx, s, dl, forceRule{})
 			if len(placed) != 0 || failed != tc.wantFailed || unresolved != tc.wantUn {
 				t.Errorf("placed=%d failed=%d unresolved=%d, want 0/%d/%d", len(placed), failed, unresolved, tc.wantFailed, tc.wantUn)
 			}
@@ -88,11 +88,11 @@ func TestImportRetriesWhenNumberingSourceFails(t *testing.T) {
 			// A source that stays down doesn't hold the download back for good: after
 			// metadataRetryReviewAfter sweeps the file is left unresolved, for Review.
 			for i := 2; i < metadataRetryReviewAfter; i++ {
-				if _, _, un, fl, _ := c.importSeriesInto(ctx, s, dl, forceRule{}); fl != 1 || un != 0 {
+				if _, _, un, fl, _, _ := c.importSeriesInto(ctx, s, dl, forceRule{}); fl != 1 || un != 0 {
 					t.Fatalf("sweep %d: failed=%d unresolved=%d, want still retrying", i, fl, un)
 				}
 			}
-			if _, _, un, fl, _ := c.importSeriesInto(ctx, s, dl, forceRule{}); fl != 0 || un != 1 {
+			if _, _, un, fl, _, _ := c.importSeriesInto(ctx, s, dl, forceRule{}); fl != 0 || un != 1 {
 				t.Errorf("last sweep: failed=%d unresolved=%d, want it given up as unresolved", fl, un)
 			}
 
@@ -100,7 +100,7 @@ func TestImportRetriesWhenNumberingSourceFails(t *testing.T) {
 			meta.d.NumberingSource, meta.d.NumberingFallback = "tvmaze", false
 			c.importSeriesInto(ctx, s, dl, forceRule{})
 			meta.d.NumberingSource, meta.d.NumberingFallback = "tmdb", true
-			if _, _, un, fl, _ := c.importSeriesInto(ctx, s, dl, forceRule{}); fl != 1 || un != 0 {
+			if _, _, un, fl, _, _ := c.importSeriesInto(ctx, s, dl, forceRule{}); fl != 1 || un != 0 {
 				t.Errorf("after a good check: failed=%d unresolved=%d, want retrying again", fl, un)
 			}
 		})

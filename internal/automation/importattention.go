@@ -13,7 +13,8 @@ import (
 )
 
 // What the series import sweep knows that nobody else could see: packs whose files keep
-// failing to place (disk full, a folder it can't write), and finished TV downloads sitting
+// failing to place (disk full, a folder it can't write) or whose download folder it can't
+// read (not mounted, the wrong owner), and finished TV downloads sitting
 // in a category it never imports from. Both used to be log lines only; the Needs-you feed
 // reads them from here. In memory on purpose: a restart retries from scratch, and the
 // next sweep (30 seconds) finds the same downloads again.
@@ -24,6 +25,8 @@ type seriesImportFail struct {
 	sweeps  int
 	since   time.Time
 	lastErr string
+	// loggedAt is when an unreadable folder was last logged (noteSeriesImportUnreadable).
+	loggedAt time.Time
 }
 
 // importNotes holds those findings. Its own lock: the sweep writes, the feed reads.
@@ -57,6 +60,45 @@ func (c *Coordinator) noteSeriesImportFail(hash, name string, failed int) {
 	f.sweeps++
 	f.lastErr = pluralCount(failed, "file couldn't be placed in the library", "files couldn't be placed in the library") +
 		" — the log names the folder and the error"
+}
+
+// noteSeriesImportUnreadable counts another sweep in which a download's folder couldn't be
+// read (importSeriesInto's scanErr), and logs it at most once an hour per download: the
+// sweep runs every 30 seconds, and a folder that isn't mounted stays that way until
+// someone mounts it. It shares the failing map, so Needs you lists the download once, with
+// the folder and the error as the reason.
+func (c *Coordinator) noteSeriesImportUnreadable(it download.Item, seriesTitle string, scanErr error) {
+	n := &c.importNotes
+	now := c.clock()
+	n.mu.Lock()
+	if n.failing == nil {
+		n.failing = map[string]*seriesImportFail{}
+	}
+	h := strings.ToLower(it.Hash)
+	f := n.failing[h]
+	if f == nil {
+		f = &seriesImportFail{since: now}
+		n.failing[h] = f
+	}
+	f.name = it.Name
+	f.sweeps++
+	f.lastErr = unreadableFolder(it.ContentPath, scanErr)
+	logNow := f.loggedAt.IsZero() || now.Sub(f.loggedAt) >= wrongCatLogEvery
+	if logNow {
+		f.loggedAt = now
+	}
+	n.mu.Unlock()
+	if logNow {
+		c.log.Warn("series import: can't read the download folder — not blocklisting, will retry every sweep",
+			"series", seriesTitle, "release", it.Name, "content_path", it.ContentPath, "err", scanErr)
+	}
+}
+
+// unreadableFolder is what a person is told about a download folder Arrmada couldn't read:
+// the folder, the error (which names the part that failed), and where the fix usually is.
+func unreadableFolder(path string, err error) string {
+	return "Arrmada can't read the download folder " + path + " (" + err.Error() +
+		") — check it's mounted in the Arrmada container and readable by it, or add a path mapping"
 }
 
 // clearSeriesImportFail forgets a download once a sweep has handled it.

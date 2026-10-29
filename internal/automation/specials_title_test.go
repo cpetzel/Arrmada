@@ -230,7 +230,7 @@ func TestSpecialByTitleSearchGrabAndImport(t *testing.T) {
 	}
 
 	// The same file without a grab target is unplaceable, as before.
-	if _, _, unresolved, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceRule{}); unresolved != 1 {
+	if _, _, unresolved, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceRule{}); unresolved != 1 {
 		t.Fatalf("unresolved = %d without a target, want 1", unresolved)
 	}
 }

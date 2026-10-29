@@ -848,7 +848,10 @@ func (c *Coordinator) ManualImportSeries(ctx context.Context, seriesID int64, pa
 		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return ferr
 		}
-		placedRefs, matched, unresolved, importFailed, conflict := c.importSeriesInto(ctx, s, path, forceAll)
+		placedRefs, matched, unresolved, importFailed, conflict, scanErr := c.importSeriesInto(ctx, s, path, forceAll)
+		if scanErr != nil {
+			return errors.New(unreadableFolder(path, scanErr))
+		}
 		if conflict != "" {
 			return errors.New(conflict) // nothing placed: its titles and numbers disagree
 		}

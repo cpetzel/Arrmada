@@ -807,7 +807,12 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 		}
-		placed, matched, unresolved, failed, conflict := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
+		placed, matched, unresolved, failed, conflict, scanErr := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
+		if scanErr != nil {
+			// "No video files were found" sent people looking at the release when the
+			// folder (or one inside it) is one Arrmada can't read.
+			return fmt.Errorf("%w: %s", ErrNothingToImport, unreadableFolder(r.ContentPath, scanErr))
+		}
 		if conflict != "" {
 			// Importing it anyway would still misplace a file; mapping by hand won't.
 			return fmt.Errorf("%w: %s", ErrNothingToImport, conflict)
@@ -967,7 +972,15 @@ func (c *Coordinator) closeReviewImported(ctx context.Context, r Review) {
 // conflict is set, and nothing is placed, when a file's episode title moved it onto an
 // episode another file of the same download claims (titleConflict). The download needs
 // a person: callers hold it in Needs you with conflict as the reason.
-func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, contentPath string, force forceRule) (placed []series.EpisodeRef, matched, unresolved, failed int, conflict string) {
+//
+// scanErr is set, and nothing is placed, when the download couldn't be read: the folder is
+// missing or unreadable, or any folder inside it is (library.FindVideos). That isn't a
+// release with no video, and it mustn't look like one: an empty result is what sends a
+// download to the junk branch, to be blocklisted and its grab failed. The usual causes (a
+// qBittorrent incomplete folder Arrmada doesn't mount, a share that dropped, a folder with
+// the wrong owner) are the setup's, so callers wait or say so; they never act on it. The
+// caller logs it, since only the sweep knows how often it has said so already.
+func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, contentPath string, force forceRule) (placed []series.EpisodeRef, matched, unresolved, failed int, conflict string, scanErr error) {
 	// Unpack any archives first (scene releases ship the episode inside a RAR set — this
 	// is the Unpackerr job). Recursive, so a season pack's per-episode subfolders unpack.
 	if fi, err := os.Stat(contentPath); err == nil && fi.IsDir() {
@@ -977,15 +990,16 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 			c.log.Info("series: extracted archives before import", "count", n, "path", contentPath)
 		}
 	}
+	// Some of a pack may have been read when part of it couldn't be: nothing is placed from
+	// it. The unread part may hold episodes, and a download imported in part is recorded
+	// as handled, so seed cleanup would later delete what was never looked at.
 	videos, err := library.FindVideos(contentPath)
 	if err != nil {
-		c.log.Warn("series import: couldn't scan the download folder for videos",
-			"series", s.Title, "content_path", contentPath, "err", err)
-		return nil, 0, 0, 0, ""
+		return nil, 0, 0, 0, "", err
 	}
 	if len(videos) == 0 {
 		c.log.Warn("series import: no video files found in the download (all archives? nested oddly?)", "series", s.Title, "content_path", contentPath)
-		return nil, 0, 0, 0, ""
+		return nil, 0, 0, 0, "", nil
 	}
 	c.log.Info("series import: scanning download", "series", s.Title, "videos", len(videos), "content_path", contentPath)
 	// Route episodes into the show's existing on-disk folder when it has one, so a
@@ -1002,7 +1016,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 	if ferr != nil {
 		c.log.Warn("series import: not importing — no safe folder for the show",
 			"series", s.Title, "content_path", contentPath, "err", ferr)
-		return nil, 0, 0, len(videos), ""
+		return nil, 0, 0, len(videos), "", nil
 	}
 	// Quality lives on the RELEASE, not always on each file. Packs routinely name files
 	// "Show - 1x01 - Title.mkv" and put "1080p BDRip x265" only on the folder, so every
@@ -1125,7 +1139,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 		// maps the files.
 		c.log.Warn("series import: episode titles and numbers disagree within the download — holding it, nothing placed",
 			"series", s.Title, "content_path", contentPath, "why", conflict)
-		return nil, 0, unresolved, failed, conflict
+		return nil, 0, unresolved, failed, conflict, nil
 	}
 	for _, rv := range resolved {
 		v, rel, refs := rv.v, rv.rel, rv.refs
@@ -1234,7 +1248,7 @@ func (c *Coordinator) importSeriesInto(ctx context.Context, s series.Series, con
 			}
 		}
 	}
-	return placed, matched, unresolved, failed, ""
+	return placed, matched, unresolved, failed, "", nil
 }
 
 // refsLabel renders episode refs as "S06E02 S06E03" for logs.

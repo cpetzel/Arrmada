@@ -218,7 +218,8 @@ func (a *api) importSuggestions(ctx context.Context, match suggestMatcher, kind 
 			var hits []hit
 			hashes := []string{}
 			for _, it := range snap.Items {
-				if !it.Complete() || strings.TrimSpace(it.ContentPath) == "" {
+				// Not one qBittorrent is still moving: half its files may be in each folder.
+				if !it.ReadyToImport() || strings.TrimSpace(it.ContentPath) == "" {
 					continue
 				}
 				sc := match(it.Name)

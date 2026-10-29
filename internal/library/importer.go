@@ -1167,7 +1167,11 @@ func (im *Importer) logImport(title, src, target, method string) {
 
 // FindVideo returns the primary (largest) video file at contentPath (a file or
 // directory) plus its size. Exposed for rescan/manual-import.
-func FindVideo(contentPath string) (string, int64, error) { return findMediaFile(contentPath) }
+//
+// Unlike the import's own pick (findMediaFile) it settles for the largest video in the
+// parts it could read: it finds a film folder already in the library, and a folder with
+// one subfolder Arrmada can't open is still that film's.
+func FindVideo(contentPath string) (string, int64, error) { return pickMediaFile(contentPath, false) }
 
 // FoundVideo is one video file discovered in a download.
 type FoundVideo struct {
@@ -1190,6 +1194,14 @@ func FindVideos(contentPath string) ([]FoundVideo, error) {
 // what it found and ctx.Err()), after maxResults files, or after maxVisited entries, and
 // reports truncated when there was more. Zero limits mean unbounded. A missing
 // contentPath is an error, as it always was.
+//
+// So is any part of it that couldn't be read: a folder inside it Arrmada isn't allowed
+// into, or an entry that vanished mid-walk. The walk carries on, and what it found in the
+// rest is returned with the first such error (ErrPartlyUnreadable). It used to skip those
+// in silence, so a download whose episodes were all in an unreadable folder read as one
+// with no video, which is what gets a release blocklisted and its data deleted. A caller
+// deciding anything from the result treats an error as "can't tell"; one that only lists
+// files for a person to pick from may show what was found.
 func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisited int) ([]FoundVideo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -1206,15 +1218,24 @@ func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisit
 	}
 	lim := &walkLimits{ctx: ctx, maxResults: maxResults, maxVisited: maxVisited}
 	var out []FoundVideo
+	var unread error
 	werr := filepath.WalkDir(contentPath, func(p string, d os.DirEntry, err error) error {
 		if serr := lim.step(); serr != nil {
 			return serr
 		}
-		if err != nil || d.IsDir() || !isVideo(p) {
+		if err != nil {
+			unread = firstUnreadable(unread, err)
+			return nil // a folder that can't be listed is skipped; the rest is still read
+		}
+		if d.IsDir() || !isVideo(p) {
 			return nil
 		}
 		fi, e := d.Info()
-		if e != nil || !ListedEpisodeVideo(p, fi.Size()) {
+		if e != nil {
+			unread = firstUnreadable(unread, e)
+			return nil
+		}
+		if !ListedEpisodeVideo(p, fi.Size()) {
 			return nil
 		}
 		if lim.full() {
@@ -1224,7 +1245,23 @@ func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisit
 		lim.results++
 		return nil
 	})
-	return out, lim.truncated, ctxErr(werr)
+	if err := ctxErr(werr); err != nil {
+		return out, lim.truncated, err
+	}
+	return out, lim.truncated, unread
+}
+
+// ErrPartlyUnreadable marks a walk of a download that couldn't read all of it: what was
+// found is incomplete, so nothing may be concluded from what's missing.
+var ErrPartlyUnreadable = errors.New("part of the folder couldn't be read")
+
+// firstUnreadable keeps the first error a walk met (wrapped in ErrPartlyUnreadable); it
+// names the folder or file that failed, which is what a person needs to fix it.
+func firstUnreadable(have, err error) error {
+	if have != nil {
+		return have
+	}
+	return fmt.Errorf("%w: %w", ErrPartlyUnreadable, err)
 }
 
 // EpisodeImport describes one imported episode file.
@@ -2096,7 +2133,18 @@ var ErrOnlySamples = errors.New("only sample-sized videos found")
 // applies the same sample-name filter and ~50 MB floor as FindVideos, so a loose
 // sample.mkv is never selected as the movie. A single-file contentPath is taken
 // as-is (the caller explicitly chose it).
+//
+// A download it can't read all of is an error (ErrPartlyUnreadable), even when the rest
+// holds a video: the largest of the files it could see may be a featurette beside a film
+// in the folder it couldn't, and an import of that would replace the film's library file
+// with it. The movie import treats the error as one to retry, never as "no video".
 func findMediaFile(contentPath string) (string, int64, error) {
+	return pickMediaFile(contentPath, true)
+}
+
+// pickMediaFile is findMediaFile; strict refuses a directory it couldn't read all of, and
+// otherwise the largest video in the parts it could read is taken.
+func pickMediaFile(contentPath string, strict bool) (string, int64, error) {
 	info, err := os.Stat(contentPath)
 	if err != nil {
 		return "", 0, err
@@ -2110,13 +2158,19 @@ func findMediaFile(contentPath string) (string, int64, error) {
 
 	var best string
 	var bestSize int64
+	var unread error
 	sawExcluded := false // a video existed but was sample-named or under the floor
 	_ = filepath.WalkDir(contentPath, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !isVideo(p) {
+		if err != nil {
+			unread = firstUnreadable(unread, err)
+			return nil
+		}
+		if d.IsDir() || !isVideo(p) {
 			return nil
 		}
 		fi, e := d.Info()
 		if e != nil {
+			unread = firstUnreadable(unread, e)
 			return nil
 		}
 		if isSampleName(p) || fi.Size() < minVideoSize {
@@ -2128,6 +2182,9 @@ func findMediaFile(contentPath string) (string, int64, error) {
 		}
 		return nil
 	})
+	if unread != nil && (strict || best == "") {
+		return "", 0, fmt.Errorf("%s: %w", contentPath, unread)
+	}
 	if best == "" {
 		if sawExcluded {
 			return "", 0, fmt.Errorf("%w in %s", ErrOnlySamples, contentPath)
