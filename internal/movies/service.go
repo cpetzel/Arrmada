@@ -883,6 +883,10 @@ func extraFrom(d *metadata.MovieDetails) *MovieExtra {
 		OriginalTitle:    d.OriginalTitle,
 		AltTitles:        d.AltTitles,
 		TitlesRead:       true,
+		Releases:         d.Releases,
+	}
+	if ex.Releases == nil {
+		ex.Releases = &metadata.ReleaseDates{} // read: TMDB had none
 	}
 	for _, c := range d.Cast {
 		ex.Cast = append(ex.Cast, CastMember{ID: c.ID, Name: c.Name, Character: c.Character, ProfileURL: c.ProfileURL})

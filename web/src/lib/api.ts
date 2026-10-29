@@ -816,6 +816,8 @@ export interface CalendarItem {
   tmdb_id?: number; media_type?: "movie" | "series" | "music"; year?: number; season?: number; episode?: number; episode_title?: string;
   // An album's artist and kind (MUS-24). Albums are on staff's calendar only, while Music is on.
   artist?: string; album_type?: string;
+  // A movie entry's kind: absent for its main release date, else its digital or disc release.
+  release?: "digital" | "physical";
   // The viewer asked for this title or follows a request for it (APP-17).
   requested_by_me?: boolean;
 }
@@ -989,7 +991,7 @@ export interface SystemHealth {
 
 // The Needs-you feed (GET /api/v1/attention, staff only): what's waiting on a person.
 export type AttentionKind =
-  | "request" | "review" | "download" | "stalled" | "import" | "wrongcat" | "search" | "health" | "convert" | "issue" | "subtitles";
+  | "request" | "review" | "download" | "stalled" | "moving" | "import" | "wrongcat" | "search" | "health" | "convert" | "issue" | "subtitles";
 export interface AttentionCounts {
   requests: number;
   reviews: number;
@@ -2169,7 +2171,12 @@ export interface MediaDetail {
   plex_url?: string; // app.plex.tv page for the title, when the owner's Plex has it
   watch_links?: WatchLink[]; // a Watch link per media server that has it, the viewer's own first
   collection?: { id: number; name: string }; // a movie's franchise, for "Part of the … collection"
+  releases?: ReleaseDates; // a movie's cinema, digital and physical release dates
 }
+/** One kind of a film's release: the day (YYYY-MM-DD) and whose release it is (ISO country code). */
+export interface DatedRelease { date: string; country: string }
+/** A film's cinema, digital and physical release dates, for the admin's region when it has them. */
+export interface ReleaseDates { cinema?: DatedRelease; digital?: DatedRelease; physical?: DatedRelease; region?: string }
 /** One "Complete the <name>" row on Discover. */
 export interface CollectionRow { collection_id: number; title: string; items: DiscoverCard[] }
 /** A movie collection's page: every member as a card, and how much of what's out is here. */
@@ -3738,6 +3745,7 @@ export interface MovieExtra {
   collection_name?: string;
   vote_average?: number;
   cast?: CastMember[];
+  releases?: ReleaseDates;
 }
 
 export interface DuplicateCopy {

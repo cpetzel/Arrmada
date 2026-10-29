@@ -1031,11 +1031,15 @@ func (a *api) handleSeriesManualImportList(w http.ResponseWriter, r *http.Reques
 	}
 	ctx, cancel := importListContext(r)
 	defer cancel()
-	cands, truncated := a.deps.Automation.SeriesImportCandidates(ctx, dir)
+	cands, truncated, partly := a.deps.Automation.SeriesImportCandidates(ctx, dir)
 	if cands == nil {
 		cands = []automation.SeriesImportCandidate{}
 	}
-	a.writeImportList(w, r, ctx, "series", dir, cands, truncated)
+	note := ""
+	if partly {
+		note = "Part of this folder couldn't be read (a folder Arrmada isn't allowed into, or a drive that's gone), so there may be more files than these."
+	}
+	a.writeImportList(w, r, ctx, "series", dir, cands, truncated, note)
 }
 
 func (a *api) handleSeriesManualImport(w http.ResponseWriter, r *http.Request) {

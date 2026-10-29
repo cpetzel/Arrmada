@@ -211,7 +211,8 @@ func (t *TMDB) SearchMovie(ctx context.Context, query string) ([]MovieResult, er
 }
 
 // GetMovie fetches full details for a TMDB movie id, including cast, genres,
-// studio, collection, and US certification (one round-trip via append_to_response).
+// studio, collection, US certification and the cinema/digital/physical release dates
+// for the admin's region (one round-trip via append_to_response).
 func (t *TMDB) GetMovie(ctx context.Context, tmdbID int) (*MovieDetails, error) {
 	q := url.Values{}
 	q.Set("append_to_response", "credits,release_dates,alternative_titles")
@@ -219,7 +220,7 @@ func (t *TMDB) GetMovie(ctx context.Context, tmdbID int) (*MovieDetails, error) 
 	if err != nil {
 		return nil, err
 	}
-	return parseTMDBMovie(body)
+	return parseTMDBMovieIn(body, t.regionCode())
 }
 
 // SearchSeries searches TMDB for TV series by title.
@@ -598,6 +599,8 @@ type tmdbReleaseDates struct {
 	Country      string `json:"iso_3166_1"`
 	ReleaseDates []struct {
 		Certification string `json:"certification"`
+		Type          int    `json:"type"`         // 1 premiere … 3 theatrical, 4 digital, 5 physical, 6 TV
+		ReleaseDate   string `json:"release_date"` // "2024-03-01T00:00:00.000Z"
 	} `json:"release_dates"`
 }
 
@@ -631,7 +634,11 @@ func parseTMDBSearch(body []byte) []MovieResult {
 	return out
 }
 
-func parseTMDBMovie(body []byte) (*MovieDetails, error) {
+func parseTMDBMovie(body []byte) (*MovieDetails, error) { return parseTMDBMovieIn(body, "") }
+
+// parseTMDBMovieIn is parseTMDBMovie with the release dates picked for region (see
+// pickReleaseDates; "" for none).
+func parseTMDBMovieIn(body []byte, region string) (*MovieDetails, error) {
 	var m tmdbMovie
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, fmt.Errorf("tmdb: parse movie: %w", err)
@@ -658,6 +665,7 @@ func parseTMDBMovie(body []byte) (*MovieDetails, error) {
 		d.CollectionName = m.BelongsToCollection.Name
 	}
 	d.Certification = usCertification(m.ReleaseDates.Results)
+	d.Releases = pickReleaseDates(m.ReleaseDates.Results, region)
 	d.OriginalTitle, d.AltTitles = movieAltTitles(m)
 	for _, c := range m.Credits.Cast {
 		if len(d.Cast) >= maxCast {

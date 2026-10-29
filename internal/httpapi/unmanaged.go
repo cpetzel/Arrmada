@@ -91,8 +91,9 @@ func (a *api) readUnmanaged(ctx context.Context) (unmanagedState, error) {
 		}
 		seen[h] = true
 		// Its own categories are the import sweeps' to handle, and a misfiled TV download
-		// has Needs you's "Move to TV" instead.
-		if h == "" || !it.Complete() || grabbed[h] || imported[it.Hash] || imported[h] || own[it.Category] || misfiled[h] {
+		// has Needs you's "Move to TV" instead. One qBittorrent is still moving out of its
+		// incomplete folder waits: its path names that folder until the move is done.
+		if h == "" || !it.ReadyToImport() || grabbed[h] || imported[it.Hash] || imported[h] || own[it.Category] || misfiled[h] {
 			continue
 		}
 		if ignored[h] {

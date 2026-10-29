@@ -233,6 +233,17 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     It's on by default, but does nothing until a whisper model is installed.
   - The AI subtitles' own check of an untagged track (before choosing transcribe or
     translate) now takes the same three-sample vote instead of one sample.
+- **A film's cinema, digital and physical release dates** (#93). The movie page and the
+  Discover sheet show when a film reached cinemas, digital stores and disc, as Radarr and
+  Overseerr do, and the Calendar and your calendar feed list a library film's digital and
+  physical releases as entries of their own (**Digital release**, **Physical release**). The
+  dates come from TMDB, for your region (Settings → Connections → **Discovery region**).
+  Where your region has no date for one of them, the US date is shown, then the earliest
+  anywhere, with the country beside it. Films you already have get them in the background
+  after you update, or straight away from **Refresh & rescan**. After you change the region,
+  they're read again in the background from the next restart (or from **Refresh & rescan**).
+  They're only shown: when a film is searched for still goes by its minimum availability and
+  its main release date, as before.
 - **Other files in a film's folder.** When a film's folder holds a video Arrmada doesn't use
   (another cut, an old copy, a second film left there), the film's page shows **+1 other
   file** by its file, and the Movies library has a **Has other files** filter and a small
@@ -488,6 +499,37 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
+  (reported in #94 by cpetzel). With qBittorrent's **Default Download Path (incomplete
+  torrents)** on, a finished torrent is moved from that folder to its save folder, and
+  until the move is done its path still names the incomplete folder, which Arrmada usually
+  doesn't mount. A TV import that ran during the move found no folder, took that for a
+  release with no video, blocklisted it and failed its grab, and the next search grabbed
+  another copy of the same season. Now:
+  - Imports (films, TV, books and music) wait while qBittorrent is moving a torrent, or
+    says its files are missing, and pick it up from its final folder once it's there.
+    Import suggestions, unmanaged downloads and **Check paths** wait for the move too.
+  - A TV download whose folder Arrmada can't read is tried again every sweep. It is never
+    blocklisted, and its grab stays as it was. If it's still unreadable after five
+    minutes it shows once in **Needs you** with the folder and the error. A season pack
+    that was already imported and is only being re-read for the season's gaps is just
+    skipped. Only a folder that was read and holds no video is still treated as junk.
+  - A download with a folder inside it that Arrmada can't open (the wrong owner, say) is
+    held, and shown in **Needs you**, rather than partly imported. It is never judged to
+    hold no video, so it is never blocklisted or deleted for it. The folder it couldn't
+    open may hold the episodes, or the film itself beside a featurette that would have
+    been taken in its place. A file that disappears while the folder is read (the
+    download being moved, rechecked or renamed) means the folder is changing: nothing is
+    decided, and it's read again on the next sweep.
+  - Importing such a download from **Review** says Arrmada can't read the folder, instead of
+    "no video files were found". Choosing files by hand for a show lists what could be
+    read and says part of the folder couldn't be.
+  - A torrent qBittorrent has been moving for over two hours shows in **Needs you** as a
+    move that's taking too long, since it won't import until the move finishes. It isn't
+    counted as a stalled download and doesn't send a "stalled" alert.
+
+  A release already blocklisted this way stays blocklisted. Remove it from the show's
+  blocklist, and if its torrent is still in qBittorrent the next import picks it up.
 - **Convert and imports no longer remove a video Arrmada doesn't track.**
   - Converting `Heat (1995).mp4` writes `Heat (1995).mkv`. A file you kept under that name
     (a remux beside the film, say) used to be moved into the originals hold with the

@@ -251,7 +251,6 @@ func (s *Service) processRepair(ctx context.Context, job *Job, ref fileRef) {
 	fixed := 0
 	runID := NewRunID()
 	s.update(job, func(j *Job) { j.RunID = runID })
-	defer func() { s.recordAttempts(ctx, runID, ref, outs) }()
 	for _, l := range job.repairLangs {
 		if ctx.Err() != nil {
 			break
@@ -272,6 +271,8 @@ func (s *Service) processRepair(ctx context.Context, job *Job, ref fileRef) {
 	s.repair.mu.Lock()
 	s.repair.fixed += fixed
 	s.repair.mu.Unlock()
+	// Recorded before the job finishes: the pass waits on the job, then reads the ledger.
+	s.recordAttempts(ctx, runID, ref, outs)
 	note := strings.Join(notes, " · ")
 	if fixed > 0 {
 		s.sidecarChanged(job.Kind, ref.Path, "", SidecarWritten)
