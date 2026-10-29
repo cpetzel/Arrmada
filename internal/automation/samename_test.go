@@ -125,8 +125,27 @@ func TestSameNameImportAnywayKeepsQualityGate(t *testing.T) {
 	}
 	rv := reviewFor(t, r.c, hashFor(name))
 	before := r.libraryFiles(t)
-	if err := r.c.ImportReview(context.Background(), rv.ID, r.old, ""); err != nil {
+	ctx, outcome := WithReviewImportOutcome(context.Background())
+	if err := r.c.ImportReview(ctx, rv.ID, r.old, ""); err != nil {
 		t.Fatalf("import anyway: %v", err)
+	}
+	// Settled, and saying so: not a silent "Imported".
+	if !outcome.KeptExisting {
+		t.Error("the outcome doesn't say the existing file was kept")
+	}
+	var status, resolution string
+	if err := r.c.db.QueryRow(`SELECT status, resolution FROM import_reviews WHERE id = ?`, rv.ID).Scan(&status, &resolution); err != nil {
+		t.Fatal(err)
+	}
+	if status != "resolved" || resolution != ResolutionKept {
+		t.Errorf("review is %s/%s, want resolved/%s", status, resolution, ResolutionKept)
+	}
+	if !r.c.hashAlreadyImported(r.ctx, hashFor(name)) {
+		t.Error("the sweep would pick the download up again")
+	}
+	var grabStatus string
+	if err := r.c.db.QueryRow(`SELECT status FROM grabs WHERE info_hash = ?`, hashFor(name)).Scan(&grabStatus); err != nil || grabStatus != grabStatusDismissed {
+		t.Errorf("grab status %q (%v), want %q so seed cleanup keeps the files", grabStatus, err, grabStatusDismissed)
 	}
 	after := r.libraryFiles(t)
 	if len(after) != len(before) {

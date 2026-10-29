@@ -8,8 +8,7 @@ import { jobFailed, jobToast } from "./useJob";
 // A reject or drop code as the end of "12 …": "12 over your bitrate ceiling".
 export const REASON_LABELS: Record<string, string> = {
   wrong_title: "for other titles",
-  // #81: it names this show and another in the library with the same name alike.
-  same_name: "that could be a same-named show's",
+  same_name: "maybe a same-named show's", // #81; the series page explains (SameNameHint)
   blocklisted: "blocklisted",
   pending: "already downloading",
   out_of_scope: "for other episodes or editions",
@@ -89,14 +88,8 @@ function body(kind: SearchAttempt["outcome"], o: Outcomeish): string {
     }
   }
   if (failed.length > 0) line += ` · ${plural(failed.length, "indexer")} failed: ${failed.join(", ")}`;
-  if (o.grabbed === 0 && (o.reasons?.same_name ?? 0) > 0) line += `. ${SAME_NAME_HINT}`;
   return line;
 }
-
-// Why a show that shares its name with another never grabs a release that doesn't say
-// which one it is, and what to do instead (#81).
-export const SAME_NAME_HINT =
-  "Another show in your library has the same name, and releases that don't say which one they are aren't grabbed automatically — pick one in Choose release";
 
 // A stored attempt as the detail page's line: "Last search 2 h ago — Found 15 releases —
 // 12 over your bitrate ceiling · 2 indexers failed: X, Y". A search no indexer answered

@@ -327,8 +327,14 @@ func (a *api) handleImportReview(w http.ResponseWriter, r *http.Request) {
 		Key: "import:" + t.Review.MediaType + ":" + strconv.FormatInt(t.Dest, 10), Title: t.Title,
 		Fn: func(ctx context.Context, p *jobs.Progress) (any, error) {
 			ctx = automation.WithMusicEdition(ctx, releaseID)
+			ctx, outcome := automation.WithReviewImportOutcome(ctx)
 			if err := a.deps.Automation.ImportReview(withImportProgress(ctx, p), id, targetID, targetKind); err != nil {
 				return nil, err // the import's own reason, which the card shows
+			}
+			if outcome.KeptExisting {
+				// Settled with nothing replaced (#81): say so rather than "Imported".
+				p.SetMessage(automation.KeptExistingMessage + ".")
+				return map[string]any{"imported": false, "kept_existing": true, "title": t.Title}, nil
 			}
 			return importedInto(p, t.Title), nil
 		}}, nil)

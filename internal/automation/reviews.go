@@ -228,7 +228,31 @@ const (
 	ResolutionDismissed = "dismissed" // left for the user to handle; files kept
 	ResolutionRejected  = "rejected"  // removed with its files and blocklisted
 	ResolutionRemoved   = "removed"   // the download was removed from the client
+	// ResolutionKept: Import anyway on a same-name hold (#81), and the quality gate kept
+	// every file already there — the release isn't better than any of them.
+	ResolutionKept = "kept_existing"
 )
+
+// KeptExistingMessage is what Import anyway says when it kept the files already there.
+const KeptExistingMessage = "Kept the existing file — this release isn't better"
+
+// errKeptExisting: importContentInto placed nothing because the import gate judged every
+// file no better than what's there (a same-name hold's Import anyway).
+var errKeptExisting = errors.New(KeptExistingMessage)
+
+// ReviewImportOutcome is what an ImportReview came to beyond succeeding: KeptExisting when
+// nothing replaced the files already there (ResolutionKept).
+type ReviewImportOutcome struct {
+	KeptExisting bool
+}
+
+type reviewOutcomeKey struct{}
+
+// WithReviewImportOutcome collects what an ImportReview under the returned ctx came to.
+func WithReviewImportOutcome(ctx context.Context) (context.Context, *ReviewImportOutcome) {
+	o := &ReviewImportOutcome{}
+	return context.WithValue(ctx, reviewOutcomeKey{}, o), o
+}
 
 func (c *Coordinator) addReview(ctx context.Context, r Review) {
 	if c.hasReview(ctx, r.Hash) {
@@ -770,7 +794,20 @@ func (c *Coordinator) ImportReview(ctx context.Context, id, targetID int64, targ
 	}
 	left := &importLeftovers{}
 	ctx = context.WithValue(ctx, importLeftoversKey{}, left)
-	if err := c.importContentInto(withCopyAccounting(ctx, r), r, dest, "review"); err != nil {
+	err = c.importContentInto(withCopyAccounting(ctx, r), r, dest, "review")
+	if errors.Is(err, errKeptExisting) {
+		// Settled, not failed: the person said which show it is, and the profile said the
+		// files there are as good. The download stays as it was ('dismissed' keeps its
+		// files through seed cleanup) and isn't imported again by the sweep.
+		c.recordImportedHash(ctx, r.Hash, r.Name, r.SizeBytes)
+		c.setGrabStatusByHash(ctx, r.Hash, r.Name, r.MediaType, grabStatusDismissed)
+		c.reviewEvent(ctx, r.MediaType, dest, "dismissed", KeptExistingMessage+": "+r.Name)
+		if o, ok := ctx.Value(reviewOutcomeKey{}).(*ReviewImportOutcome); ok {
+			o.KeptExisting = true
+		}
+		return c.resolveReview(ctx, id, ResolutionKept)
+	}
+	if err != nil {
 		c.importFailed(ctx, r, dest, "review", err)
 		return err
 	}
@@ -828,6 +865,9 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 			return fmt.Errorf("%w: %s", ErrNothingToImport, conflict)
 		}
 		n := len(placed)
+		if r.ReasonCode == ReasonSameName && n == 0 && matched > 0 && failed == 0 {
+			return errKeptExisting // the gate kept every file there
+		}
 		if matched == 0 {
 			// Wrapped in ErrNothingToImport so the API answers 422 rather than 500: the
 			// request was understood and the server is fine, the download just doesn't

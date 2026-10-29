@@ -517,7 +517,8 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   - A grabbed download that could belong to either show goes to **Needs you** as **Which
     show?**, naming both shows. It isn't imported or used to replace a file. **Import
     anyway** puts it in the show it was grabbed for; **Choose different show…** puts it in
-    the other one. Either way, it only replaces a file it's better than.
+    the other one. Either way, it only replaces a file it's better than; when it isn't
+    better, Needs you says **Kept the existing file** and leaves the download as it is.
   - A release you pick by hand from **Choose release** imports as before.
 
 - **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
