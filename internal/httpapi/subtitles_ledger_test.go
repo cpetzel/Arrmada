@@ -59,6 +59,30 @@ func TestSavingOpenSubtitlesCredsClearsAuthBackoff(t *testing.T) {
 	}
 }
 
+// A settings request is checked whole before anything is saved (#90): a bad score or an
+// unknown language leaves the identify switch where it was; a good request saves it.
+func TestSubtitleSettingsSaveAllOrNothing(t *testing.T) {
+	s := newSubtitlesServer(t)
+	_, admin := s.user(t, "admin@example.com", auth.RoleAdmin)
+	for _, body := range []string{
+		`{"identify_audio":false,"min_score":500}`,
+		`{"identify_audio":false,"languages":["xx-nonsense"]}`,
+	} {
+		if rec := s.doBody("PUT", "/api/v1/subtitles/settings", body, admin); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: HTTP %d, want 400", body, rec.Code)
+		}
+		if !s.deps.Subtitles.IdentifyAudioOn(t.Context()) {
+			t.Fatalf("%s: switched off by a refused request", body)
+		}
+	}
+	rec := s.doBody("PUT", "/api/v1/subtitles/settings", `{"identify_audio":false}`, admin)
+	var st map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &st)
+	if rec.Code != http.StatusOK || st["identify_audio"] != false || s.deps.Subtitles.IdentifyAudioOn(t.Context()) {
+		t.Errorf("switching off: HTTP %d %v", rec.Code, st["identify_audio"])
+	}
+}
+
 // The attempt history pages newest first and survives as rows in the database.
 func TestSubtitleHistoryPages(t *testing.T) {
 	s := newSubtitlesServer(t)

@@ -13,7 +13,7 @@ describe("audio language badges", () => {
     expect(chipText({ code: "de", name: "German" })).toBe("DE");
     expect(chipText({ code: "" })).toBe("?");
     expect(chipTitle({ code: "de", name: "German" })).toBe("German");
-    expect(chipTitle({ code: "ja", name: "Japanese", detected: true })).toMatch(/Japanese — detected/);
+    expect(chipTitle({ code: "ja", name: "Japanese", detected: true })).toMatch(/^Japanese \(detected\) — /);
     expect(chipTitle({ code: "" })).toMatch(/no language tag/);
   });
 

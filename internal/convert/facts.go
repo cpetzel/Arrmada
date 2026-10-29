@@ -89,7 +89,7 @@ func FactsHeard(mi *MediaInfo, heard map[int]string) quality.FileFacts {
 			f.LosslessCodec = losslessLabel(au.Codec)
 		}
 	}
-	f.AudioLangs, f.AudioUntagged = audioLangs(mi, heard)
+	f.AudioLangs, f.AudioUntagged, f.AudioHeard = audioLangs(mi, heard)
 	return f
 }
 

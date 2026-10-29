@@ -27,12 +27,20 @@ type listeningAI struct {
 	heard map[int]DetectedLang
 	fail  error
 	calls []int
+	// during runs after the first sample of a call: a subtitle job turning up mid-listen.
+	during func()
 }
 
-func (a *listeningAI) detectFile(_ context.Context, _, _ string, stream int, total time.Duration) (DetectedLang, error) {
+func (a *listeningAI) detectFile(_ context.Context, _, _ string, stream int, total time.Duration, stop func() bool) (DetectedLang, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, stream)
+	if a.during != nil {
+		a.during()
+		if stop() { // asked before the next sample, as detectVote does
+			return DetectedLang{}, errGaveWay
+		}
+	}
 	if total <= 0 {
 		return DetectedLang{}, errors.New("no runtime")
 	}
@@ -86,8 +94,9 @@ func fileSize(t *testing.T, path string) int64 {
 	return fi.Size()
 }
 
-// Only untagged tracks are listened to: not a tagged one, not a commentary, and not one
-// that was listened to before — an unsure answer included.
+// Only untagged tracks are listened to: not a tagged one, not "zxx" (no linguistic
+// content), not a commentary, and not one that was listened to before — an unsure answer
+// included.
 func TestTracksToIdentify(t *testing.T) {
 	mi := &mediaInfo{
 		Audio: []AudioTrack{
@@ -101,7 +110,7 @@ func TestTracksToIdentify(t *testing.T) {
 	for _, tr := range tracksToIdentify(mi) {
 		got = append(got, tr.Index)
 	}
-	if want := []int{1, 2, 3, 4, 9}; !slices.Equal(got, want) {
+	if want := []int{1, 2, 4, 9}; !slices.Equal(got, want) {
 		t.Errorf("tracks %v, want %v", got, want)
 	}
 	if tracksToIdentify(nil) != nil {
@@ -118,7 +127,7 @@ func TestIdentifyFileOnceUntilItChanges(t *testing.T) {
 	}}
 	s, video, probes := identifyFixture(t, func() *mediaInfo {
 		return &mediaInfo{DurationSec: 5400, AudioLangs: []string{"eng"}, Audio: []AudioTrack{
-			{Index: 0, Lang: "eng"}, {Index: 1, Lang: "und"}, {Index: 2}, {Index: 3, Lang: "zxx"},
+			{Index: 0, Lang: "eng"}, {Index: 1, Lang: "und"}, {Index: 2}, {Index: 3, Lang: "mis"},
 		}}
 	}, ai)
 	ctx := t.Context()
@@ -329,5 +338,140 @@ func TestIdentifiedLanguageReachesTheRules(t *testing.T) {
 	}
 	if b := convert.AudioBadges(analysed, heard); len(b) != 1 || b[0].Code != "en" || !b[0].Detected {
 		t.Errorf("badge %+v, want a detected EN", b)
+	}
+}
+
+// A subtitle job turning up mid-file: the detection gives way between samples, what was
+// heard before it is kept, nothing counts as a failure, and the file goes back to the
+// front of the queue to finish later.
+func TestIdentifyGivesWayToAJob(t *testing.T) {
+	ai := &listeningAI{fakeAI: &fakeAI{avail: true, transcribe: true}, heard: map[int]DetectedLang{0: {"en", 0.95}, 1: {"de", 0.9}}}
+	s, video, _ := identifyFixture(t, func() *mediaInfo {
+		return &mediaInfo{DurationSec: 3000, Audio: []AudioTrack{{Index: 0, Lang: "und"}, {Index: 1, Lang: "und"}}}
+	}, ai)
+	ctx := t.Context()
+	det := s.identifier(ctx)
+	calls := 0
+	ai.during = func() {
+		if calls++; calls == 2 { // track 0 finished; a job starts during track 1
+			s.mu.Lock()
+			s.runs = map[int64]*runHandle{1: {}}
+			s.mu.Unlock()
+		}
+	}
+	it := identifyItem{video, "Film"}
+	s.identifyFile(ctx, det, it)
+	if got := s.DetectedAudio(ctx, map[string]int64{video: fileSize(t, video)}); !reflect.DeepEqual(got, map[string]map[int]string{video: {0: "en"}}) {
+		t.Errorf("kept %v, want track 0's answer only", got)
+	}
+	if next, ok := s.nextIdentify(); !ok || next != it {
+		t.Fatalf("the file wasn't put back: %v %v", next, ok)
+	}
+	if s.identify.failed[video] != 0 {
+		t.Error("giving way counted as a failure")
+	}
+	// Still busy: it doesn't start on the file at all.
+	ai.takeCalls()
+	s.identifyFile(ctx, det, it)
+	if got := ai.takeCalls(); len(got) != 0 {
+		t.Errorf("listened while a job ran: %v", got)
+	}
+	if _, ok := s.nextIdentify(); !ok {
+		t.Error("the file wasn't put back the second time")
+	}
+	// The job is done: it finishes the file, track 1 only.
+	s.mu.Lock()
+	s.runs = nil
+	s.mu.Unlock()
+	ai.during = nil
+	s.identifyFile(ctx, det, it)
+	if got := ai.takeCalls(); !slices.Equal(got, []int{1}) {
+		t.Errorf("finishing listened to %v, want track 1", got)
+	}
+	if got := s.DetectedAudio(ctx, map[string]int64{video: fileSize(t, video)}); len(got[video]) != 2 {
+		t.Errorf("finished: %v", got)
+	}
+}
+
+// A detection written while a subtitle job held an older copy of the probe isn't lost
+// when the job saves its own (and the other way round): each merges into the cache as
+// it is, and the first answer for a track stands.
+func TestSaveDetectedMerges(t *testing.T) {
+	s, video, _ := identifyFixture(t, func() *mediaInfo {
+		return &mediaInfo{DurationSec: 3000, Audio: []AudioTrack{{Index: 0, Lang: "und"}, {Index: 1, Lang: "und"}}}
+	}, &listeningAI{fakeAI: &fakeAI{avail: true, transcribe: true}})
+	ctx := t.Context()
+	jobCopy, err := s.probeCached(ctx, video) // what a job read when it started
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.saveDetected(ctx, video, map[int]DetectedLang{0: {"en", 0.9}}, nil) // the background pass
+	jobCopy.Detected = map[int]DetectedLang{1: {"fr", 0.8}}
+	s.saveDetected(ctx, video, map[int]DetectedLang{1: {"fr", 0.8}}, jobCopy) // the job, later
+	s.saveDetected(ctx, video, map[int]DetectedLang{0: {"de", 0.99}}, nil)    // a late second answer
+	got := s.cachedProbe(ctx, video).Detected
+	if want := map[int]DetectedLang{0: {"en", 0.9}, 1: {"fr", 0.8}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cache %v, want %v", got, want)
+	}
+	// No cache entry and nothing to fall back on (the file changed): nothing written.
+	other := filepath.Join(filepath.Dir(video), "Other (2022).mkv")
+	if err := os.WriteFile(other, []byte("synthetic"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.saveDetected(ctx, other, map[int]DetectedLang{0: {"en", 0.9}}, nil)
+	if s.cachedProbe(ctx, other) != nil {
+		t.Error("wrote a probe for a file it wasn't read from")
+	}
+}
+
+// A library walk queues only files with something left to listen to — or no probe yet —
+// and SetIdentifyAudio doesn't start a second walk while files are still waiting.
+func TestIdentifyLibraryWalk(t *testing.T) {
+	ai := &listeningAI{fakeAI: &fakeAI{avail: true, transcribe: true}}
+	s, video, _ := identifyFixture(t, func() *mediaInfo { return &mediaInfo{} }, ai)
+	ctx := t.Context()
+	dir := filepath.Dir(video)
+	put := func(name string, mi *mediaInfo) string {
+		p := filepath.Join(dir, name)
+		if mi != nil {
+			mi.ProbeVersion = probeVersion
+			s.cache.put(ctx, p, 1, 1, mi)
+		}
+		return p
+	}
+	done := put("done.mkv", &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "und"}}, Detected: map[int]DetectedLang{0: {"en", 0.9}}})
+	tagged := put("tagged.mkv", &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "eng"}}})
+	silent := put("silent.mkv", &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "zxx"}}})
+	todo := put("todo.mkv", &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "und"}}})
+	unprobed := put("unprobed.mkv", nil)
+	old := put("old.mkv", &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "eng"}}})
+	if _, err := s.cache.db.ExecContext(ctx, `UPDATE subtitle_probe_cache SET info_json = '{"audio":[{"index":0,"lang":"eng"}]}' WHERE path = ?`, old); err != nil {
+		t.Fatal(err)
+	}
+	cached := s.cachedAudio(ctx)
+	var got []string
+	for _, p := range []string{done, tagged, silent, todo, unprobed, old} {
+		if mi, ok := cached[p]; ok && len(tracksToIdentify(mi)) == 0 {
+			continue
+		}
+		got = append(got, filepath.Base(p))
+	}
+	if want := []string{"todo.mkv", "unprobed.mkv", "old.mkv"}; !slices.Equal(got, want) {
+		t.Errorf("walk would queue %v, want %v", got, want)
+	}
+
+	// Files still waiting: switching on again starts no second walk.
+	s.queueIdentify(false, identifyItem{todo, "Todo"})
+	if !s.identifyPending() {
+		t.Fatal("waiting files not seen")
+	}
+	s.identify.walking.Store(true)
+	s.dropIdentifyQueue()
+	if !s.identifyPending() {
+		t.Error("a running walk not seen")
+	}
+	s.identifyLibrary(ctx) // refused: one walk at a time
+	if n := len(s.identify.queue); n != 0 {
+		t.Errorf("a second walk queued %d files", n)
 	}
 }

@@ -144,7 +144,7 @@ func (s *Service) fillCoverageW(ctx context.Context, fs *FileSubs, wants []Want,
 		fs.AudioLangs = mi.withDetected().AudioLangs // tags, plus what detection heard
 		fs.Embedded = mi.Subs
 		for _, t := range mi.Audio {
-			if _, heard := mi.Detected[t.Index]; t.untagged() && !heard {
+			if _, heard := mi.Detected[t.Index]; t.listenable() && !heard {
 				unknownAudio = true
 			}
 		}

@@ -109,6 +109,13 @@ type Service struct {
 	upgrade upgradeBudget // downloads the upgrade loop may still spend today (upgrade.go)
 
 	identify audioIdentify // the background identification of untagged audio (identify.go)
+	// gpu keeps whisper to one run at a time: the GPU lane holds it for each job, the
+	// background identification for each track it listens to (between samples it gives
+	// way to a waiting job).
+	gpu sync.Mutex
+	// detectedMu serialises the read-merge-write of detections into the probe cache
+	// (saveDetected).
+	detectedMu sync.Mutex
 }
 
 // NewService wires the module over the shared Movies/Series catalogs + a subtitle provider. db is
@@ -298,6 +305,13 @@ func (s *Service) CredentialsChanged(ctx context.Context) {
 		r.ResetAuth()
 	}
 	s.ClearBackoff(ctx, EventCreds)
+}
+
+// CheckLanguages reports (ErrUnknownLanguage) a code the language table doesn't know,
+// so a settings request can be checked whole before any of it is saved.
+func CheckLanguages(in []string) error {
+	_, err := canonicalLanguages(in)
+	return err
 }
 
 // canonicalLanguages spells each code canonically, drops blanks and repeats (keeping the

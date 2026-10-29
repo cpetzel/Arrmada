@@ -15,17 +15,21 @@ func TestAudioLangsAndBadges(t *testing.T) {
 		{AudIndex: 0, Lang: "ger"}, {AudIndex: 1, Lang: "eng"}, {AudIndex: 2, Lang: "eng", Commentary: true},
 		{AudIndex: 3, Lang: "und"}, {AudIndex: 4, Lang: "deu"}, {AudIndex: 5, Lang: "fre", Commentary: true},
 	}}
-	codes, untagged := audioLangs(mi, nil)
-	if !reflect.DeepEqual(codes, []string{"de", "en"}) || !untagged {
-		t.Errorf("untold: %v untagged=%v", codes, untagged)
+	codes, untagged, heardOnly := audioLangs(mi, nil)
+	if !reflect.DeepEqual(codes, []string{"de", "en"}) || !untagged || heardOnly {
+		t.Errorf("untold: %v untagged=%v heardOnly=%v", codes, untagged, heardOnly)
 	}
-	codes, untagged = audioLangs(mi, map[int]string{3: "ja"})
-	if !reflect.DeepEqual(codes, []string{"de", "en", "ja"}) || untagged {
-		t.Errorf("heard: %v untagged=%v", codes, untagged)
+	codes, untagged, heardOnly = audioLangs(mi, map[int]string{3: "ja"})
+	if !reflect.DeepEqual(codes, []string{"de", "en", "ja"}) || untagged || !heardOnly {
+		t.Errorf("heard: %v untagged=%v heardOnly=%v", codes, untagged, heardOnly)
 	}
 	f := FactsHeard(mi, map[int]string{3: "ja"})
-	if !reflect.DeepEqual(f.AudioLangs, []string{"de", "en", "ja"}) || f.AudioUntagged {
+	if !reflect.DeepEqual(f.AudioLangs, []string{"de", "en", "ja"}) || f.AudioUntagged || !f.AudioHeard {
 		t.Errorf("facts: %+v", f)
+	}
+	// Heard as a language a tagged track already has: nothing rests on the detection.
+	if _, _, heardOnly := audioLangs(mi, map[int]string{3: "de"}); heardOnly {
+		t.Error("a heard language a tag already names counts as heard-only")
 	}
 	badges := langtab.OrderAudio(AudioBadges(mi, map[int]string{3: "ja"}), "en")
 	want := []string{"en", "de", "ja"}

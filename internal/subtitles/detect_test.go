@@ -2,13 +2,63 @@ package subtitles
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+// A background detection never probes or sets aside the oneAPI build: it uses it only once
+// a job's probe has passed it, and its failure there is just that sample's. A subtitle
+// job's own detection still sets it aside and carries on with the Vulkan build.
+func TestBackgroundDetectionLeavesSyclAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake whisper builds are shell scripts")
+	}
+	dir := t.TempDir()
+	script := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	sycl := script("whisper-sycl", "echo 'ggml_sycl_init: device lost' >&2; exit 1")
+	vulkan := script("whisper-vulkan", "echo 'whisper_full_with_state: auto-detected language: en (p = 0.950000)' >&2")
+	ctx := t.Context()
+
+	w := &whisperGen{bin: vulkan, sycl: sycl} // not probed yet: background uses Vulkan
+	if b := w.settledBin(); b != vulkan {
+		t.Errorf("unprobed: background picked %s", b)
+	}
+	if d, err := w.detectSample(ctx, "m.bin", "s.wav", true); err != nil || d.Lang != "en" {
+		t.Errorf("unprobed: %+v %v", d, err)
+	}
+	if w.syclProbed || w.syclOff {
+		t.Errorf("background probed (%v) or retired (%v) the oneAPI build", w.syclProbed, w.syclOff)
+	}
+
+	w.syclProbed = true // a job's probe passed it: background uses it, and it fails
+	if _, err := w.detectSample(ctx, "m.bin", "s.wav", true); err == nil {
+		t.Error("a failed oneAPI sample came back as an answer")
+	}
+	if w.syclOff {
+		t.Fatal("a background failure retired the oneAPI build")
+	}
+
+	// A subtitle job's detection: sets it aside, and answers from the Vulkan build.
+	if d, err := w.detectSample(ctx, "m.bin", "s.wav", false); err != nil || d.Lang != "en" {
+		t.Errorf("job: %+v %v", d, err)
+	}
+	if !w.syclOff {
+		t.Error("a job's failure didn't set the oneAPI build aside")
+	}
+}
 
 // Captured whisper-cli -dl output (whisper.cpp 1.9): the detection line sits among the
 // model-load chatter on stderr.
@@ -102,23 +152,42 @@ func TestVoteLanguage(t *testing.T) {
 	}{
 		{"all agree", []DetectedLang{en(0.9), en(0.8), en(0.7)}, 3, en(0.8), true},
 		{"two of three", []DetectedLang{en(0.97), fr(0.6), en(0.95)}, 3, en(0.96), true},
-		{"a failed sample is no vote", []DetectedLang{en(0.9), en(0.9)}, 3, en(0.9), true},
-		{"one sample of three", []DetectedLang{en(0.99)}, 3, en(0), false},
 		{"no majority", []DetectedLang{en(0.9), fr(0.95), {"de", 0.99}}, 3, DetectedLang{"de", 0}, false},
 		{"a tie", []DetectedLang{en(0.9), fr(0.8)}, 2, en(0), false},
 		{"a short file's one sample", []DetectedLang{en(0.9)}, 1, en(0.9), true},
 		{"agreed but unsure", []DetectedLang{en(0.5), en(0.55), fr(0.99)}, 3, en(0.525), false},
-		{"nothing heard", nil, 3, DetectedLang{}, false},
 	}
 	for _, tc := range cases {
-		got := voteLanguage(tc.heard, tc.tried)
-		if got.Lang != tc.want.Lang || math.Abs(got.Prob-tc.want.Prob) > 1e-9 {
-			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		got, err := settleVote(tc.heard, tc.tried, nil)
+		if err != nil || got.Lang != tc.want.Lang || math.Abs(got.Prob-tc.want.Prob) > 1e-9 {
+			t.Errorf("%s: %+v %v, want %+v", tc.name, got, err, tc.want)
 		}
 		// Sure is what withDetected trusts.
 		mi := &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "und"}}, Detected: map[int]DetectedLang{0: got}}
 		if sure := len(mi.withDetected().AudioLangs) == 1; sure != tc.sure {
 			t.Errorf("%s: used = %v, want %v", tc.name, sure, tc.sure)
+		}
+	}
+}
+
+// A sample that couldn't be listened to makes the whole detection an error, to be tried
+// again later — never a vote on what's left, and never a "couldn't tell" kept for good.
+func TestSettleVoteNeedsEverySample(t *testing.T) {
+	en := DetectedLang{"en", 0.99}
+	cause := errors.New("ffmpeg: decode error")
+	for name, tc := range map[string]struct {
+		heard []DetectedLang
+		tried int
+	}{
+		"one of three failed":  {[]DetectedLang{en, en}, 3},
+		"two of three failed":  {[]DetectedLang{en}, 3},
+		"every sample failed":  {nil, 3},
+		"nothing to listen to": {nil, 0},
+	} {
+		if d, err := settleVote(tc.heard, tc.tried, cause); err == nil {
+			t.Errorf("%s: settled as %+v", name, d)
+		} else if tc.tried > 0 && !errors.Is(err, cause) {
+			t.Errorf("%s: %v doesn't carry the cause", name, err)
 		}
 	}
 }

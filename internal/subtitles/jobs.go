@@ -208,10 +208,19 @@ func (s *Service) work(ctx context.Context, lane string) {
 			continue
 		}
 		jctx, done := s.startJob(ctx, job)
+		// The GPU lane's whisper never runs beside the background identification's: the
+		// job is registered as running first, so a detection in progress gives way after
+		// its current sample (identify.go).
+		if lane == LaneGPU {
+			s.gpu.Lock()
+		}
 		// A panic in one job fails that job and the worker moves on to the next, instead
 		// of the whole app going down with it.
 		if err := safego.Call(s.log, "subtitles job", func() error { s.process(jctx, job); return nil }); err != nil {
 			s.finish(job, StateFailed, "internal error: "+err.Error())
+		}
+		if lane == LaneGPU {
+			s.gpu.Unlock()
 		}
 		done()
 	}

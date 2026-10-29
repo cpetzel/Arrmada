@@ -65,6 +65,12 @@ func (t AudioTrack) untagged() bool {
 	return !ok
 }
 
+// listenable reports an untagged track detection should listen to: not one tagged "zxx"
+// (ISO 639's "no linguistic content" — music, effects), which has no language to hear.
+func (t AudioTrack) listenable() bool {
+	return t.untagged() && strings.ToLower(strings.TrimSpace(t.Lang)) != "zxx"
+}
+
 // withDetected is the probe as the AI should see it: each untagged track that detection
 // heard confidently (≥ detectMinProb) takes that language, in Audio and AudioLangs. The
 // receiver isn't changed; nil stays nil.
@@ -105,7 +111,13 @@ var textSubCodecs = map[string]bool{
 
 // probeSubs runs ffprobe and parses a file's runtime, audio languages, and subtitle tracks.
 func probeSubs(ctx context.Context, ffprobe, path string) (*mediaInfo, error) {
-	out, err := toolrun.Command(ctx, toolrun.Normal, ffprobe,
+	return probeSubsAt(ctx, toolrun.Normal, ffprobe, path)
+}
+
+// probeSubsAt is probeSubs at a given priority: the background identification probes at
+// idle priority (identify.go).
+func probeSubsAt(ctx context.Context, class toolrun.Class, ffprobe, path string) (*mediaInfo, error) {
+	out, err := toolrun.Command(ctx, class, ffprobe,
 		"-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path).Output()
 	if err != nil {
 		return nil, err
@@ -241,6 +253,11 @@ func (c *probeCache) put(ctx context.Context, path string, size, mtime int64, mi
 // probeCached returns a file's subtitle probe from the cache when the file is unchanged, otherwise
 // runs ffprobe once and stores the result.
 func (s *Service) probeCached(ctx context.Context, path string) (*mediaInfo, error) {
+	return s.probeCachedAt(ctx, toolrun.Normal, path)
+}
+
+// probeCachedAt is probeCached with ffprobe run at the given priority.
+func (s *Service) probeCachedAt(ctx context.Context, class toolrun.Class, path string) (*mediaInfo, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -255,7 +272,9 @@ func (s *Service) probeCached(ctx context.Context, path string) (*mediaInfo, err
 	}
 	run := s.ffprobeRun
 	if run == nil {
-		run = probeSubs
+		run = func(ctx context.Context, ffprobe, path string) (*mediaInfo, error) {
+			return probeSubsAt(ctx, class, ffprobe, path)
+		}
 	}
 	mi, err := run(ctx, s.ffprobe, path)
 	if err != nil {

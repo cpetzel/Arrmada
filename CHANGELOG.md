@@ -216,15 +216,21 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   every such track in your library once, in the background: three 30-second samples from a
   quarter, half and three quarters through, and the language most of them hear wins. When
   the samples don't agree, or whisper isn't sure, the track stays unknown rather than taking
-  a guess. Tracks with a real language tag are left alone, and so are commentary tracks.
+  a guess. Tracks with a real language tag are left alone, and so are commentary tracks
+  and tracks tagged `zxx` (no spoken language). A sample that can't be listened to means
+  the track is tried again on a later pass.
   - What it hears is kept in Arrmada's database, never written into the file. The badges
-    show it as detected (a dashed chip, "English (detected)"), and the language rules,
-    upgrades and the save dialog's count read it like a tag. A file that changes is
-    listened to again.
+    show it as detected (a dashed chip, "English (detected)") and are coloured by it.
+  - **A detected language never makes Arrmada replace a file.** It counts when it's a
+    language your profile asks for: a file whose untagged track is heard as your **Must**
+    language fits. A language it only seems to lack stays unknown, as before: it's never
+    upgraded, re-grabbed or counted in the save dialog for it. The badge still shows the
+    miss, and says it rests on a detection.
   - It runs one file at a time, only while no subtitle is being made, at idle priority, and
-    newly imported files go first. Switch it off under Settings → Subtitles → **Local AI
-    (whisper)** → **Identify untagged audio**. It's on by default, but does nothing until a
-    whisper model is installed.
+    newly imported files go first. It never runs whisper alongside a subtitle: when one
+    is waiting, it stops after the current sample and finishes the file later. Switch it
+    off under Settings → Subtitles → **Local AI (whisper)** → **Identify untagged audio**.
+    It's on by default, but does nothing until a whisper model is installed.
   - The AI subtitles' own check of an untagged track (before choosing transcribe or
     translate) now takes the same three-sample vote instead of one sample.
 - **Other files in a film's folder.** When a film's folder holds a video Arrmada doesn't use

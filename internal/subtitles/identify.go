@@ -2,10 +2,15 @@ package subtitles
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/tristenlammi/arrmada/internal/toolrun"
 )
 
 // Identifying untagged audio (issue #90).
@@ -20,8 +25,10 @@ import (
 // that changes (size or mtime) is probed afresh, so it's listened to again.
 //
 // It's background work in every sense: one file at a time, only while no subtitle job is
-// queued or running, ffmpeg and whisper at the tool runner's idle priority. It needs the
-// local AI (whisper and a model) and the setting below; without either it does nothing.
+// queued or running, ffprobe, ffmpeg and whisper at the tool runner's idle priority. It
+// never runs whisper beside a subtitle job's (Service.gpu): it gives way between samples
+// when a job is waiting, and puts the file back to finish later. It needs the local AI
+// (whisper and a model) and the setting below; without either it does nothing.
 
 // keyIdentifyAudio switches the pass. On by default, like the rest of the module: it
 // only runs where the local AI is installed, and a library's untagged tracks are each
@@ -46,9 +53,10 @@ const (
 var commentaryRe = regexp.MustCompile(`(?i)\bcommentary\b`)
 
 // fileDetector is an aiRunner that can listen to an audio stream of a video directly
-// (whisperGen.detectFile).
+// (whisperGen.detectFile). stop is asked before each sample; when it says so the
+// detection gives way (errGaveWay).
 type fileDetector interface {
-	detectFile(ctx context.Context, ffmpeg, video string, stream int, total time.Duration) (DetectedLang, error)
+	detectFile(ctx context.Context, ffmpeg, video string, stream int, total time.Duration, stop func() bool) (DetectedLang, error)
 }
 
 // audioIdentify is the pass's state: the files waiting to be looked at, imports first.
@@ -58,6 +66,8 @@ type audioIdentify struct {
 	queued map[string]bool
 	failed map[string]int // listening failures by path, this process
 	wake   chan struct{}
+	// walking: a walk of the whole library is listing files now (identifyLibrary).
+	walking atomic.Bool
 	// idleWait replaces identifyIdleWait (tests).
 	idleWait time.Duration
 }
@@ -72,15 +82,24 @@ func (s *Service) IdentifyAudioOn(ctx context.Context) bool {
 }
 
 // SetIdentifyAudio switches the background identification. Switching it on queues the
-// library straight away rather than at the next library pass.
+// library straight away rather than at the next library pass — unless a walk is already
+// running or its files are still waiting.
 func (s *Service) SetIdentifyAudio(ctx context.Context, on bool) error {
 	if err := s.settings.SetBool(ctx, keyIdentifyAudio, on); err != nil {
 		return err
 	}
-	if on {
+	if on && !s.identifyPending() {
 		go s.identifyLibrary(context.WithoutCancel(ctx))
 	}
 	return nil
+}
+
+// identifyPending reports a library walk under way, or files waiting for the worker.
+func (s *Service) identifyPending() bool {
+	q := &s.identify
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.walking.Load() || len(q.queue) > 0
 }
 
 // identifier is what can listen, or nil when the pass must not run: switched off, or no
@@ -97,16 +116,16 @@ func (s *Service) identifier(ctx context.Context) fileDetector {
 	return det
 }
 
-// tracksToIdentify are a probe's audio tracks the pass listens to: untagged, not a
-// commentary, and not listened to before (by the pass or the subtitle AI; an unsure
-// answer counts — it isn't asked again).
+// tracksToIdentify are a probe's audio tracks the pass listens to: untagged (not "zxx",
+// which has no language), not a commentary, and not listened to before (by the pass or
+// the subtitle AI; an unsure answer counts — it isn't asked again).
 func tracksToIdentify(mi *mediaInfo) []AudioTrack {
 	if mi == nil {
 		return nil
 	}
 	var out []AudioTrack
 	for _, t := range mi.Audio {
-		if _, heard := mi.Detected[t.Index]; heard || !t.untagged() || commentaryRe.MatchString(t.Title) {
+		if _, heard := mi.Detected[t.Index]; heard || !t.listenable() || commentaryRe.MatchString(t.Title) {
 			continue
 		}
 		out = append(out, t)
@@ -172,18 +191,51 @@ func (s *Service) dropIdentifyQueue() {
 	q.mu.Unlock()
 }
 
-// identifyLibrary queues every movie and episode file. Called after each library pass;
-// files already listened to cost a cache read.
+// identifyLibrary queues the movie and episode files that may have something to listen
+// to. Called after each library pass; one walk at a time.
 func (s *Service) identifyLibrary(ctx context.Context) {
-	if s.identifier(ctx) == nil {
+	if s.identifier(ctx) == nil || !s.identify.walking.CompareAndSwap(false, true) {
 		return
 	}
+	defer s.identify.walking.Store(false)
 	files := s.repairFiles(ctx)
+	cached := s.cachedAudio(ctx)
 	items := make([]identifyItem, 0, len(files))
 	for _, f := range files {
+		if mi, ok := cached[f.path]; ok && len(tracksToIdentify(mi)) == 0 {
+			continue
+		}
 		items = append(items, identifyItem{f.path, f.job.Title})
 	}
 	s.queueIdentify(false, items...)
+}
+
+// cachedAudio is every current-version probe in the cache, by path, in one read, so a
+// walk skips the files with nothing left to listen to without a stat or a query each. A
+// file that has changed since its probe is caught by the import hook (a new file is an
+// import) or by the subtitle passes that probe it again.
+func (s *Service) cachedAudio(ctx context.Context) map[string]*mediaInfo {
+	out := map[string]*mediaInfo{}
+	if s.cache == nil || s.cache.db == nil {
+		return out
+	}
+	rows, err := s.cache.db.QueryContext(ctx, `SELECT path, info_json FROM subtitle_probe_cache`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path, infoJSON string
+		if rows.Scan(&path, &infoJSON) != nil {
+			continue
+		}
+		var mi mediaInfo
+		if json.Unmarshal([]byte(infoJSON), &mi) != nil || mi.ProbeVersion < probeVersion {
+			continue
+		}
+		out[path] = &mi
+	}
+	return out
 }
 
 // identifyImported queues a movie's file ahead of the library (the import hook).
@@ -272,9 +324,10 @@ func (s *Service) queueBusy() bool {
 
 // identifyFile listens to one file's untagged tracks and records what it heard. A file
 // that can't be probed is left for the next pass; one whisper can't listen to counts a
-// failure.
+// failure. When a subtitle job turns up, it stops between samples, keeps what it has
+// heard, and puts the file back at the front to finish once the queue is idle again.
 func (s *Service) identifyFile(ctx context.Context, det fileDetector, it identifyItem) {
-	mi, err := s.probeFile(ctx, it.path)
+	mi, err := s.probeCachedAt(ctx, toolrun.Background, it.path)
 	if err != nil || mi == nil {
 		return
 	}
@@ -284,9 +337,24 @@ func (s *Service) identifyFile(ctx context.Context, det fileDetector, it identif
 	}
 	total := time.Duration(mi.DurationSec * float64(time.Second))
 	heard := map[int]DetectedLang{}
+	defer func() {
+		if len(heard) > 0 {
+			s.saveDetected(ctx, it.path, heard, nil)
+		}
+	}()
 	for _, t := range todo {
-		d, err := det.detectFile(ctx, s.ffmpeg, it.path, t.Index, total)
+		if s.queueBusy() {
+			s.queueIdentify(true, it)
+			return
+		}
+		s.gpu.Lock()
+		d, err := det.detectFile(ctx, s.ffmpeg, it.path, t.Index, total, s.queueBusy)
+		s.gpu.Unlock()
 		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, errGaveWay) {
+			s.queueIdentify(true, it)
 			return
 		}
 		if err != nil {
@@ -302,18 +370,23 @@ func (s *Service) identifyFile(ctx context.Context, det fileDetector, it identif
 		heard[t.Index] = d
 		s.event("info", heardLine(it.title, t.Index, d))
 	}
-	if len(heard) > 0 {
-		s.saveDetected(ctx, it.path, heard)
-	}
 }
 
-// saveDetected adds what was heard to the file's cached probe as it is now, keeping
-// anything a subtitle job heard meanwhile. A file that changed while it was listened to
-// is left alone: what was heard may not be in it, and the next pass listens again.
-func (s *Service) saveDetected(ctx context.Context, path string, heard map[int]DetectedLang) {
+// saveDetected adds what was heard to the file's cached probe as it is now — re-read, so
+// a detection written meanwhile (by a subtitle job or this pass) is kept, and the first
+// answer for a track stands. A file whose cached probe no longer matches it (changed while
+// it was listened to) is left alone: what was heard may not be in it. base is the probe
+// to write when there's no cache entry to merge into (a subtitle job's own probe, which
+// already holds what it heard); nil writes nothing then.
+func (s *Service) saveDetected(ctx context.Context, path string, heard map[int]DetectedLang, base *mediaInfo) {
+	s.detectedMu.Lock()
+	defer s.detectedMu.Unlock()
 	mi := s.cachedProbe(ctx, path)
 	if mi == nil {
-		return
+		if base == nil {
+			return
+		}
+		mi = base
 	}
 	if mi.Detected == nil {
 		mi.Detected = map[int]DetectedLang{}
