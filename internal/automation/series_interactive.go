@@ -809,9 +809,12 @@ type SeriesImportCandidate struct {
 
 // SeriesImportCandidates lists importable video files under dir (recursively), up to
 // library.ListMaxResults; truncated says there were more (or the walk was stopped).
-// It stops early when ctx ends — the caller checks ctx.Err().
-func (c *Coordinator) SeriesImportCandidates(ctx context.Context, dir string) ([]SeriesImportCandidate, bool) {
-	vids, truncated, _ := library.FindVideosCtx(ctx, dir, library.ListMaxResults, library.ListMaxVisited)
+// It stops early when ctx ends — the caller checks ctx.Err(). partly says some of dir
+// couldn't be read (library.ErrPartlyUnreadable): the list is what the rest holds, and
+// whoever picks from it should know there may be more.
+func (c *Coordinator) SeriesImportCandidates(ctx context.Context, dir string) (cands []SeriesImportCandidate, truncated, partly bool) {
+	vids, truncated, err := library.FindVideosCtx(ctx, dir, library.ListMaxResults, library.ListMaxVisited)
+	partly = errors.Is(err, library.ErrPartlyUnreadable)
 	out := make([]SeriesImportCandidate, 0, len(vids))
 	for _, v := range vids {
 		p := parser.Parse(filepath.Base(v.Path))
@@ -824,7 +827,7 @@ func (c *Coordinator) SeriesImportCandidates(ctx context.Context, dir string) ([
 			Season: p.Season, Episode: ep, SizeBytes: v.Size, Quality: string(p.Resolution),
 		})
 	}
-	return out, truncated
+	return out, truncated, partly
 }
 
 // ManualImportSeries imports one on-disk file into a series as its parsed episode.

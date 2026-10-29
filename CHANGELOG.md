@@ -476,18 +476,22 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     says its files are missing, and pick it up from its final folder once it's there.
     Import suggestions, unmanaged downloads and **Check paths** wait for the move too.
   - A TV download whose folder Arrmada can't read is tried again every sweep. It is never
-    blocklisted, its grab stays as it was, and if it stays unreadable it shows once in
-    **Needs you** with the folder and the error. Only a folder that was read and holds no
-    video is still treated as junk.
+    blocklisted, and its grab stays as it was. If it's still unreadable after five
+    minutes it shows once in **Needs you** with the folder and the error. A season pack
+    that was already imported and is only being re-read for the season's gaps is just
+    skipped. Only a folder that was read and holds no video is still treated as junk.
   - A download with a folder inside it that Arrmada can't open (the wrong owner, say) is
-    never judged to hold no video, so it is never blocklisted or deleted for it. Nothing is
-    imported from it until the whole of it can be read, because the folder it couldn't
+    held, and shown in **Needs you**, rather than partly imported. It is never judged to
+    hold no video, so it is never blocklisted or deleted for it. The folder it couldn't
     open may hold the episodes, or the film itself beside a featurette that would have
-    been taken in its place.
+    been taken in its place. A file that disappears while the folder is read (qBittorrent
+    renaming it as the torrent finishes) is just skipped.
   - Importing such a download from **Review** says Arrmada can't read the folder, instead of
-    "no video files were found".
-  - A torrent qBittorrent has been moving for over two hours shows in **Needs you**, since
-    it won't import until the move finishes.
+    "no video files were found". Choosing files by hand for a show lists what could be
+    read and says part of the folder couldn't be.
+  - A torrent qBittorrent has been moving for over two hours shows in **Needs you** as a
+    move that's taking too long, since it won't import until the move finishes. It isn't
+    counted as a stalled download and doesn't send a "stalled" alert.
 
   A release already blocklisted this way stays blocklisted. Remove it from the show's
   blocklist, and if its torrent is still in qBittorrent the next import picks it up.

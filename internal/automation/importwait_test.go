@@ -79,14 +79,21 @@ func TestSeriesImportRetriesAFolderItCantRead(t *testing.T) {
 		h.c.ImportSeriesDownloads(h.ctx)
 	}
 	h.assertWaiting(t, hash, gid)
+	// A minute of it is a blip, not something to show.
+	if fails := h.c.SeriesImportFailures(); len(fails) != 0 {
+		t.Fatalf("listed in Needs you within a minute: %+v", fails)
+	}
+	h.later(6 * time.Minute)
+	h.c.ImportSeriesDownloads(h.ctx)
+	h.assertWaiting(t, hash, gid)
 	fails := h.c.SeriesImportFailures()
-	if len(fails) != 1 || fails[0].Attempts != 3 || !strings.Contains(fails[0].LastErr, where) ||
+	if len(fails) != 1 || fails[0].Attempts != 4 || !strings.Contains(fails[0].LastErr, where) ||
 		!strings.Contains(fails[0].LastErr, "can't read the download folder") {
-		t.Fatalf("Needs you should list it once, naming the folder, after three sweeps: %+v", fails)
+		t.Fatalf("Needs you should list it once, naming the folder, after six minutes: %+v", fails)
 	}
 	// Said once an hour, not every 30 seconds.
 	if n := strings.Count(logged.String(), "can't read the download folder"); n != 1 {
-		t.Errorf("logged %d times in three sweeps, want once", n)
+		t.Errorf("logged %d times in four sweeps, want once", n)
 	}
 	h.later(61 * time.Minute)
 	h.c.ImportSeriesDownloads(h.ctx)
@@ -187,6 +194,41 @@ func TestSeriesImportLeavesMissingFilesAlone(t *testing.T) {
 	h.assertWaiting(t, hash, gid)
 }
 
+// A season pack already imported, re-read because its season still has gaps, whose folder
+// can't be read now: it's in the library, so it isn't an import that keeps failing. It's
+// skipped (logged once an hour), never blocklisted, and its grab stays imported.
+func TestSeriesImportSkipsAnImportedPackItCantRead(t *testing.T) {
+	h := newLifecycleHarness(t)
+	var logged syncBuffer
+	h.c.log = slog.New(slog.NewTextHandler(&logged, nil))
+	gone := filepath.Join(t.TempDir(), "unmounted", waitPack)
+	hash := h.completedTorrent(waitPack, seriesCategory, gone)
+	gid := h.seriesGrab(t, waitPack, hash)
+	h.c.recordImportedHash(h.ctx, hash, waitPack, 1<<30)
+	h.c.setGrabStatusByHash(h.ctx, hash, waitPack, "series", grabStatusImported)
+
+	for range 3 {
+		h.c.ImportSeriesDownloads(h.ctx)
+	}
+	h.later(10 * time.Minute)
+	h.c.ImportSeriesDownloads(h.ctx)
+	if fails := h.c.SeriesImportFailures(); len(fails) != 0 {
+		t.Errorf("an imported pack is listed as a failing import: %+v", fails)
+	}
+	if n := h.blocklistCount(t); n != 0 {
+		t.Errorf("%d release(s) blocklisted", n)
+	}
+	if got := h.status(t, gid); got != grabStatusImported {
+		t.Errorf("grab status = %q, want it still %q", got, grabStatusImported)
+	}
+	if h.deleted(hash) {
+		t.Errorf("the download was removed: %v", h.qbit.callLog())
+	}
+	if n := strings.Count(logged.String(), "can't read an imported pack's folder"); n != 1 {
+		t.Errorf("logged %d times, want once", n)
+	}
+}
+
 // A folder inside the download that Arrmada isn't allowed into: the rest of the download
 // is readable and holds no video, which used to read as junk — blocklisted, and its data
 // deleted with the episodes still inside the folder it couldn't open. Now nothing is
@@ -211,9 +253,9 @@ func TestSeriesImportNeverJudgesAPartlyUnreadableDownload(t *testing.T) {
 	hash := h.completedTorrent(waitPack, seriesCategory, dir)
 	gid := h.seriesGrab(t, waitPack, hash)
 
-	for range 2 {
-		h.c.ImportSeriesDownloads(h.ctx)
-	}
+	h.c.ImportSeriesDownloads(h.ctx)
+	h.later(6 * time.Minute)
+	h.c.ImportSeriesDownloads(h.ctx)
 	h.assertWaiting(t, hash, gid)
 	if fails := h.c.SeriesImportFailures(); len(fails) != 1 || !strings.Contains(fails[0].LastErr, "Season 1") {
 		t.Errorf("Needs you should name the folder that couldn't be read: %+v", fails)
@@ -258,6 +300,11 @@ func TestSeriesImportHoldsAPackWithAnUnreadableFolder(t *testing.T) {
 	h.assertWaiting(t, hash, gid)
 	if evs := h.seriesEvents(t); hasEvent(evs, "imported", "") {
 		t.Errorf("episodes were placed from a download only part of which was read: %+v", evs)
+	}
+	// Picking by hand still lists what could be read, and says part of it couldn't be.
+	cands, _, partly := h.c.SeriesImportCandidates(h.ctx, dir)
+	if len(cands) != 2 || !partly {
+		t.Errorf("hand-import list = %d files, partly %v; want both episodes and partly", len(cands), partly)
 	}
 
 	// Once the folder can be read, the pack imports.

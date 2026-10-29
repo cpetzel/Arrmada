@@ -12,8 +12,9 @@ import (
 
 // Imports wait while qBittorrent moves a torrent out of its incomplete folder, so a move
 // that never finishes would leave a finished download that never imports and nothing
-// saying why. After MovingStuckAfter it's in Needs you, with no "another release" offered
-// (the download is here; the move is what's stuck), and it goes once the move finishes.
+// saying why. After MovingStuckAfter it's in Needs you as its own kind (not a stall: no
+// stall alert, no "another release"; the download is here, the move is what's stuck), and
+// it goes once the move finishes.
 func TestMovingTorrentNeedsYouAfterTwoHours(t *testing.T) {
 	clk := &clock{t: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	moving := download.Item{Hash: "H", Name: "Show.S01.1080p", RawState: "moving", State: "checking", Progress: 1}
@@ -47,8 +48,15 @@ func TestMovingTorrentNeedsYouAfterTwoHours(t *testing.T) {
 		t.Fatalf("after the limit: %+v", snap)
 	}
 	it := snap.Items[0]
-	if it.Kind != KindStalled || it.Grabbed || !strings.Contains(it.Title, "moving Show.S01.1080p") || it.Level != LevelWarning {
+	if it.Kind != KindMoving || it.Grabbed || !strings.Contains(it.Title, "moving Show.S01.1080p for over 2h") || it.Level != LevelWarning {
 		t.Errorf("item = %+v", it)
+	}
+	// Not a stall: not counted or titled as one, and no "stalled" push.
+	if len(snap.Groups) != 1 || strings.Contains(snap.Groups[0].Title, "stalled") {
+		t.Errorf("groups = %+v, want one that doesn't say stalled", snap.Groups)
+	}
+	if ev := eventFor(it); ev != "" {
+		t.Errorf("a stuck move raises %q, want no alert", ev)
 	}
 
 	// The move finishes: it seeds, and the item goes.

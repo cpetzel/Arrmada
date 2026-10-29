@@ -22,6 +22,7 @@ var groupLinks = map[string]*health.Fix{
 	KindReview:   health.FixReview,
 	KindDownload: health.FixDownloadProblems,
 	KindStalled:  health.FixDownloadProblems,
+	KindMoving:   health.FixDownloadProblems,
 	KindImport:   health.FixImportProblems,
 	KindWrongCat: health.FixWrongCategory,
 	KindSearch:   health.FixDownloadsSearching,
@@ -263,10 +264,12 @@ func (p *downloadsProvider) Collect(_ context.Context, f *Frame) ([]Item, error)
 			if f.Now.Sub(first) < MovingStuckAfter {
 				continue
 			}
-			// Not Grabbed: there's nothing to fail over to. The download is here; it's the
+			// Its own kind, not a stall: nobody needs to send it data, so the stall alert, the
+			// "has stalled" count and the card's Reannounce / Recheck would all be wrong. Not
+			// Grabbed: there's nothing to fail over to. The download is here; it's the
 			// move that's stuck, and only qBittorrent (or the disk) can finish it.
-			x := Item{Key: KindStalled + ":" + h, Kind: KindStalled, Level: LevelWarning, Name: name,
-				Title:  "qBittorrent has been moving " + name + " for " + roughDuration(f.Now.Sub(first)),
+			x := Item{Key: KindMoving + ":" + h, Kind: KindMoving, Level: LevelWarning, Name: name,
+				Title:  "qBittorrent has been moving " + name + " for over " + roughDuration(f.Now.Sub(first)),
 				Detail: "It won't import until the move finishes. Check qBittorrent and the disk it's moving to (full, slow, or gone).",
 				Since:  first.UnixMilli(), Hash: h}
 			linkTo(&x, health.FixDownloadProblems)

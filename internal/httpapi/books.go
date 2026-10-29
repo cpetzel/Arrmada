@@ -331,7 +331,7 @@ func (a *api) handleBookManualImportList(w http.ResponseWriter, r *http.Request)
 	if cands == nil {
 		cands = []automation.BookImportCandidate{}
 	}
-	a.writeImportList(w, r, ctx, "books", dir, cands, truncated)
+	a.writeImportList(w, r, ctx, "books", dir, cands, truncated, "")
 }
 
 func (a *api) handleBookManualImport(w http.ResponseWriter, r *http.Request) {

@@ -1196,8 +1196,11 @@ func FindVideos(contentPath string) ([]FoundVideo, error) {
 // contentPath is an error, as it always was.
 //
 // So is any part of it that couldn't be read: a folder inside it Arrmada isn't allowed
-// into, or an entry that vanished mid-walk. The walk carries on, and what it found in the
-// rest is returned with the first such error (ErrPartlyUnreadable). It used to skip those
+// into or can't list, or a file it can't stat (I/O error, permissions). The walk carries
+// on, and what it found in the rest is returned with the first such error
+// (ErrPartlyUnreadable). A file that was listed and is gone by the time it's looked at is
+// simply skipped: qBittorrent renames "x.mkv.!qB" to "x.mkv" as a torrent completes, and
+// that rename isn't a download Arrmada can't read. It used to skip all of those
 // in silence, so a download whose episodes were all in an unreadable folder read as one
 // with no video, which is what gets a release blocklisted and its data deleted. A caller
 // deciding anything from the result treats an error as "can't tell"; one that only lists
@@ -1230,9 +1233,11 @@ func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisit
 		if d.IsDir() || !isVideo(p) {
 			return nil
 		}
-		fi, e := d.Info()
+		fi, e := entryInfo(d)
 		if e != nil {
-			unread = firstUnreadable(unread, e)
+			if !errors.Is(e, fs.ErrNotExist) {
+				unread = firstUnreadable(unread, e)
+			}
 			return nil
 		}
 		if !ListedEpisodeVideo(p, fi.Size()) {
@@ -1254,6 +1259,9 @@ func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisit
 // ErrPartlyUnreadable marks a walk of a download that couldn't read all of it: what was
 // found is incomplete, so nothing may be concluded from what's missing.
 var ErrPartlyUnreadable = errors.New("part of the folder couldn't be read")
+
+// entryInfo stats a walked entry (a test makes one vanish between listing and stat).
+var entryInfo = func(d fs.DirEntry) (fs.FileInfo, error) { return d.Info() }
 
 // firstUnreadable keeps the first error a walk met (wrapped in ErrPartlyUnreadable); it
 // names the folder or file that failed, which is what a person needs to fix it.
@@ -2168,9 +2176,11 @@ func pickMediaFile(contentPath string, strict bool) (string, int64, error) {
 		if d.IsDir() || !isVideo(p) {
 			return nil
 		}
-		fi, e := d.Info()
+		fi, e := entryInfo(d)
 		if e != nil {
-			unread = firstUnreadable(unread, e)
+			if !errors.Is(e, fs.ErrNotExist) {
+				unread = firstUnreadable(unread, e)
+			}
 			return nil
 		}
 		if isSampleName(p) || fi.Size() < minVideoSize {

@@ -1077,7 +1077,7 @@ func (a *api) handleManualImportList(w http.ResponseWriter, r *http.Request) {
 	if cands == nil {
 		cands = []movies.ImportCandidate{}
 	}
-	a.writeImportList(w, r, ctx, "movies", dir, cands, truncated)
+	a.writeImportList(w, r, ctx, "movies", dir, cands, truncated, "")
 }
 
 func (a *api) handleManualImport(w http.ResponseWriter, r *http.Request) {

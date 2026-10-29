@@ -989,7 +989,7 @@ export interface SystemHealth {
 
 // The Needs-you feed (GET /api/v1/attention, staff only): what's waiting on a person.
 export type AttentionKind =
-  | "request" | "review" | "download" | "stalled" | "import" | "wrongcat" | "search" | "health" | "convert" | "issue" | "subtitles";
+  | "request" | "review" | "download" | "stalled" | "moving" | "import" | "wrongcat" | "search" | "health" | "convert" | "issue" | "subtitles";
 export interface AttentionCounts {
   requests: number;
   reviews: number;

@@ -59,10 +59,13 @@ func importListContext(r *http.Request) (context.Context, context.CancelFunc) {
 
 // writeImportList answers a manual-import listing with what the bounded walk found.
 // truncated tells the UI to say "showing the first 500"; a walk that ran out of time
-// returns what it had, marked truncated with a note. A browser that has already gone
-// gets nothing.
-func (a *api) writeImportList(w http.ResponseWriter, r *http.Request, ctx context.Context, kind, dir string, cands any, truncated bool) {
+// returns what it had, marked truncated with a note. note, when set, is said with the list
+// (part of the folder couldn't be read). A browser that has already gone gets nothing.
+func (a *api) writeImportList(w http.ResponseWriter, r *http.Request, ctx context.Context, kind, dir string, cands any, truncated bool, note string) {
 	resp := map[string]any{"path": dir, "candidates": cands, "truncated": truncated}
+	if note != "" {
+		resp["note"] = note
+	}
 	if err := ctx.Err(); err != nil {
 		if rerr := r.Context().Err(); rerr != nil {
 			// No path in the line: it can name a book, and this is about the walk.

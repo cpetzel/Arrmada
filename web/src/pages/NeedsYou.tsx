@@ -18,9 +18,9 @@ import { IMPORT_FOLLOW_MS, ImportingLine, ReviewsPanel, TargetPicker, kindLabelO
 // so this tab adds no polling of its own. Each section has an id the Dashboard card and
 // health Fix links point at (/activity/needs-you#stalled).
 
-const STALLED_KINDS = new Set(["stalled", "download"]);
+const STALLED_KINDS = new Set(["stalled", "download", "moving"]);
 // What the other sections of the feed are, for the "Elsewhere" footer.
-const HERE = new Set(["review", "import", "stalled", "download", "wrongcat"]);
+const HERE = new Set(["review", "import", "stalled", "download", "moving", "wrongcat"]);
 
 export function NeedsYouPanel() {
   const att = useAttention();
@@ -50,8 +50,8 @@ export function NeedsYouPanel() {
       <Section id="import-failures" title="Imports failing" count={imports.length} hint="Finished downloads whose import keeps failing — usually a folder Arrmada can't write to, or a full disk. Fix the cause, then retry.">
         {imports.length === 0 ? <Empty>No import is failing.</Empty> : imports.map((it) => <ImportFailureCard key={it.key} it={it} />)}
       </Section>
-      <Section id="stalled" title="Stalled or errored" count={stalled.length} hint="Downloads nobody has sent data for an hour, or that the client stopped with an error.">
-        {stalled.length === 0 ? <Empty>Every download is moving.</Empty> : stalled.map((it) => <StalledCard key={it.key} it={it} />)}
+      <Section id="stalled" title="Stalled or errored" count={stalled.length} hint="Downloads nobody has sent data for an hour, that the client stopped with an error, or that qBittorrent has been moving for hours.">
+        {stalled.length === 0 ? <Empty>Every download is moving.</Empty> : stalled.map((it) => (it.kind === "moving" ? <MovingCard key={it.key} it={it} /> : <StalledCard key={it.key} it={it} />))}
       </Section>
       <Section id="wrong-category" title="Wrong category" count={wrong.length} hint="Finished TV downloads filed where the series import never looks. Move them to TV and the next import check takes them.">
         {wrong.length === 0 ? <Empty>Nothing is filed in the wrong place.</Empty> : wrong.map((it) => <WrongCategoryCard key={it.key} it={it} />)}
@@ -153,6 +153,14 @@ function ImportFailureCard({ it }: { it: AttentionItem }) {
       secondary={[show]}
     />
   );
+}
+
+// MovingCard is a torrent qBittorrent has been moving for hours (out of its incomplete
+// folder, most often). Nothing here can finish a move: no Reannounce, Recheck or another
+// release, only where to find it. The fix is in qBittorrent or the disk it's moving to.
+function MovingCard({ it }: { it: AttentionItem }) {
+  const show = useShowInQueue("finishing");
+  return <ProblemCard it={it} secondary={[show]} />;
 }
 
 function StalledCard({ it }: { it: AttentionItem }) {

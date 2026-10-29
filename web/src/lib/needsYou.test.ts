@@ -37,4 +37,14 @@ describe("needsYouRows", () => {
     expect(rows[2].detail).toBe("permission denied");
     expect(rows[3].to).toBe(LINKS.downloadProblems);
   });
+
+  it("gives a torrent qBittorrent is stuck moving its own counted line, not a stalled one", () => {
+    const rows = needsYouRows({
+      ...base,
+      groups: [{ kind: "moving", level: "warning", count: 1, title: "1 download has been moving in qBittorrent for over 2 hours", link: "/activity/queue?filter=problems", link_key: "downloadProblems" }],
+      items: [{ key: "moving:abc", kind: "moving", level: "warning", title: "qBittorrent has been moving X for over 2h", since: 1 }],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ key: "group:moving", text: "1 download has been moving in qBittorrent for over 2 hours", action: "See it" });
+  });
 });

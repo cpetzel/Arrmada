@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,5 +73,40 @@ func TestWalksOfAReadableFolderHaveNoError(t *testing.T) {
 	}
 	if _, err := FindVideos(filepath.Join(dir, "missing")); err == nil || errors.Is(err, ErrPartlyUnreadable) {
 		t.Errorf("a missing folder: err = %v, want the stat error", err)
+	}
+}
+
+// A file listed and gone by the time it's looked at (qBittorrent renaming "x.mkv.!qB" as a
+// torrent completes, a sample deleted by hand) is skipped: it isn't a part of the download
+// Arrmada can't read, and holding the download for it would hold it for nothing. A file
+// that's there but can't be looked at (an I/O error, permissions) still is one.
+func TestWalksSkipAFileThatVanished(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "Show.S01E01.mkv"), 60<<20)
+	writeFile(t, filepath.Join(dir, "Show.S01E02.mkv"), 60<<20)
+	fail := fs.ErrNotExist
+	orig := entryInfo
+	entryInfo = func(d fs.DirEntry) (fs.FileInfo, error) {
+		if d.Name() == "Show.S01E02.mkv" {
+			return nil, &fs.PathError{Op: "lstat", Path: d.Name(), Err: fail}
+		}
+		return d.Info()
+	}
+	t.Cleanup(func() { entryInfo = orig })
+
+	vids, err := FindVideos(dir)
+	if err != nil || len(vids) != 1 || filepath.Base(vids[0].Path) != "Show.S01E01.mkv" {
+		t.Errorf("a vanished file: FindVideos = %+v, %v; want the other episode and no error", vids, err)
+	}
+	if got, _, err := findMediaFile(dir); err != nil || filepath.Base(got) != "Show.S01E01.mkv" {
+		t.Errorf("a vanished file: findMediaFile = %q, %v", got, err)
+	}
+
+	fail = fs.ErrPermission
+	if _, err := FindVideos(dir); !errors.Is(err, ErrPartlyUnreadable) {
+		t.Errorf("a file that can't be stat'd: err = %v, want ErrPartlyUnreadable", err)
+	}
+	if _, _, err := findMediaFile(dir); !errors.Is(err, ErrPartlyUnreadable) {
+		t.Errorf("a file that can't be stat'd: findMediaFile err = %v, want ErrPartlyUnreadable", err)
 	}
 }

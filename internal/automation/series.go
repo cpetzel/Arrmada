@@ -1198,7 +1198,8 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 		// partly extracted the first time, before the recursive-unpack fix), give it
 		// another pass so it can fill the gaps. The per-episode quality gate in
 		// importSeriesInto keeps this from ping-ponging once the season is complete.
-		if c.hashAlreadyImported(ctx, it.Hash) {
+		reprocess := c.hashAlreadyImported(ctx, it.Hash)
+		if reprocess {
 			// PACKS only. A single-episode release can never fill a season's remaining
 			// gaps, so re-processing one just re-imports the episode it already provided,
 			// finds nothing new, and blocklists it as a pack that "can't complete the
@@ -1304,8 +1305,9 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 			// a folder Arrmada isn't allowed into, a path mapping that's missing) and most
 			// clear up by themselves, so nothing is decided: the grab stays grabbed, the
 			// download is tried again next sweep, and Needs you shows the folder and the
-			// error if it stays unreadable.
-			c.noteSeriesImportUnreadable(it, s.Title, scanErr)
+			// error if it stays unreadable. Not for a pack already imported and re-read for
+			// the season's gaps: it's in the library, so it's only logged.
+			c.noteSeriesImportUnreadable(it, s.Title, scanErr, reprocess)
 			continue
 		}
 		if conflict != "" {
