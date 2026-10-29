@@ -235,6 +235,9 @@ Edit Arrmada, switch on **Show more settings**, and set **Built-in qBittorrent**
 - **FlareSolverr off:** put your own FlareSolverr's address in **FlareSolverr URL**, or in
   Settings → Connections → FlareSolverr, for example `http://192.168.1.10:8191`.
 
+Want torrents to go through a VPN? Switch the built-in qBittorrent off and run your own
+behind Gluetun: [Downloading through a VPN](vpn.md#the-unraid-all-in-one-container).
+
 The built-in SABnzbd and Prowlarr are off already unless you switched them on; your own
 are added the same way as below.
 
