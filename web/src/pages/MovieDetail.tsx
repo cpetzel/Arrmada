@@ -2,7 +2,8 @@ import { Suspense, lazy, useCallback, useEffect, useId, useRef, useState, type R
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
 import { CastRow } from "../components/CastRow";
-import { shownOverview, shownTitle } from "../lib/displayTitle";
+import { releaseFacts, shownOverview, shownTitle } from "../lib/displayTitle";
+import { formatReleaseDay } from "../lib/format";
 import { AudioLangChips } from "../components/AudioLangChips";
 import { ReleaseSearchModal } from "../components/ReleaseSearchModal";
 import { UploadTorrentModal } from "../components/UploadTorrentModal";
@@ -693,6 +694,7 @@ function FactRow({ movie }: { movie: Movie }) {
   const ex = movie.extra;
   const [showCollection, setShowCollection] = useState(false);
   if (!ex) return null;
+  const releases = releaseFacts(ex.releases);
   return (
     <div className="mt-3 flex flex-col gap-2 text-sm">
       {ex.genres && ex.genres.length > 0 && (
@@ -711,6 +713,18 @@ function FactRow({ movie }: { movie: Movie }) {
           </button>
         )}
       </div>
+      {/* Cinema, digital and disc release dates (GH-93), with whose release each is; a film
+          read before they were kept gets them from the next refresh or the titles backfill. */}
+      {releases.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-ink-faint" aria-label="Release dates">
+          {releases.map((f) => (
+            <span key={f.label}>
+              <span className="text-ink-faint">{f.label}</span> <span className="text-ink-dim">{formatReleaseDay(f.date)}</span>
+              {f.country && <span className="ml-1 font-mono text-2xs" title={`${f.country} release`}>{f.country}</span>}
+            </span>
+          ))}
+        </div>
+      )}
       {showCollection && <CollectionModal movieId={movie.id} onClose={() => setShowCollection(false)} />}
     </div>
   );

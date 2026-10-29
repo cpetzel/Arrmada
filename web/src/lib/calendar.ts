@@ -64,9 +64,12 @@ export function episodeCode(season: number, episode: number): string {
   return `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
 }
 
-/** The line under a title: 'S02E05 · Episode name' or 'Movie · 2026'. */
+/** The line under a title: 'S02E05 · Episode name', 'Movie · 2026' or 'Digital release · 2026'. */
 export function itemLine(it: CalendarItem): string {
-  if (it.type === "movie") return it.year ? `Movie · ${it.year}` : "Movie";
+  if (it.type === "movie") {
+    const kind = it.release === "digital" ? "Digital release" : it.release === "physical" ? "Physical release" : "Movie";
+    return it.year ? `${kind} · ${it.year}` : kind;
+  }
   // An album: 'Artist · EP'.
   if (it.type === "album") return it.artist ? `${it.artist} · ${it.album_type || "Album"}` : it.subtitle;
   if (it.season == null || it.episode == null) return it.subtitle; // an older server
