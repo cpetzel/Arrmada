@@ -48,6 +48,7 @@ func (c *Coordinator) RSSSyncSeries(ctx context.Context) {
 	// nothing. The grab step judges by the same SearchFit, over the same snapshot.
 	fit := c.series.SearchFitFor(all)
 	ctx = withFit(ctx, fit)
+	ctx = withSameNameLibrary(ctx) // one read of the library for same-named shows (#81)
 	matches := rssMatchesFit(fit, all, res.Releases)
 	if len(matches) == 0 {
 		return
@@ -131,6 +132,7 @@ func (c *Coordinator) UpgradeSeries(ctx context.Context) {
 	if c.series == nil {
 		return
 	}
+	ctx = withSameNameLibrary(ctx) // one read of the library for same-named shows (#81)
 	all, err := c.series.List(ctx)
 	if err != nil {
 		return
@@ -302,7 +304,7 @@ func (c *Coordinator) upgradeSeries(ctx context.Context, seriesID int64, b *upgr
 	// S02E03 with what may be the revival's.
 	same, err := c.sameNameFor(ctx, s)
 	if err != nil {
-		c.skipUnreadable(s.Title, err)
+		c.skipSameNameUnreadable(s.Title, err)
 		return err
 	}
 	byName := make(map[string]indexer.Release, len(releases))
@@ -326,7 +328,7 @@ func (c *Coordinator) upgradeSeries(ctx context.Context, seriesID int64, b *upgr
 		}
 		if refuse, _ := same.refuses(rel); refuse {
 			droppedSameName++
-			notes.mark(rel.Title, DropWrongTitle)
+			notes.mark(rel.Title, DropSameName)
 			continue
 		}
 		byName[rel.Title] = rel

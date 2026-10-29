@@ -468,6 +468,12 @@ func (r *Repo) PruneSeasonsNotIn(ctx context.Context, seriesID int64, keep []int
 
 // SeasonsFor returns the seasons of a series (episodes attached), ordered.
 func (r *Repo) SeasonsFor(ctx context.Context, seriesID int64) ([]Season, error) {
+	return r.seasonsFor(ctx, seriesID, false)
+}
+
+// seasonsFor is SeasonsFor; strict also fails when the episodes can't be read, where
+// SeasonsFor returns the seasons without them.
+func (r *Repo) seasonsFor(ctx context.Context, seriesID int64, strict bool) ([]Season, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, season_number, name, overview, poster_url, monitored FROM seasons WHERE series_id = ? ORDER BY season_number`, seriesID)
 	if err != nil {
@@ -494,6 +500,9 @@ func (r *Repo) SeasonsFor(ctx context.Context, seriesID int64) ([]Season, error)
 		        converted_from_release, converted_from_size
 		 FROM episodes WHERE series_id = ? ORDER BY season_number, episode_number`, seriesID)
 	if err != nil {
+		if strict {
+			return nil, err
+		}
 		return seasons, nil
 	}
 	defer eps.Close()
@@ -502,12 +511,18 @@ func (r *Repo) SeasonsFor(ctx context.Context, seriesID int64) ([]Season, error)
 		var mon, hf, hold int
 		if err := eps.Scan(&e.ID, &e.SeasonNumber, &e.EpisodeNumber, &e.Title, &e.Overview, &e.AirDate, &e.Runtime, &e.StillURL, &mon, &hf, &e.FilePath, &e.SizeBytes, &e.AbsoluteNumber, &e.SourceRelease, &hold,
 			&e.ConvertedFromRelease, &e.ConvertedFromSize); err != nil {
+			if strict {
+				return nil, err
+			}
 			return seasons, nil
 		}
 		e.Monitored, e.HasFile, e.UpgradeHold = mon != 0, hf != 0, hold != 0
 		if i, ok := byNum[e.SeasonNumber]; ok {
 			seasons[i].Episodes = append(seasons[i].Episodes, e)
 		}
+	}
+	if err := eps.Err(); err != nil && strict {
+		return nil, err
 	}
 	return seasons, nil
 }

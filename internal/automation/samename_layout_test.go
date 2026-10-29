@@ -128,12 +128,42 @@ type importCase struct {
 	published string
 	// added: when the client added the torrent (0: not reported).
 	added time.Time
+	// setup changes the revival's stored episodes first (sameNameRig.apply).
+	setup string
 	want  string
+}
+
+// apply changes the revival's stored metadata:
+//
+//	stale       its season 2 lists only E01–E02 (a listing from before the rest was announced)
+//	bare        no seasons or episodes at all (just added, metadata not fetched yet)
+//	unreadable  its episode rows can't be read (a value of the wrong type in one column)
+func (r *sameNameRig) apply(t *testing.T, setup string) {
+	t.Helper()
+	var qs []string
+	switch setup {
+	case "":
+		return
+	case "stale":
+		qs = []string{`DELETE FROM episodes WHERE series_id = ? AND season_number = 2 AND episode_number > 2`}
+	case "bare":
+		qs = []string{`DELETE FROM episodes WHERE series_id = ?`, `DELETE FROM seasons WHERE series_id = ?`}
+	case "unreadable":
+		qs = []string{`UPDATE episodes SET runtime = 'not a number' WHERE series_id = ?`}
+	default:
+		t.Fatalf("unknown setup %q", setup)
+	}
+	for _, q := range qs {
+		if _, err := r.c.db.Exec(q, r.revival); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func (r *sameNameRig) runImport(t *testing.T, c importCase) string {
 	t.Helper()
 	ids := map[string]int64{"old": r.old, "revival": r.revival, "house": r.house, "lost": r.lost}
+	r.apply(t, c.setup)
 	files := c.files
 	if len(files) == 0 {
 		files = []string{c.release + ".mkv"}
@@ -211,27 +241,44 @@ func TestSameNameImportLayout(t *testing.T) {
 			want: ""},
 		{name: "old: yearless S02E03 upgrade, posted after the revival's S02E03", release: "Scrubs.S02E03.2160p.WEB-DL.x265-GRP", grabFor: "old",
 			published: "2026-09-01T00:00:00Z", added: now,
-			want: "held:mismatch"},
+			want: "held:same_name"},
 		{name: "old: yearless S02E03 upgrade, no publish date, added now", release: "Scrubs.S02E03.2160p.WEB-DL.x265-GRP", grabFor: "old",
-			added: now, want: "held:mismatch"},
+			added: now, want: "held:same_name"},
 		{name: "old: yearless S02E03 upgrade, no publish date, added 2015", release: "Scrubs.S02E03.2160p.WEB-DL.x265-GRP", grabFor: "old",
 			added: yearsAgo, want: ""},
 		{name: "old: yearless S02E04 (missing), no dates", release: "Scrubs.S02E04.1080p.WEB-DL.x264-GRP", grabFor: "old",
-			want: "held:mismatch"},
-		{name: "old: yearless S03E01, a season the revival doesn't have", release: "Scrubs.S03E01.1080p.WEB-DL.x264-GRP", grabFor: "old",
-			added: now, want: ""},
+			want: "held:same_name"},
+		// A season the revival doesn't list is ruled out only by the revival's premiere.
+		{name: "old: yearless S03E01 (the revival lists no S03), added now", release: "Scrubs.S03E01.1080p.WEB-DL.x264-GRP", grabFor: "old",
+			added: now, want: "held:same_name"},
+		{name: "old: yearless S03E01 (the revival lists no S03), posted 2015", release: "Scrubs.S03E01.1080p.WEB-DL.x264-GRP", grabFor: "old",
+			published: "2015-06-01T00:00:00Z", added: now, want: ""},
+		// Stale or missing sibling metadata.
+		{name: "old: yearless S02E03 posted 2026-09, revival lists S02 only to E02", release: "Scrubs.S02E03.2160p.WEB-DL.x265-GRP", grabFor: "old",
+			published: "2026-09-01T00:00:00Z", added: now, setup: "stale", want: "held:same_name"},
+		{name: "old: yearless S02E04 posted 2015, revival has no episodes yet", release: "Scrubs.S02E04.1080p.WEB-DL.x264-GRP", grabFor: "old",
+			published: "2015-06-01T00:00:00Z", added: now, setup: "bare", want: "held:same_name"},
+		{name: "old: yearless S02E03 posted 2015, revival's episodes unreadable", release: "Scrubs.S02E03.2160p.WEB-DL.x265-GRP", grabFor: "old",
+			published: "2015-06-01T00:00:00Z", added: now, setup: "unreadable", want: "nothing"},
+		// Multi-season packs.
+		{name: "old: yearless S01-S03 pack, posted 2015", release: "Scrubs.S01-S03.1080p.BluRay.x264-PACK", grabFor: "old",
+			files:     []string{"Scrubs.S01E01.1080p.BluRay.x264-PACK.mkv", "Scrubs.S01E02.1080p.BluRay.x264-PACK.mkv", "Scrubs.S01E03.1080p.BluRay.x264-PACK.mkv", "Scrubs.S01E04.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E01.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E02.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E03.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E04.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E01.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E02.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E03.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E04.1080p.BluRay.x264-PACK.mkv"},
+			published: "2015-06-01T00:00:00Z", added: now, want: ""},
+		{name: "old: yearless S01-S03 pack, posted after the revival premiered", release: "Scrubs.S01-S03.1080p.BluRay.x264-PACK", grabFor: "old",
+			files:     []string{"Scrubs.S01E01.1080p.BluRay.x264-PACK.mkv", "Scrubs.S01E02.1080p.BluRay.x264-PACK.mkv", "Scrubs.S01E03.1080p.BluRay.x264-PACK.mkv", "Scrubs.S01E04.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E01.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E02.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E03.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E04.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E01.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E02.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E03.1080p.BluRay.x264-PACK.mkv", "Scrubs.S03E04.1080p.BluRay.x264-PACK.mkv"},
+			published: "2026-05-01T00:00:00Z", added: now, want: "held:same_name"},
 		{name: "old: S02E04 stating 2001", release: "Scrubs.2001.S02E04.1080p.WEB-DL.x264-GRP", grabFor: "old",
 			added: now, want: ""},
 		{name: "revival: yearless S02E01, posted after it aired", release: "Scrubs.S02E01.1080p.WEB-DL.x264-GRP", grabFor: "revival",
-			published: "2026-08-06T00:00:00Z", added: now, want: "held:mismatch"},
+			published: "2026-08-06T00:00:00Z", added: now, want: "held:same_name"},
 		{name: "revival: yearless S02E01, posted 2015 (the 2001 show's)", release: "Scrubs.S02E01.1080p.WEB-DL.x264-GRP", grabFor: "revival",
-			published: "2015-06-01T00:00:00Z", added: now, want: "held:mismatch"},
+			published: "2015-06-01T00:00:00Z", added: now, want: "held:same_name"},
 		{name: "revival: S02E02 stating 2026", release: "Scrubs.2026.S02E02.1080p.WEB-DL.x264-GRP", grabFor: "revival",
 			added: now, want: ""},
 		{name: "revival: yearless season 2 pack", release: "Scrubs.S02.1080p.WEB-DL.x264-GRP", grabFor: "revival",
 			files: []string{"Scrubs.S02E01.1080p.WEB-DL.x264-GRP.mkv", "Scrubs.S02E02.1080p.WEB-DL.x264-GRP.mkv",
 				"Scrubs.S02E03.1080p.WEB-DL.x264-GRP.mkv", "Scrubs.S02E04.1080p.WEB-DL.x264-GRP.mkv"},
-			added: now, want: "held:mismatch"},
+			added: now, want: "held:same_name"},
 		{name: "revival: yearless S02E03 picked by hand", release: "Scrubs.S02E03.1080p.WEB-DL.x264-HAND", grabFor: "revival",
 			manual: true, added: now, want: ""},
 		{name: "not grabbed: yearless S02E02", release: "Scrubs.S02E02.1080p.WEB-DL.x264-GRP",
@@ -273,6 +320,7 @@ type searchCase struct {
 	show     string // "old" | "revival" | "house"
 	releases []indexer.Release
 	want     []string // what the fix grabs
+	setup    string   // sameNameRig.apply
 }
 
 func sameNameRel(title, published string) indexer.Release {
@@ -287,32 +335,43 @@ func sameNameRel(title, published string) indexer.Release {
 func TestSameNameSearchGrabs(t *testing.T) {
 	cases := []searchCase{
 		{"old: yearless S02E04 posted 2012", "old", []indexer.Release{sameNameRel("Scrubs.S02E04.1080p.WEB-DL.x264-GRP", "2012-01-01T00:00:00Z")},
-			[]string{"Scrubs.S02E04.1080p.WEB-DL.x264-GRP"}},
+			[]string{"Scrubs.S02E04.1080p.WEB-DL.x264-GRP"}, ""},
 		{"old: yearless S02E04 posted after the revival's", "old", []indexer.Release{sameNameRel("Scrubs.S02E04.1080p.WEB-DL.x264-GRP", "2026-09-01T00:00:00Z")},
-			nil},
+			nil, ""},
 		{"old: yearless S02E04 with no publish date", "old", []indexer.Release{sameNameRel("Scrubs.S02E04.1080p.WEB-DL.x264-GRP", "")},
-			nil},
+			nil, ""},
 		{"old: S02E04 stating 2001, no date", "old", []indexer.Release{sameNameRel("Scrubs.2001.S02E04.1080p.WEB-DL.x264-GRP", "")},
-			[]string{"Scrubs.2001.S02E04.1080p.WEB-DL.x264-GRP"}},
+			[]string{"Scrubs.2001.S02E04.1080p.WEB-DL.x264-GRP"}, ""},
 		{"old: dated and undated side by side", "old", []indexer.Release{
 			sameNameRel("Scrubs.S02E04.2160p.WEB-DL.x265-NEW", "2026-09-01T00:00:00Z"),
 			sameNameRel("Scrubs.S02E04.1080p.WEB-DL.x264-OLDER", "2010-01-01T00:00:00Z")},
-			[]string{"Scrubs.S02E04.1080p.WEB-DL.x264-OLDER"}},
+			[]string{"Scrubs.S02E04.1080p.WEB-DL.x264-OLDER"}, ""},
 		{"revival: yearless S02E03 posted 2015", "revival", []indexer.Release{sameNameRel("Scrubs.S02E03.1080p.WEB-DL.x264-GRP", "2015-01-01T00:00:00Z")},
-			nil},
+			nil, ""},
 		{"revival: yearless S02E03 posted after airing", "revival", []indexer.Release{sameNameRel("Scrubs.S02E03.1080p.WEB-DL.x264-GRP", "2026-08-20T00:00:00Z")},
-			nil},
+			nil, ""},
 		{"revival: S02E03 stating 2026", "revival", []indexer.Release{sameNameRel("Scrubs.2026.S02E03.1080p.WEB-DL.x264-GRP", "")},
-			[]string{"Scrubs.2026.S02E03.1080p.WEB-DL.x264-GRP"}},
+			[]string{"Scrubs.2026.S02E03.1080p.WEB-DL.x264-GRP"}, ""},
+		{"old: yearless S03E02 posted 2012 (the revival lists no S03)", "old", []indexer.Release{sameNameRel("Scrubs.S03E02.1080p.WEB-DL.x264-GRP", "2012-01-01T00:00:00Z")},
+			[]string{"Scrubs.S03E02.1080p.WEB-DL.x264-GRP"}, ""},
+		{"old: yearless S03E02 posted after the revival premiered (it lists no S03)", "old", []indexer.Release{sameNameRel("Scrubs.S03E02.1080p.WEB-DL.x264-GRP", "2026-09-01T00:00:00Z")},
+			nil, ""},
+		{"old: yearless S02E04 posted 2026-09, revival lists S02 only to E02", "old", []indexer.Release{sameNameRel("Scrubs.S02E04.1080p.WEB-DL.x264-GRP", "2026-09-01T00:00:00Z")},
+			nil, "stale"},
+		{"old: yearless S02E04 posted 2012, revival has no episodes yet", "old", []indexer.Release{sameNameRel("Scrubs.S02E04.1080p.WEB-DL.x264-GRP", "2012-01-01T00:00:00Z")},
+			nil, "bare"},
+		{"old: yearless S02E04 posted 2012, revival's episodes unreadable", "old", []indexer.Release{sameNameRel("Scrubs.S02E04.1080p.WEB-DL.x264-GRP", "2012-01-01T00:00:00Z")},
+			nil, "unreadable"},
 		{"control House: yearless S02E04 no date", "house", []indexer.Release{sameNameRel("House.S02E04.1080p.WEB-DL.x264-GRP", "")},
-			[]string{"House.S02E04.1080p.WEB-DL.x264-GRP"}},
+			[]string{"House.S02E04.1080p.WEB-DL.x264-GRP"}, ""},
 		{"control House: yearless S02E04 posted 1999", "house", []indexer.Release{sameNameRel("House.S02E04.1080p.WEB-DL.x264-GRP", "1999-01-01T00:00:00Z")},
-			[]string{"House.S02E04.1080p.WEB-DL.x264-GRP"}},
+			[]string{"House.S02E04.1080p.WEB-DL.x264-GRP"}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newSameNameRig(t)
 			ids := map[string]int64{"old": r.old, "revival": r.revival, "house": r.house}
+			r.apply(t, c.setup)
 			s, err := r.c.series.Get(r.ctx, ids[c.show])
 			if err != nil {
 				t.Fatal(err)

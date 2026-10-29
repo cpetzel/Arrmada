@@ -17,6 +17,7 @@ const KIND_LABEL: Record<ReviewKind, string> = { series: "show", movie: "movie",
 // Each reason's chip, and the one-line hint of what to do about it.
 const REASON: Record<ReviewReason, { label: string; tone: Tone }> = {
   mismatch: { label: "Doesn't match", tone: "avoid" },
+  same_name: { label: "Which show?", tone: "avoid" },
   unmatched: { label: "Not linked", tone: "faint" },
   numbering: { label: "Numbering", tone: "accent" },
   title_conflict: { label: "Titles disagree", tone: "accent" },
@@ -431,7 +432,7 @@ function ReviewCard({ r, busy: acting, importJob, importError, onImportDone, sel
             <button onClick={onReassign} disabled={busy} className={btn} style={accent}>Match…</button>
           </>
         )}
-        {!scanned && r.reason_code === "mismatch" && (
+        {!scanned && (r.reason_code === "mismatch" || r.reason_code === "same_name") && (
           <>
             {linked && <button onClick={onImport} disabled={busy} className={btn} style={primary}>Import anyway</button>}
             <button onClick={onReassign} disabled={busy} className={btn} style={accent}>Choose different {label}…</button>

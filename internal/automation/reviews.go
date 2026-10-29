@@ -137,6 +137,10 @@ const (
 	// disagree, so placing it would put a file on the wrong episode (titleConflict).
 	// Offers the same Map files… as ReasonNumbering.
 	ReasonTitleConflict = "title_conflict"
+	// ReasonSameName: grabbed for a show another library show shares its name with, and
+	// the release doesn't say which of them it is (#81). Offers what ReasonMismatch does;
+	// importing it confirms the show, not the quality, so the import gate still applies.
+	ReasonSameName = "same_name"
 	// ReasonImportFailed: the import itself keeps failing (a folder it can't write, a full disk).
 	ReasonImportFailed = "import_failed"
 	// ReasonNoMedia: nothing importable inside — still archived, or unreadable.
@@ -807,7 +811,13 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 		}
-		placed, matched, unresolved, failed, conflict, scanErr := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
+		force := forceAll
+		if r.ReasonCode == ReasonSameName {
+			// The person said which show it is; whether it beats the file there is still
+			// the profile's call, as for any automatic grab.
+			force = forceRule{Target: WholeShow}
+		}
+		placed, matched, unresolved, failed, conflict, scanErr := c.importSeriesInto(ctx, s, r.ContentPath, force)
 		if scanErr != nil {
 			// "No video files were found" sent people looking at the release when the
 			// folder (or one inside it) is one Arrmada can't read.

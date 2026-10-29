@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Job, SearchAttempt, SearchOutcome } from "./api";
-import { attemptLine, emptyTriesText, latestPerScope, nextTryText, outcomeLine, reasonsText, searchFinishedFor, searchJobLine } from "./searchOutcome";
+import { SAME_NAME_HINT, attemptLine, emptyTriesText, latestPerScope, nextTryText, outcomeLine, reasonsText, searchFinishedFor, searchJobLine } from "./searchOutcome";
 
 const now = Date.parse("2026-10-09T12:00:00Z");
 const attempt = (over: Partial<SearchAttempt>): SearchAttempt => ({
@@ -23,6 +23,17 @@ describe("attemptLine", () => {
     expect(attemptLine(attempt({ outcome: "indexers_failed", indexer_errors: { B: "x", A: "y" } }), now)).toBe("Last search 2 h ago — Every indexer failed: A, B — not counted as a miss");
     expect(attemptLine(attempt({ outcome: "skipped_in_flight", example: "Show.S03.1080p" }), now)).toBe("Last search 2 h ago — Not searched — already downloading Show.S03.1080p");
     expect(attemptLine(attempt({}), now)).toBe("Last search 2 h ago — No releases found");
+  });
+
+  it("says why a show sharing its name with another skipped releases (#81)", () => {
+    const a = attempt({ media_type: "series", outcome: "none_suitable", returned: 4, reasons: { same_name: 3, wrong_title: 1 } });
+    expect(attemptLine(a, now)).toBe(
+      "Last search 2 h ago — Found 4 releases — 3 that could be a same-named show's, 1 for other titles. " + SAME_NAME_HINT,
+    );
+    // No hint once something was grabbed, or when no release was skipped for it.
+    expect(attemptLine(attempt({ outcome: "grabbed", grabbed: 1, grabbed_titles: ["Scrubs.2001.S02E04"], reasons: { same_name: 2 } }), now))
+      .toBe("Last search 2 h ago — Grabbed Scrubs.2001.S02E04");
+    expect(attemptLine(attempt({ outcome: "none_suitable", returned: 2, reasons: { wrong_title: 2 } }), now)).not.toContain(SAME_NAME_HINT);
   });
 });
 

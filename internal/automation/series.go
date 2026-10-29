@@ -161,6 +161,7 @@ func (c *Coordinator) SearchSeriesMissing(ctx context.Context) {
 		return
 	}
 	ctx = WithDefaultSearchTrigger(ctx, TriggerSweep)
+	ctx = withSameNameLibrary(ctx) // one read of the library for same-named shows (#81)
 	all, err := c.series.List(ctx)
 	if err != nil {
 		return
@@ -606,7 +607,7 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 	// Another library show with this one's name (#81): nil for nearly every show.
 	same, err := c.sameNameFor(ctx, s)
 	if err != nil {
-		c.skipUnreadable(s.Title, err)
+		c.skipSameNameUnreadable(s.Title, err)
 		return 0, wanted, nil
 	}
 	var nBlocked, nWrongTitle, nSameName int
@@ -635,7 +636,7 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 			// It names this show and a same-named one alike, and its date doesn't say
 			// which — or says it's the other's. Grabbing it could only end in Needs you.
 			nSameName++
-			notes.mark(rel.Title, DropWrongTitle)
+			notes.mark(rel.Title, DropSameName)
 			if exampleSameName == "" {
 				exampleSameName = sameNameDropNote(rel.Title, why)
 			}
@@ -1314,7 +1315,7 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 				c.log.Warn("series import: a same-named show could own this release — held for review",
 					"series", s.Title, "release", it.Name, "reason", reason)
 				c.addReview(ctx, Review{
-					Hash: it.Hash, Name: it.Name, ContentPath: it.ContentPath, MediaType: "series", ReasonCode: ReasonMismatch,
+					Hash: it.Hash, Name: it.Name, ContentPath: it.ContentPath, MediaType: "series", ReasonCode: ReasonSameName,
 					ExpectedID: s.ID, ExpectedTitle: s.Title, ParsedTitle: parsed.Title,
 					SizeBytes: it.SizeBytes, Indexer: gIndexer,
 					Reason: reason,

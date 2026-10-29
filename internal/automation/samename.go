@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tristenlammi/arrmada/internal/download"
@@ -37,21 +38,69 @@ type sameNameJudge struct {
 	named []series.Series
 }
 
+// sameNameLib is one pass's library snapshot for finding same-named shows, read and
+// indexed once on first need: a sweep, RSS or the upgrade sweep judges every show against
+// the same one rather than re-reading the series table per show.
+type sameNameLib struct {
+	once  sync.Once
+	index func(series.Series) []series.Series
+	err   error
+}
+
+type sameNameLibKey struct{}
+
+// withSameNameLibrary gives a pass over many shows one sameNameLib.
+func withSameNameLibrary(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(sameNameLibKey{}).(*sameNameLib); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, sameNameLibKey{}, &sameNameLib{})
+}
+
+// sameNamedIn finds the library shows sharing s's name: through ctx's pass snapshot when
+// there is one, else from a fresh read.
+func (c *Coordinator) sameNamedIn(ctx context.Context, s series.Series) ([]series.Series, error) {
+	lib, ok := ctx.Value(sameNameLibKey{}).(*sameNameLib)
+	if !ok {
+		lib = &sameNameLib{}
+	}
+	lib.once.Do(func() {
+		all, err := c.series.SameNameLibrary(ctx)
+		if err != nil {
+			lib.err = err
+			return
+		}
+		lib.index = series.SameNameIndex(all)
+	})
+	if lib.err != nil {
+		return nil, lib.err
+	}
+	return lib.index(s), nil
+}
+
 // sameNameFor is s's judge, or nil when no library show shares its name. s must carry its
 // episodes (Get). An error means the siblings couldn't be read: callers skip the show for
-// the round rather than grab blind.
+// the round rather than grab blind (skipSameNameUnreadable).
 func (c *Coordinator) sameNameFor(ctx context.Context, s series.Series) (*sameNameJudge, error) {
 	if c.series == nil {
 		return nil, nil
 	}
-	named, err := c.series.SameNameShows(ctx, s)
+	named, err := c.sameNamedIn(ctx, s)
+	if err != nil || len(named) == 0 {
+		return nil, err
+	}
+	full, err := c.series.LoadSameNamed(ctx, named)
 	if err != nil {
 		return nil, err
 	}
-	if len(named) == 0 {
-		return nil, nil
-	}
-	return &sameNameJudge{s: s, named: named}, nil
+	return &sameNameJudge{s: s, named: full}, nil
+}
+
+// skipSameNameUnreadable logs a show skipped for the round because its same-named shows
+// couldn't be read.
+func (c *Coordinator) skipSameNameUnreadable(title string, err error) {
+	c.log.Warn("automation: couldn't read the shows that share this one's name — not grabbing "+title+" this round",
+		"title", title, "err", err)
 }
 
 // judge is a search's verdict on rel: its title as parsed, its indexer publish date exact.
@@ -152,19 +201,21 @@ func (c *Coordinator) sameNameHold(ctx context.Context, s series.Series, named [
 	if len(named) == 0 || len(series.SameNameSiblings(parsed, s, named)) == 0 {
 		return "", nil // no show shares the name, or its year or country names s
 	}
-	full, err := c.series.Get(ctx, s.ID)
+	// Read strictly: a show whose episodes can't be read would look like one that can't own
+	// the release. On an error nothing is placed this round.
+	full, err := c.series.LoadForSameName(ctx, s.ID)
 	if err != nil {
 		return "", err
 	}
-	j, err := c.sameNameFor(ctx, full)
-	if err != nil || j == nil {
+	siblings, err := c.series.LoadSameNamed(ctx, named)
+	if err != nil {
 		return "", err
 	}
 	published, exact := c.grabPublished(ctx, it.Hash, it.Name), true
 	if published.IsZero() && it.AddedOn > 0 {
 		published, exact = time.Unix(it.AddedOn, 0).UTC(), false
 	}
-	switch v, why := series.JudgeSameName(parsed, full, j.named, published, exact); v {
+	switch v, why := series.JudgeSameName(parsed, full, siblings, published, exact); v {
 	case series.SameNameOther, series.SameNameUnsure:
 		return fmt.Sprintf("Grabbed for %s, but %s", series.DescribeCandidates([]series.Series{full}), why), nil
 	}

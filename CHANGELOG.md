@@ -508,14 +508,16 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   release that names neither:
   - Searches use the release's publish date. A release posted before an episode aired
     can't be that episode, so `Scrubs.S02E03` posted in 2015 is grabbed for the 2001 show
-    and never for the revival.
+    and never for the revival. A release for a season the other show doesn't list yet
+    only counts as the older show's if it was posted before the other show first aired.
   - When a release could belong to either show, or the indexer gave no date, the
-    automatic searches, upgrades and quick **Grab** buttons skip it. **Choose release**
-    still lists it with the reason, and you can grab it by hand.
-  - A grabbed download that could belong to either show goes to **Needs you** with a
-    reason naming both shows. It isn't imported or used to replace a file. **Import
+    automatic searches, upgrades and quick **Grab** buttons skip it. The show's last
+    search says so, and **Choose release** still lists it with the reason, so you can
+    grab it by hand. In practice, the newer show only grabs releases that name its year.
+  - A grabbed download that could belong to either show goes to **Needs you** as **Which
+    show?**, naming both shows. It isn't imported or used to replace a file. **Import
     anyway** puts it in the show it was grabbed for; **Choose different show…** puts it in
-    the other one.
+    the other one. Either way, it only replaces a file it's better than.
   - A release you pick by hand from **Choose release** imports as before.
 
 - **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
