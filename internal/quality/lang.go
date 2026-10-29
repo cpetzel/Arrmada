@@ -143,7 +143,9 @@ func fileLangs(f *FileFacts, name langSet) langSet {
 	}
 	nameSays := name.known && len(name.codes) > 0
 	switch {
-	case f.AudioUntagged && nameSays:
+	case (f.AudioUntagged || f.AudioHeard) && nameSays:
+		// A heard track is still one no tag speaks for: the name's languages count for it
+		// as they did before it was heard.
 		for _, c := range name.codes {
 			s.add(c)
 		}
@@ -155,6 +157,13 @@ func fileLangs(f *FileFacts, name langSet) langSet {
 		for _, c := range name.codes {
 			s.add(c)
 		}
+	}
+	// A language only the AI heard counts for what it is, but it's a detection, not a
+	// tag: what the file seems to lack beside it stays unknown, so a heard track never
+	// makes a file short of a Must or Prefer (no upgrade, no grab on a detection alone)
+	// and never makes it all-avoided.
+	if f.AudioHeard {
+		s.open = true
 	}
 	return s
 }
@@ -395,8 +404,25 @@ func (sp StoredProfile) LanguageFit(cur CurrentFile) *langs.AudioFit {
 	if len(rules) == 0 || !cur.known() {
 		return nil
 	}
-	// A file: judged on what it's known to carry, never on what its name leaves out.
-	v := judgeLangs(rules, cur.candidate().audioLangs(), mustReading{})
+	// A file: judged on what it's known to carry, never on what its name leaves out. The
+	// badges take what the AI heard at its word (the engine doesn't, see fileLangs), and
+	// say so when that's what a miss rests on.
+	c := cur.candidate()
+	heardOnly := c.heard != nil && c.heard.AudioHeard
+	if heardOnly {
+		h := *c.heard
+		h.AudioHeard = false
+		c.heard = &h
+	}
+	fit := languageFit(rules, judgeLangs(rules, c.audioLangs(), mustReading{}))
+	if fit != nil && heardOnly && fit.Status != langs.AudioFitGood {
+		fit.Note += " (going by the language detected on an untagged track, so the file isn't replaced for it automatically)"
+	}
+	return fit
+}
+
+// languageFit is LanguageFit's verdict from a judged file.
+func languageFit(rules map[string]string, v langVerdict) *langs.AudioFit {
 	if !v.judged {
 		return nil
 	}

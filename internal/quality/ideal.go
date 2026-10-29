@@ -321,6 +321,12 @@ type FileFacts struct {
 	// that carry FileFacts don't show them, and the detail pages get their own badges.
 	AudioLangs    []string `json:"-"`
 	AudioUntagged bool     `json:"-"`
+	// AudioHeard says a track's language in AudioLangs is known only from what the AI heard
+	// on it, not from a tag (whether or not another track is tagged with the same one). A
+	// heard language counts when it's one the profile asks for, but a heard set is never
+	// closed: a language it seems to lack is unknown, so a detection alone never sends a
+	// file back to the indexers, and the name still speaks for the track (fileLangs).
+	AudioHeard bool `json:"-"`
 }
 
 // dvOnly reports a Dolby Vision file with nothing under its Dolby Vision layer that the

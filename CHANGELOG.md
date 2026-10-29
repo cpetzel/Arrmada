@@ -210,6 +210,29 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
+- **Untagged audio tracks are identified** (#90). Plenty of releases tag their audio `und`,
+  or nothing, so the language badges showed **?** and a profile's **Must** audio language
+  couldn't judge the file. Where the local AI (whisper) is installed, Arrmada now listens to
+  every such track in your library once, in the background: three 30-second samples from a
+  quarter, half and three quarters through, and the language most of them hear wins. When
+  the samples don't agree, or whisper isn't sure, the track stays unknown rather than taking
+  a guess. Tracks with a real language tag are left alone, and so are commentary tracks
+  and tracks tagged `zxx` (no spoken language). A sample that can't be listened to means
+  the track is tried again on a later pass.
+  - What it hears is kept in Arrmada's database, never written into the file. The badges
+    show it as detected (a dashed chip, "English (detected)") and are coloured by it.
+  - **A detected language never makes Arrmada replace a file.** It counts when it's a
+    language your profile asks for: a file whose untagged track is heard as your **Must**
+    language fits. A language it only seems to lack stays unknown, as before: it's never
+    upgraded, re-grabbed or counted in the save dialog for it. The badge still shows the
+    miss, and says it rests on a detection.
+  - It runs one file at a time, only while no subtitle is being made, at idle priority, and
+    newly imported files go first. It never runs whisper alongside a subtitle: when one
+    is waiting, it stops after the current sample and finishes the file later. Switch it
+    off under Settings → Subtitles → **Local AI (whisper)** → **Identify untagged audio**.
+    It's on by default, but does nothing until a whisper model is installed.
+  - The AI subtitles' own check of an untagged track (before choosing transcribe or
+    translate) now takes the same three-sample vote instead of one sample.
 - **A film's cinema, digital and physical release dates** (#93). The movie page and the
   Discover sheet show when a film reached cinemas, digital stores and disc, as Radarr and
   Overseerr do, and the Calendar and your calendar feed list a library film's digital and

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -636,7 +637,8 @@ func ifElse(c bool, a, b string) string {
 }
 
 // DetectedLang is the language whisper heard on an untagged audio stream, and how sure it
-// was (0-1).
+// was (0-1). A vote that didn't settle (voteLanguage) is kept with Prob 0: the track was
+// listened to, and the answer is neither used nor asked for again.
 type DetectedLang struct {
 	Lang string  `json:"lang"`
 	Prob float64 `json:"prob"`
@@ -645,9 +647,17 @@ type DetectedLang struct {
 // detectMinProb is how sure detection must be before its answer is used.
 const detectMinProb = 0.6
 
-// detectSample is how much audio detection listens to: whisper decides the language from
-// one 30 s window.
+// detectSample is how much audio one sample is: whisper decides the language from one
+// 30 s window.
 const detectSample = 30 * time.Second
+
+// detectPoints is how many places in a track detection listens at, and detectStretch how
+// much audio after each one it searches for speech. Samples spread through the runtime
+// mean one flashback, song or scene in another language can't carry the answer.
+const (
+	detectPoints  = 3
+	detectStretch = 2 * time.Minute
+)
 
 // detectedRe matches whisper.cpp's "whisper_full_with_state: auto-detected language: en
 // (p = 0.970215)".
@@ -670,18 +680,77 @@ func parseDetectedLanguage(out []byte) (DetectedLang, bool) {
 	return DetectedLang{Lang: lang, Prob: p}, true
 }
 
-// detectionWindow picks the stretch detection listens to: the first speech chunk that
-// starts after 10% of the runtime (past the logos and the cold-open music), its first
-// 30 s. Without one, the 30 s from the 10% mark.
-func detectionWindow(total time.Duration, chunks []chunk) chunk {
-	from := total / 10
-	for _, c := range chunks {
-		if c.start >= from {
-			return chunk{c.start, min(c.end, c.start+detectSample)}
+// detectionMarks are where in a track the samples come from: a quarter, half and three
+// quarters of the way through — well past the logos, the cold open and the opening
+// titles. A runtime too short for them to be a sample apart gives fewer.
+func detectionMarks(total time.Duration) []time.Duration {
+	var out []time.Duration
+	for i := 1; i <= detectPoints; i++ {
+		at := total * time.Duration(i) / (detectPoints + 1)
+		if len(out) > 0 && at-out[len(out)-1] < detectSample {
+			continue
+		}
+		out = append(out, at)
+	}
+	return out
+}
+
+// detectionWindow picks the sample in one stretch of audio (long, its speech chunks
+// planned from its silences): the first speech chunk, at most 30 s of it — music and
+// silence tell whisper nothing. Without one, the stretch's first 30 s.
+func detectionWindow(long time.Duration, chunks []chunk) chunk {
+	if len(chunks) > 0 {
+		c := chunks[0]
+		return chunk{c.start, min(c.end, c.start+detectSample)}
+	}
+	return chunk{0, min(long, detectSample)}
+}
+
+// voteLanguage settles what the samples heard: the language most of them heard wins, as
+// sure as the mean of their probabilities. A language no more than half of them agree on
+// isn't an answer, and comes back with Prob 0 ("listened, couldn't tell"), so the track
+// stays unknown rather than taking a guess. Every sample must have been heard (detectVote
+// doesn't vote on a partial set).
+func voteLanguage(heard []DetectedLang) DetectedLang {
+	votes, sum := map[string]int{}, map[string]float64{}
+	for _, d := range heard {
+		if d.Lang != "" {
+			votes[d.Lang]++
+			sum[d.Lang] += d.Prob
 		}
 	}
-	return chunk{from, min(total, from+detectSample)}
+	best := ""
+	for l, n := range votes {
+		if best == "" || n > votes[best] || (n == votes[best] && (sum[l] > sum[best] || (sum[l] == sum[best] && l < best))) {
+			best = l
+		}
+	}
+	if best == "" {
+		return DetectedLang{}
+	}
+	d := DetectedLang{Lang: best, Prob: sum[best] / float64(votes[best])}
+	if 2*votes[best] <= len(heard) {
+		d.Prob = 0
+	}
+	return d
 }
+
+// settleVote is detectVote's answer once every sample was tried: a vote when all of them
+// were heard, otherwise an error — a sample that failed (a decode error, a GPU hiccup) is
+// worth trying again later, and "couldn't tell" is kept for good.
+func settleVote(heard []DetectedLang, tried int, lastErr error) (DetectedLang, error) {
+	if len(heard) < tried || tried == 0 {
+		if lastErr == nil {
+			lastErr = errors.New("no sample to listen to")
+		}
+		return DetectedLang{}, fmt.Errorf("%d of %d samples couldn't be listened to: %w", tried-len(heard), tried, lastErr)
+	}
+	return voteLanguage(heard), nil
+}
+
+// errGaveWay is a background detection that stopped for a subtitle job (identify.go): not
+// a failure, and nothing is recorded.
+var errGaveWay = errors.New("gave way to a subtitle job")
 
 // detectArgs is whisper-cli's command line for language detection: -dl stops after
 // detecting, -l auto asks it to. Nothing else — no -ml, -sow or --vad.
@@ -690,28 +759,104 @@ func detectArgs(model, wav string) []string {
 }
 
 // detect asks whisper which language is spoken in a 16 kHz mono WAV (the job's shared
-// extraction), from one 30 s window of speech. turbo is used when it's installed (it
-// detects as well as large-v3 and loads faster), else large-v3.
+// extraction): a sample from each of detectionMarks, put to a vote.
 func (w *whisperGen) detect(ctx context.Context, ffmpeg, wav string) (DetectedLang, error) {
+	return w.detectVote(ctx, ffmpeg, wavDuration(wav), false, nil, func(ctx context.Context, c chunk, dst string) error {
+		return cutChunk(ctx, ffmpeg, wav, c, dst)
+	})
+}
+
+// detectFile is detect straight from a video's audio stream (0:a:N) of the given
+// runtime, for the background identification (identify.go): each stretch is decoded on
+// its own, so a file is never extracted whole to be listened to for a minute and a half.
+// It runs as background work: before each sample it asks stop, and gives way (errGaveWay)
+// when a subtitle job is waiting; and it never probes or sets aside the oneAPI build,
+// which only a subtitle job's own run may decide.
+func (w *whisperGen) detectFile(ctx context.Context, ffmpeg, video string, stream int, total time.Duration, stop func() bool) (DetectedLang, error) {
+	return w.detectVote(ctx, ffmpeg, total, true, stop, func(ctx context.Context, c chunk, dst string) error {
+		out, err := toolrun.Command(ctx, toolrun.Background, ffmpeg, stretchArgs(video, stream, c, dst)...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("extract audio: %w: %s", err, tailStr(out, 200))
+		}
+		if fi, err := os.Stat(dst); err != nil || fi.Size() < 1024 {
+			return fmt.Errorf("extract audio: empty output")
+		}
+		return nil
+	})
+}
+
+// stretchArgs is ffmpeg's command line for one stretch of one audio stream as 16 kHz mono
+// PCM. -ss before -i seeks the input, so nothing before the stretch is decoded.
+func stretchArgs(video string, stream int, c chunk, dst string) []string {
+	return []string{"-y", "-hide_banner", "-nostats",
+		"-ss", fmt.Sprintf("%.3f", c.start.Seconds()), "-t", fmt.Sprintf("%.3f", (c.end - c.start).Seconds()),
+		"-i", video, "-map", fmt.Sprintf("0:a:%d", stream), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", dst}
+}
+
+// detectVote listens at each of detectionMarks: cut writes the stretch of audio from
+// there as a 16 kHz mono WAV, its first speech is the sample, and settleVote settles the
+// answers. turbo is used when it's installed (it detects as well as large-v3 and loads
+// faster), else large-v3. background and stop are detectFile's.
+func (w *whisperGen) detectVote(ctx context.Context, ffmpeg string, total time.Duration, background bool, stop func() bool, cut func(ctx context.Context, c chunk, dst string) error) (DetectedLang, error) {
 	model := w.modelPath(false)
 	if model == "" {
 		return DetectedLang{}, fmt.Errorf("no whisper model installed")
 	}
-	total := wavDuration(wav)
 	if total <= 0 {
 		return DetectedLang{}, fmt.Errorf("no audio to listen to")
 	}
-	sils, err := detectSilences(ctx, ffmpeg, wav, total)
-	if err != nil && ctx.Err() != nil {
+	dir, err := os.MkdirTemp("", "whisper-dl-*")
+	if err != nil {
 		return DetectedLang{}, err
 	}
-	sample := filepath.Join(os.TempDir(), fmt.Sprintf("whisper-dl-%d.wav", time.Now().UnixNano()))
-	defer os.Remove(sample)
-	if err := cutChunk(ctx, ffmpeg, wav, detectionWindow(total, planChunks(total, sils)), sample); err != nil {
-		return DetectedLang{}, err
+	defer os.RemoveAll(dir)
+	marks := detectionMarks(total)
+	var heard []DetectedLang
+	var lastErr error
+	for i, at := range marks {
+		if stop != nil && stop() {
+			return DetectedLang{}, errGaveWay
+		}
+		stretch := filepath.Join(dir, fmt.Sprintf("stretch-%d.wav", i))
+		sample := filepath.Join(dir, fmt.Sprintf("sample-%d.wav", i))
+		err := cut(ctx, chunk{at, min(total, at+detectStretch)}, stretch)
+		if err == nil {
+			long := wavDuration(stretch)
+			sils, serr := detectSilences(ctx, ffmpeg, stretch, long)
+			if serr != nil && ctx.Err() != nil {
+				return DetectedLang{}, serr
+			}
+			err = cutChunk(ctx, ffmpeg, stretch, detectionWindow(long, planChunks(long, sils)), sample)
+		}
+		var d DetectedLang
+		if err == nil {
+			d, err = w.detectSample(ctx, model, sample, background)
+		}
+		if ctx.Err() != nil {
+			return DetectedLang{}, ctx.Err()
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		heard = append(heard, d)
 	}
-	w.probeSycl(ctx, model)
-	bin := w.pickBin()
+	return settleVote(heard, len(marks), lastErr)
+}
+
+// detectSample runs whisper's detection on one sample. A subtitle job's detection uses the
+// build it would transcribe with, down the same fallbacks (probing the oneAPI build first,
+// and setting it aside for good when it fails). A background one never decides that: it
+// uses the oneAPI build only once a job's probe has passed it, and when it fails there the
+// sample is asked of the Vulkan/CPU build instead, without retiring the GPU build.
+func (w *whisperGen) detectSample(ctx context.Context, model, sample string, background bool) (DetectedLang, error) {
+	var bin string
+	if background {
+		bin = w.settledBin()
+	} else {
+		w.probeSycl(ctx, model)
+		bin = w.pickBin()
+	}
 	run := func(b string, noGPU bool) ([]byte, error) {
 		args := detectArgs(model, sample)
 		if noGPU {
@@ -724,7 +869,11 @@ func (w *whisperGen) detect(ctx context.Context, ffmpeg, wav string) (DetectedLa
 	}
 	out, err := run(bin, false)
 	if err != nil && bin == w.sycl && ctx.Err() == nil {
-		w.disableSycl("it failed: " + tailStr(out, 300))
+		// The oneAPI build failed. A job's detection sets it aside for good; a background
+		// one leaves that to the jobs and just asks the Vulkan/CPU build this once.
+		if !background {
+			w.disableSycl("it failed: " + tailStr(out, 300))
+		}
 		bin = w.bin
 		out, err = run(bin, false)
 	}
@@ -739,4 +888,16 @@ func (w *whisperGen) detect(ctx context.Context, ffmpeg, wav string) (DetectedLa
 		return DetectedLang{}, fmt.Errorf("whisper reported no language: %s", tailStr(out, 200))
 	}
 	return d, nil
+}
+
+// settledBin is the build a background run uses: the oneAPI one only when a subtitle
+// job's probe has already passed it (and nothing has set it aside since), else the
+// Vulkan/CPU one. It never probes.
+func (w *whisperGen) settledBin() string {
+	w.backendMu.Lock()
+	defer w.backendMu.Unlock()
+	if w.sycl != "" && w.syclProbed && !w.syclOff {
+		return w.sycl
+	}
+	return w.bin
 }

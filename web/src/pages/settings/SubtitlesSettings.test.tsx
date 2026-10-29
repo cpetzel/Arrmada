@@ -42,6 +42,21 @@ afterEach(() => {
 
 const page = () => render(<MemoryRouter><ConfirmProvider><SubtitlesSettings /></ConfirmProvider></MemoryRouter>);
 
+// #90: the background identification of untagged audio is a switch in the Local AI card,
+// on unless the server says otherwise.
+describe("Subtitles settings · Identify untagged audio", () => {
+  it("shows the saved state and saves a flip", async () => {
+    vi.spyOn(api, "subtitleSettings").mockResolvedValue(settings({ identify_audio: true }));
+    const update = vi.spyOn(api, "updateSubtitleSettings").mockResolvedValue(settings({ identify_audio: false }));
+    page();
+    const sw = await screen.findByRole("switch", { name: "Identify untagged audio" });
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    await act(async () => { fireEvent.click(sw); });
+    expect(update).toHaveBeenCalledWith({ identify_audio: false });
+    expect(screen.getByRole("switch", { name: "Identify untagged audio" }).getAttribute("aria-checked")).toBe("false");
+  });
+});
+
 describe("Subtitles settings · OpenSubtitles", () => {
   it("says a rejected login plainly, and a new password re-tests and refreshes the state", async () => {
     const get = vi.spyOn(api, "subtitleSettings")

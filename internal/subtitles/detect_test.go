@@ -2,12 +2,68 @@ package subtitles
 
 import (
 	"context"
+	"errors"
+	"math"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+// A background detection never probes or sets aside the oneAPI build: it uses it only once
+// a job's probe has passed it, and a failure there falls back to the Vulkan build for that
+// sample without retiring the oneAPI one. A subtitle
+// job's own detection still sets it aside and carries on with the Vulkan build.
+func TestBackgroundDetectionLeavesSyclAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake whisper builds are shell scripts")
+	}
+	dir := t.TempDir()
+	script := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	sycl := script("whisper-sycl", "echo 'ggml_sycl_init: device lost' >&2; exit 1")
+	vulkan := script("whisper-vulkan", "echo 'whisper_full_with_state: auto-detected language: en (p = 0.950000)' >&2")
+	ctx := t.Context()
+
+	w := &whisperGen{bin: vulkan, sycl: sycl} // not probed yet: background uses Vulkan
+	if b := w.settledBin(); b != vulkan {
+		t.Errorf("unprobed: background picked %s", b)
+	}
+	if d, err := w.detectSample(ctx, "m.bin", "s.wav", true); err != nil || d.Lang != "en" {
+		t.Errorf("unprobed: %+v %v", d, err)
+	}
+	if w.syclProbed || w.syclOff {
+		t.Errorf("background probed (%v) or retired (%v) the oneAPI build", w.syclProbed, w.syclOff)
+	}
+
+	w.syclProbed = true // a job's probe passed it: background uses it, it fails, and the
+	// sample is asked of the Vulkan build instead
+	if b := w.settledBin(); b != sycl {
+		t.Errorf("probed: background picked %s", b)
+	}
+	if d, err := w.detectSample(ctx, "m.bin", "s.wav", true); err != nil || d.Lang != "en" {
+		t.Errorf("oneAPI failure: %+v %v, want the Vulkan build's answer", d, err)
+	}
+	if w.syclOff {
+		t.Fatal("a background failure retired the oneAPI build")
+	}
+
+	// A subtitle job's detection: sets it aside, and answers from the Vulkan build.
+	if d, err := w.detectSample(ctx, "m.bin", "s.wav", false); err != nil || d.Lang != "en" {
+		t.Errorf("job: %+v %v", d, err)
+	}
+	if !w.syclOff {
+		t.Error("a job's failure didn't set the oneAPI build aside")
+	}
+}
 
 // Captured whisper-cli -dl output (whisper.cpp 1.9): the detection line sits among the
 // model-load chatter on stderr.
@@ -53,18 +109,100 @@ func TestDetectArgs(t *testing.T) {
 	}
 }
 
-// The sample is the first speech chunk past 10% of the runtime, at most 30 s of it.
+// A stretch's sample is its first speech chunk, at most 30 s of it; without speech, its
+// first 30 s.
 func TestDetectionWindow(t *testing.T) {
-	m := time.Minute
-	chunks := []chunk{{0, 4 * m}, {4*m + 5*time.Second, 9 * m}, {12 * m, 12*m + 10*time.Second}}
-	if w := detectionWindow(40*m, chunks); w.start != 4*m+5*time.Second || w.end != 4*m+35*time.Second {
+	s := time.Second
+	if w := detectionWindow(2*time.Minute, []chunk{{12 * s, 100 * s}, {102 * s, 120 * s}}); w.start != 12*s || w.end != 42*s {
 		t.Errorf("window %v-%v", w.start, w.end)
 	}
-	if w := detectionWindow(100*m, chunks[:2]); w.start != 10*m || w.end != 10*m+30*time.Second {
-		t.Errorf("no chunk past 10%%: window %v-%v", w.start, w.end)
-	}
-	if w := detectionWindow(110*m, []chunk{{12 * m, 12*m + 10*time.Second}}); w.end != 12*m+10*time.Second {
+	if w := detectionWindow(2*time.Minute, []chunk{{5 * s, 15 * s}}); w.start != 5*s || w.end != 15*s {
 		t.Errorf("short chunk: window %v-%v", w.start, w.end)
+	}
+	if w := detectionWindow(2*time.Minute, nil); w.start != 0 || w.end != 30*s {
+		t.Errorf("no speech: window %v-%v", w.start, w.end)
+	}
+	if w := detectionWindow(20*s, nil); w.end != 20*s {
+		t.Errorf("short stretch: window %v-%v", w.start, w.end)
+	}
+}
+
+// The samples come from a quarter, half and three quarters through, past the opening
+// minutes; a runtime too short for three samples a sample apart gives fewer.
+func TestDetectionMarks(t *testing.T) {
+	m, s := time.Minute, time.Second
+	for total, want := range map[time.Duration][]time.Duration{
+		40 * m:  {10 * m, 20 * m, 30 * m},
+		120 * m: {30 * m, 60 * m, 90 * m},
+		80 * s:  {20 * s, 60 * s},
+		30 * s:  {7500 * time.Millisecond},
+	} {
+		if got := detectionMarks(total); !slices.Equal(got, want) {
+			t.Errorf("%v: %v, want %v", total, got, want)
+		}
+	}
+}
+
+// The vote: the language most samples heard, as sure as their mean, and no answer (Prob 0)
+// unless more than half the samples tried agree on it.
+func TestVoteLanguage(t *testing.T) {
+	en := func(p float64) DetectedLang { return DetectedLang{"en", p} }
+	fr := func(p float64) DetectedLang { return DetectedLang{"fr", p} }
+	cases := []struct {
+		name  string
+		heard []DetectedLang
+		tried int
+		want  DetectedLang
+		sure  bool
+	}{
+		{"all agree", []DetectedLang{en(0.9), en(0.8), en(0.7)}, 3, en(0.8), true},
+		{"two of three", []DetectedLang{en(0.97), fr(0.6), en(0.95)}, 3, en(0.96), true},
+		{"no majority", []DetectedLang{en(0.9), fr(0.95), {"de", 0.99}}, 3, DetectedLang{"de", 0}, false},
+		{"a tie", []DetectedLang{en(0.9), fr(0.8)}, 2, en(0), false},
+		{"a short file's one sample", []DetectedLang{en(0.9)}, 1, en(0.9), true},
+		{"agreed but unsure", []DetectedLang{en(0.5), en(0.55), fr(0.99)}, 3, en(0.525), false},
+	}
+	for _, tc := range cases {
+		got, err := settleVote(tc.heard, tc.tried, nil)
+		if err != nil || got.Lang != tc.want.Lang || math.Abs(got.Prob-tc.want.Prob) > 1e-9 {
+			t.Errorf("%s: %+v %v, want %+v", tc.name, got, err, tc.want)
+		}
+		// Sure is what withDetected trusts.
+		mi := &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "und"}}, Detected: map[int]DetectedLang{0: got}}
+		if sure := len(mi.withDetected().AudioLangs) == 1; sure != tc.sure {
+			t.Errorf("%s: used = %v, want %v", tc.name, sure, tc.sure)
+		}
+	}
+}
+
+// A sample that couldn't be listened to makes the whole detection an error, to be tried
+// again later — never a vote on what's left, and never a "couldn't tell" kept for good.
+func TestSettleVoteNeedsEverySample(t *testing.T) {
+	en := DetectedLang{"en", 0.99}
+	cause := errors.New("ffmpeg: decode error")
+	for name, tc := range map[string]struct {
+		heard []DetectedLang
+		tried int
+	}{
+		"one of three failed":  {[]DetectedLang{en, en}, 3},
+		"two of three failed":  {[]DetectedLang{en}, 3},
+		"every sample failed":  {nil, 3},
+		"nothing to listen to": {nil, 0},
+	} {
+		if d, err := settleVote(tc.heard, tc.tried, cause); err == nil {
+			t.Errorf("%s: settled as %+v", name, d)
+		} else if tc.tried > 0 && !errors.Is(err, cause) {
+			t.Errorf("%s: %v doesn't carry the cause", name, err)
+		}
+	}
+}
+
+// One stretch of one audio stream, seeking the input, as 16 kHz mono PCM.
+func TestStretchArgs(t *testing.T) {
+	got := strings.Join(stretchArgs("/m/Film.mkv", 2, chunk{30 * time.Minute, 32 * time.Minute}, "/tmp/s.wav"), " ")
+	want := "-y -hide_banner -nostats -ss 1800.000 -t 120.000 -i /m/Film.mkv -map 0:a:2 -vn -ac 1 -ar 16000 -c:a pcm_s16le /tmp/s.wav"
+	if got != want {
+		t.Errorf("args\n got %q\nwant %q", got, want)
 	}
 }
 

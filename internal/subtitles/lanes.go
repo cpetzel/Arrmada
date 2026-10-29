@@ -98,7 +98,7 @@ func (s *Service) aiWouldRun(mi *mediaInfo, langs []string) bool {
 		for _, t := range mi.Audio {
 			// Untagged audio nobody has listened to may be any language: detection runs
 			// with the AI, and turbo may well transcribe it.
-			if _, heard := mi.Detected[t.Index]; t.untagged() && !heard && ai.canRun(false) {
+			if _, heard := mi.Detected[t.Index]; t.listenable() && !heard && ai.canRun(false) {
 				return true
 			}
 		}

@@ -647,6 +647,63 @@ func TestUnreadFilesAreLeftAlone(t *testing.T) {
 	})
 }
 
+// A language only the AI heard on an untagged track (#90) counts when it's the one asked
+// for, but a miss resting on it is unknown to the engine: the file fits, isn't upgraded or
+// replaced for a language under Must, Prefer or Avoid (sweep and import gate alike), and
+// only the badge says what the detection suggests.
+func TestHeardLanguageNeverForcesAnUpgrade(t *testing.T) {
+	forEachRanking(t, func(t *testing.T, mode string) {
+		s, ctx := testService(t)
+		setRanking(t, s, mode)
+		heardEN := &FileFacts{Resolution: "1080p", Codec: "h264", HDR: "SDR", AudioLangs: []string{"en"}, AudioHeard: true}
+		cur := onDisk("Film.2021.1080p.BluRay.x264-GRP", heardEN)
+		// An "eng" track beside an "und" one heard as English reads the same ([en], heard):
+		// before the detection the und track kept the file open, and it still does.
+		engAndHeard := onDisk("Film.2021.1080p.BluRay.x264-GRP", &FileFacts{Resolution: "1080p", Codec: "h264", HDR: "SDR",
+			AudioLangs: []string{"eng", "en"}, AudioHeard: true})
+		german := enCand("Film.2021.German.DL.1080p.WEB-DL.x264-GER", 6)
+		for _, row := range []map[string]string{{"de": PrefMust}, {"de": PrefWant}, {"en": PrefAvoid}} {
+			ref := upgradeProfile(t, s, langStored(row, TriggerAny))
+			sp, _ := s.GetStored(ctx, ref)
+			for name, c := range map[string]CurrentFile{"heard only": cur, "eng + heard en": engAndHeard} {
+				if v := sp.JudgeFile(c); !v.Eligible || v.Current.langShort || v.Current.TargetAvoided {
+					t.Errorf("%v %s: eligible %v short %v avoided %v %q", row, name, v.Eligible, v.Current.langShort, v.Current.TargetAvoided, v.Current.RejectReason)
+				}
+				if _, key, ok := s.UpgradePick(ctx, ref, c, []Candidate{german}); ok {
+					t.Errorf("%v %s: upgraded on a detection alone (%s)", row, name, key)
+				}
+				if s.IsQualityUpgrade(ctx, ref, german.Name, 6, c) {
+					t.Errorf("%v %s: the import gate took a language upgrade over a detection", row, name)
+				}
+			}
+		}
+		// A name that states the language still speaks for the heard track, as it did for
+		// the untagged one: "GERMAN" with an eng track and one heard as English has German.
+		named := onDisk("Film.2021.GERMAN.1080p.BluRay.x264-GRP", &FileFacts{Resolution: "1080p", Codec: "h264", HDR: "SDR",
+			AudioLangs: []string{"eng", "en"}, AudioHeard: true})
+		mustDE := langStored(map[string]string{"de": PrefMust}, TriggerAny)
+		if v := mustDE.JudgeFile(named); !v.Eligible || v.Current.langShort {
+			t.Errorf("GERMAN name + heard track: eligible %v short %v %q", v.Eligible, v.Current.langShort, v.Current.RejectReason)
+		}
+		// The badge goes by the detection, and says so.
+		sp := langStored(map[string]string{"de": PrefMust}, TriggerAny)
+		if f := sp.LanguageFit(cur); f == nil || f.Status != langs.AudioFitBad || !strings.Contains(f.Note, "detected") {
+			t.Errorf("badge %+v, want bad, going by the detection", f)
+		}
+		// The other direction: heard as the Must, the file has it.
+		mustEN := langStored(map[string]string{"en": PrefMust, "de": PrefWant}, TriggerAny)
+		if v := mustEN.JudgeFile(cur); !v.Eligible || v.Current.langShort {
+			t.Errorf("heard English, English Must: eligible %v short %v", v.Eligible, v.Current.langShort)
+		}
+		if f := mustEN.LanguageFit(cur); f == nil || f.Status != langs.AudioFitPartial {
+			t.Errorf("heard English, Must en + Prefer de: %+v, want partial", f)
+		}
+		if f := langStored(map[string]string{"en": PrefMust}, TriggerAny).LanguageFit(cur); f == nil || f.Status != langs.AudioFitGood {
+			t.Errorf("heard English, English Must: %+v, want good", f)
+		}
+	})
+}
+
 // A file on disk is judged by its probed tracks, which win over its name: a file named
 // GERMAN whose tagged track is Italian lacks German. A probe that says only English can't
 // contradict the name, though — "eng" is what tools write when nobody set a language — so

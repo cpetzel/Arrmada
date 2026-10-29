@@ -100,6 +100,9 @@ func (s *Service) Rescan(ctx context.Context) bool {
 		// The one-shot forced-track repair starts once a pass has completed (repair.go);
 		// later passes find its settings key set and leave it.
 		s.startForcedRepair(ctx)
+		// And every pass hands the library to the untagged-audio identification
+		// (identify.go), which skips what it has already listened to.
+		s.identifyLibrary(ctx)
 	}()
 	return true
 }

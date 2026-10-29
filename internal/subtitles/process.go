@@ -822,9 +822,21 @@ func (s *Service) heardAudio(ctx context.Context, job *Job, ref fileRef, mi *med
 	if !ok || !need || ref.audio == nil || !ai.available() {
 		return mi.withDetected()
 	}
-	changed := false
+	// The background identification (identify.go) may have listened since the job read
+	// the probe: take what it heard rather than listen again.
+	if fresh := s.cachedProbe(ctx, ref.Path); fresh != nil {
+		for i, d := range fresh.Detected {
+			if _, ok := mi.Detected[i]; !ok {
+				if mi.Detected == nil {
+					mi.Detected = map[int]DetectedLang{}
+				}
+				mi.Detected[i] = d
+			}
+		}
+	}
+	heard := map[int]DetectedLang{}
 	for _, t := range mi.Audio {
-		if !t.untagged() {
+		if !t.listenable() {
 			continue
 		}
 		if _, known := mi.Detected[t.Index]; known || ctx.Err() != nil {
@@ -846,11 +858,13 @@ func (s *Service) heardAudio(ctx context.Context, job *Job, ref fileRef, mi *med
 			mi.Detected = map[int]DetectedLang{}
 		}
 		mi.Detected[t.Index] = d
-		changed = true
-		s.event("info", fmt.Sprintf("%s: untagged audio track %d sounds like %s (p = %.2f)", ref.Title, t.Index+1, d.Lang, d.Prob))
+		heard[t.Index] = d
+		s.event("info", heardLine(ref.Title, t.Index, d))
 	}
-	if changed {
-		s.saveProbe(ctx, ref.Path, mi)
+	if len(heard) > 0 {
+		// Merged into the cache as it is now, so a background answer written meanwhile
+		// isn't overwritten by this job's older copy.
+		s.saveDetected(ctx, ref.Path, heard, mi)
 	}
 	return mi.withDetected()
 }

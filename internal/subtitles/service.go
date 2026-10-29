@@ -107,6 +107,15 @@ type Service struct {
 	searches searchCache  // the drawer's interactive searches, reused for a few minutes (search.go)
 
 	upgrade upgradeBudget // downloads the upgrade loop may still spend today (upgrade.go)
+
+	identify audioIdentify // the background identification of untagged audio (identify.go)
+	// gpu keeps whisper to one run at a time: the GPU lane holds it for each job, the
+	// background identification for each track it listens to (between samples it gives
+	// way to a waiting job).
+	gpu sync.Mutex
+	// detectedMu serialises the read-merge-write of detections into the probe cache
+	// (saveDetected).
+	detectedMu sync.Mutex
 }
 
 // NewService wires the module over the shared Movies/Series catalogs + a subtitle provider. db is
@@ -156,6 +165,9 @@ type Settings struct {
 	AIBackend     string   `json:"ai_backend"`     // "sycl" | "vulkan" | "cpu" | "" until the first run
 	AINote        string   `json:"ai_note"`        // why the oneAPI build isn't in use, when it was bundled but set aside
 	AICPUOnly     bool     `json:"ai_cpu_only"`    // the bundled whisper has no GPU backend (the ARM image)
+	// IdentifyAudio: the local AI listens to every untagged audio track in the background
+	// and the language rules read what it heard (identify.go). Runs only when AIReady.
+	IdentifyAudio bool `json:"identify_audio"`
 	// Download quota, when the provider reports one. OpenSubtitles free accounts get a
 	// small number of downloads a day; once it's spent every download fails until the
 	// reset, and the UI should say that rather than showing a run of failures.
@@ -190,6 +202,7 @@ func (s *Service) GetSettings(ctx context.Context) Settings {
 		AIBackend:      s.whisper.Backend(),
 		AINote:         s.whisper.SyclNote(),
 		AICPUOnly:      s.whisper.CPUOnly(),
+		IdentifyAudio:  s.IdentifyAudioOn(ctx),
 		QuotaRemaining: -1,
 		Pending:        s.Pending(),
 		MinScore:       s.minScore(ctx),
@@ -292,6 +305,13 @@ func (s *Service) CredentialsChanged(ctx context.Context) {
 		r.ResetAuth()
 	}
 	s.ClearBackoff(ctx, EventCreds)
+}
+
+// CheckLanguages reports (ErrUnknownLanguage) a code the language table doesn't know,
+// so a settings request can be checked whole before any of it is saved.
+func CheckLanguages(in []string) error {
+	_, err := canonicalLanguages(in)
+	return err
 }
 
 // canonicalLanguages spells each code canonically, drops blanks and repeats (keeping the
