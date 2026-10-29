@@ -98,6 +98,35 @@ func TestCalendarIncludesTMDBID(t *testing.T) {
 	}
 }
 
+// A film's digital and physical releases are entries of their own, labelled, on their
+// own days; one outside the window, or on the main date's day, isn't.
+func TestCalendarDigitalAndPhysicalReleases(t *testing.T) {
+	s := calendarServer(t)
+	_, admin := s.user(t, "admin@example.com", auth.RoleAdmin)
+	if _, err := s.st.DB().Exec(`INSERT INTO movies (id, tmdb_id, title, year, monitored, has_file, extra_json) VALUES
+		(31, 701, 'Glass Orchard', 2026, 1, 0, '{"release_date":"2026-09-01","releases":{"cinema":{"date":"2026-09-01","country":"US"},"digital":{"date":"2026-10-14","country":"US"},"physical":{"date":"2026-12-02","country":"US"}}}'),
+		(32, 702, 'Paper Moons', 2026, 1, 0, '{"release_date":"2026-10-03","releases":{"digital":{"date":"2026-10-03","country":"US"}}}')`); err != nil {
+		t.Fatal(err)
+	}
+	b := getCalendar(t, s, "/api/v1/calendar?start=2026-10-01&end=2026-10-31", admin)
+	var got []string
+	for _, it := range b.Items {
+		got = append(got, it.Date+" "+it.Title+" "+it.Release+" "+it.Subtitle)
+	}
+	want := map[string]bool{
+		"2026-10-14 Glass Orchard digital 2026 · Digital release": true,
+		"2026-10-03 Paper Moons  2026 · Movie":                    true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("items = %q, want %d", got, len(want))
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected item %q (all: %q)", g, got)
+		}
+	}
+}
+
 // 'My requests' is what the viewer asked for or follows: never someone else's request,
 // and never one that was declined. Every item says whether it's the viewer's own.
 func TestCalendarMineFilter(t *testing.T) {

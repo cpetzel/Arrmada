@@ -97,6 +97,9 @@ type MediaDetail struct {
 	// Collection is the franchise a movie belongs to (TMDB's belongs_to_collection), for
 	// the sheet's "Part of the … collection" link. Nil for series and standalone films.
 	Collection *CollectionRef `json:"collection,omitempty"`
+	// Releases are a movie's cinema, digital and physical release dates in the admin's
+	// region (pickReleaseDates). Nil for series.
+	Releases *ReleaseDates `json:"releases,omitempty"`
 	// Adult is TMDB's own adult flag. The detail endpoint refuses such a title outright
 	// (the always-on adult filter), so it never reaches a browser as true; it is
 	// serialised only so the disk cache keeps it.
@@ -150,19 +153,26 @@ func (t *TMDB) MediaDetails(ctx context.Context, media string, tmdbID int) (*Med
 	// v4: cast and crew carry their person ids (the links to their pages).
 	// v5: movies carry their collection.
 	// v6: records carry the overviews in other languages.
-	key := "tmdb:detail:v6:" + kind + ":" + strconv.Itoa(tmdbID)
+	// v7: movies carry their release dates, picked for the region, which the key names
+	// so a changed region doesn't serve another region's dates for half a day.
+	key := "tmdb:detail:v7:" + kind + ":" + strconv.Itoa(tmdbID)
+	region := ""
+	if kind == "movie" {
+		region = t.regionCode()
+		key += ":" + region
+	}
 	return swr(ctx, t.disk, key, mediaDetailTTL, func(ctx context.Context) (*MediaDetail, error) {
 		if kind == "tv" {
 			return t.seriesDetail(ctx, tmdbID)
 		}
-		return t.movieDetail(ctx, tmdbID)
+		return t.movieDetail(ctx, tmdbID, region)
 	})
 }
 
 // mediaDetailTTL is how long a title's detail record is kept before it's refreshed.
 const mediaDetailTTL = 12 * time.Hour
 
-func (t *TMDB) movieDetail(ctx context.Context, tmdbID int) (*MediaDetail, error) {
+func (t *TMDB) movieDetail(ctx context.Context, tmdbID int, region string) (*MediaDetail, error) {
 	q := url.Values{}
 	q.Set("append_to_response", "credits,release_dates,external_ids,videos,recommendations,translations")
 	body, err := t.get(ctx, "/movie/"+strconv.Itoa(tmdbID), q)
@@ -196,6 +206,7 @@ func (t *TMDB) movieDetail(ctx context.Context, tmdbID int) (*MediaDetail, error
 	if c := m.BelongsToCollection; c != nil && c.ID > 0 && c.Name != "" {
 		d.Collection = &CollectionRef{ID: c.ID, Name: c.Name}
 	}
+	d.Releases = pickReleaseDates(m.ReleaseDates.Results, region)
 	d.TrailerURL = bestTrailerURL(m.Videos.Results)
 	d.Similar = recommendedItems(m.Recommendations.Results, "movie")
 	d.Overviews = m.Translations.overviews(anyLang)

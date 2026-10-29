@@ -235,6 +235,12 @@ type MovieExtra struct {
 	// title in every script and the translations in the chosen language (display.go).
 	// Never used for matching.
 	DisplayNames *displaytitle.Names `json:"display_names,omitempty"`
+	// Releases are the cinema, digital and physical release dates, read for the discovery
+	// region when the metadata was (metadata.ReleaseDates): shown on the film's page and,
+	// digital and physical, on the Calendar. Display only — availability goes by
+	// ReleaseDate. Nil on records stored before they were kept, which the titles backfill
+	// fills in; read and empty when TMDB has none.
+	Releases *metadata.ReleaseDates `json:"releases,omitempty"`
 }
 
 // CastMember is one billed actor. ID is their TMDB person id, which links the library's

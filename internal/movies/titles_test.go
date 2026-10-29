@@ -28,7 +28,8 @@ func (f *titlesMeta) GetMovie(_ context.Context, id int) (*metadata.MovieDetails
 	if id == f.missing {
 		return nil, metadata.ErrNotFound
 	}
-	return &metadata.MovieDetails{OriginalTitle: "Original " + itoa(id), AltTitles: []string{"Alt " + itoa(id)}}, nil
+	return &metadata.MovieDetails{OriginalTitle: "Original " + itoa(id), AltTitles: []string{"Alt " + itoa(id)},
+		Releases: &metadata.ReleaseDates{Digital: &metadata.DatedRelease{Date: "2026-11-0" + string(rune('0'+id%10)), Country: "US"}}}, nil
 }
 func (f *titlesMeta) GetCollection(context.Context, int) (*metadata.Collection, error) {
 	return nil, errors.New("no collections here")
@@ -66,7 +67,7 @@ func TestBackfillAltTitles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.repo.Create(ctx, Movie{TMDBID: 4, Title: "Four", Year: 2004, Extra: &MovieExtra{TitlesRead: true}}); err != nil {
+	if _, err := s.repo.Create(ctx, Movie{TMDBID: 4, Title: "Four", Year: 2004, Extra: &MovieExtra{TitlesRead: true, Releases: &metadata.ReleaseDates{}}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,13 +90,56 @@ func TestBackfillAltTitles(t *testing.T) {
 	if got, _ := s.repo.Get(ctx, bare.ID); got.Extra == nil || got.Extra.AltTitles[0] != "Alt C" {
 		t.Errorf("a movie without extra gets one: %+v", got.Extra)
 	}
-	if got, _ := s.repo.Get(ctx, gone.ID); got.Extra == nil || !got.Extra.TitlesRead || got.Extra.OriginalTitle != "" {
+	if got, _ := s.repo.Get(ctx, gone.ID); got.Extra == nil || !got.Extra.TitlesRead || got.Extra.OriginalTitle != "" ||
+		got.Extra.Releases == nil || got.Extra.Releases.Digital != nil {
 		t.Errorf("a film TMDB no longer has is marked read: %+v", got.Extra)
 	}
 
 	// A second run has nothing to do.
 	if n, _ := s.BackfillAltTitles(ctx, time.Millisecond); n != 0 || meta.calls.Load() != 3 {
 		t.Errorf("second run filled %d (%d calls), want nothing", n, meta.calls.Load())
+	}
+}
+
+// Movies stored before release dates were kept get them from the same pass, without their
+// titles being rewritten; a film with both is left alone.
+func TestBackfillReleaseDates(t *testing.T) {
+	meta := &titlesMeta{}
+	s := titlesService(t, meta)
+	ctx := context.Background()
+	old, err := s.repo.Create(ctx, Movie{TMDBID: 5, Title: "Five", Year: 2005,
+		Extra: &MovieExtra{TitlesRead: true, AltTitles: []string{"Kept"}, ReleaseDate: "2026-09-01"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.repo.Create(ctx, Movie{TMDBID: 6, Title: "Six", Year: 2006,
+		Extra: &MovieExtra{TitlesRead: true, Releases: &metadata.ReleaseDates{}}}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.BackfillAltTitles(ctx, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || meta.calls.Load() != 1 {
+		t.Fatalf("filled %d with %d TMDB calls, want 1 and 1", n, meta.calls.Load())
+	}
+	got, _ := s.repo.Get(ctx, old.ID)
+	if got.Extra == nil || got.Extra.Releases == nil || got.Extra.Releases.Digital == nil || got.Extra.Releases.Digital.Date != "2026-11-05" {
+		t.Fatalf("releases = %+v, want the digital date read", got.Extra)
+	}
+	if len(got.Extra.AltTitles) != 1 || got.Extra.AltTitles[0] != "Kept" || got.Extra.ReleaseDate != "2026-09-01" {
+		t.Errorf("extra = %+v, want its titles and main date kept", got.Extra)
+	}
+}
+
+// New movies store their release dates straight away, read even when TMDB has none.
+func TestExtraFromKeepsReleases(t *testing.T) {
+	rd := &metadata.ReleaseDates{Physical: &metadata.DatedRelease{Date: "2026-12-01", Country: "AU"}}
+	if ex := extraFrom(&metadata.MovieDetails{Releases: rd}); ex.Releases != rd {
+		t.Errorf("releases = %+v", ex.Releases)
+	}
+	if ex := extraFrom(&metadata.MovieDetails{}); ex.Releases == nil {
+		t.Error("no releases from TMDB: want them stored as read and empty")
 	}
 }
 
