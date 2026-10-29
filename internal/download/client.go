@@ -205,6 +205,37 @@ func (i Item) Complete() bool {
 	return i.Progress >= 1.0 && i.RemainingBytes <= 0
 }
 
+// ReadyToImport reports whether a finished download's files are where they'll stay, so an
+// importer may read them: Complete, and the client isn't moving them or missing them.
+//
+// A qBittorrent with "Default Download Path (incomplete torrents)" on downloads into that
+// folder and moves each torrent to its save folder once the last byte lands. During the
+// move it is already 100% (Complete) but its raw state is "moving" and its content path
+// still names the incomplete folder, which Arrmada usually doesn't mount. The series
+// import read that as a release with no video: it blocklisted a good season pack, failed
+// its grab, and the next search fetched another copy. Across two disks the move is a full
+// copy, so for a pack this is minutes, not a moment. "missingFiles" is the client saying
+// the files aren't where it expects; there's nothing to read until that's sorted out, and
+// Needs you already lists it as errored.
+//
+// Complete keeps its meaning (every byte is down) for the stall checks, the in-flight
+// guards and the queue pages: a torrent being moved is done downloading. Only what reads
+// the files (the importers, the paths offered for import, the path checks) waits.
+func (i Item) ReadyToImport() bool {
+	if !i.Complete() || i.Moving() {
+		return false
+	}
+	return i.Transport == TransportUsenet || i.RawState != "missingFiles"
+}
+
+// Moving reports whether qBittorrent is moving the torrent's files to another folder: its
+// incomplete-folder move on completion, a save-path change, or a move it has queued. A
+// usenet job's own post-processing move reads as unpacking (Phase) and isn't Complete
+// until its client is finished with it, so this is only ever true for a torrent.
+func (i Item) Moving() bool {
+	return i.Transport != TransportUsenet && i.RawState == "moving"
+}
+
 // StateCompleted is a usenet job its client has finished with: downloaded, verified and
 // unpacked into its final folder (Item.ContentPath).
 const StateCompleted = "completed"

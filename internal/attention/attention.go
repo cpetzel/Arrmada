@@ -31,6 +31,7 @@ const (
 	KindReview   = "review"    // a finished download held in Review
 	KindDownload = "download"  // a download the client reports as errored
 	KindStalled  = "stalled"   // a download with nobody sending it data for an hour or more
+	KindMoving   = "moving"    // a torrent qBittorrent has been moving for MovingStuckAfter or longer
 	KindImport   = "import"    // a finished download whose import keeps failing
 	KindWrongCat = "wrongcat"  // a finished TV download in a category Arrmada doesn't import
 	KindSearch   = "search"    // titles whose searches keep coming up empty (one aggregate)
@@ -81,7 +82,7 @@ type Item struct {
 type Counts struct {
 	Requests     int `json:"requests"`
 	Reviews      int `json:"reviews"`
-	Downloads    int `json:"downloads"` // errored + stalled
+	Downloads    int `json:"downloads"` // errored + stalled + stuck moving
 	Imports      int `json:"imports"`   // failing imports + wrong-category downloads
 	Searches     int `json:"searches"`  // titles whose searches keep coming up empty
 	Health       int `json:"health"`    // health findings, any level
@@ -408,7 +409,7 @@ func (s *Service) build(items []Item, now time.Time) (snap *Snapshot, all []Item
 // kindOrder is the order kinds are listed in: what blocks something first.
 var kindOrder = map[string]int{
 	KindHealth: 0, KindRequest: 1, KindReview: 2, KindImport: 3, KindDownload: 4,
-	KindWrongCat: 5, KindStalled: 6, KindConvert: 7, KindSearch: 8, KindIssue: 9, KindSubs: 10,
+	KindWrongCat: 5, KindStalled: 6, KindMoving: 7, KindConvert: 8, KindSearch: 9, KindIssue: 10, KindSubs: 11,
 }
 
 // sortItems: errors first, then by kind, then oldest first.
@@ -440,7 +441,7 @@ func countItems(items []Item) Counts {
 			c.Requests += n
 		case KindReview:
 			c.Reviews += n
-		case KindDownload, KindStalled:
+		case KindDownload, KindStalled, KindMoving:
 			c.Downloads += n
 		case KindImport, KindWrongCat:
 			c.Imports += n
@@ -516,6 +517,8 @@ func groupTitle(kind string, n int) string {
 		return num + pick(" import needs review", " imports need review")
 	case KindDownload:
 		return num + pick(" download errored", " downloads errored")
+	case KindMoving:
+		return num + pick(" download has been moving in qBittorrent for over 2 hours", " downloads have been moving in qBittorrent for over 2 hours")
 	case KindStalled:
 		return num + pick(" download has stalled", " downloads have stalled")
 	case KindImport:

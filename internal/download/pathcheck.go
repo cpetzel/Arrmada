@@ -160,12 +160,14 @@ func addCategoryFolders(rep *PathReport, c Client, folders map[string]string) {
 }
 
 // newestFinished is the most recently added complete torrent with a content path, leaving
-// out ones the client itself says have lost their files.
+// out ones the client itself says have lost their files and ones it's still moving out of
+// its incomplete folder (their content path names that folder, not where they'll stay):
+// Item.ReadyToImport.
 func newestFinished(items []Item) *Item {
 	var best *Item
 	for i := range items {
 		it := &items[i]
-		if !it.Complete() || it.ContentPath == "" || it.RawState == "missingFiles" {
+		if !it.ReadyToImport() || it.ContentPath == "" {
 			continue
 		}
 		if best == nil || it.AddedOn > best.AddedOn {

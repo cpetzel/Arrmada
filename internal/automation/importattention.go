@@ -1,6 +1,7 @@
 package automation
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -13,7 +14,8 @@ import (
 )
 
 // What the series import sweep knows that nobody else could see: packs whose files keep
-// failing to place (disk full, a folder it can't write), and finished TV downloads sitting
+// failing to place (disk full, a folder it can't write) or whose download folder it can't
+// read (not mounted, the wrong owner), and finished TV downloads sitting
 // in a category it never imports from. Both used to be log lines only; the Needs-you feed
 // reads them from here. In memory on purpose: a restart retries from scratch, and the
 // next sweep (30 seconds) finds the same downloads again.
@@ -24,6 +26,9 @@ type seriesImportFail struct {
 	sweeps  int
 	since   time.Time
 	lastErr string
+	// unreadable: the last sweep couldn't read the download's folder (as opposed to files
+	// it couldn't place). Such a record waits unreadableShowAfter before Needs you shows it.
+	unreadable bool
 }
 
 // importNotes holds those findings. Its own lock: the sweep writes, the feed reads.
@@ -32,11 +37,19 @@ type importNotes struct {
 	failing  map[string]*seriesImportFail // by lowercased hash
 	wrongCat []download.Item              // the last sweep's misfiled TV downloads
 	loggedAt map[string]time.Time         // when each misfiled download was last logged
+	// unreadLogged is when each download whose folder couldn't be read was last logged, by
+	// lowercased hash: kept apart from failing, since an imported pack's isn't a failure.
+	unreadLogged map[string]time.Time
 }
 
 // wrongCatLogEvery throttles the "wrong category" warning to once per download per hour;
-// the sweep runs every 30 seconds.
+// the sweep runs every 30 seconds. The unreadable-folder warning uses the same hour.
 const wrongCatLogEvery = time.Hour
+
+// unreadableShowAfter is how long a download's folder must have been unreadable before
+// Needs you lists it. A share that drops for a minute, or a container restarting beside
+// Arrmada, clears up by itself; a missing mount or path mapping is still there after five.
+const unreadableShowAfter = 5 * time.Minute
 
 // noteSeriesImportFail counts another sweep in which failed of a download's files couldn't
 // be placed.
@@ -55,8 +68,68 @@ func (c *Coordinator) noteSeriesImportFail(hash, name string, failed int) {
 	}
 	f.name = name
 	f.sweeps++
+	f.unreadable = false
 	f.lastErr = pluralCount(failed, "file couldn't be placed in the library", "files couldn't be placed in the library") +
 		" — the log names the folder and the error"
+}
+
+// noteSeriesImportUnreadable notes a sweep in which a download's folder couldn't be read
+// (importSeriesInto's scanErr), and logs it at most once an hour per download: the sweep
+// runs every 30 seconds, and a folder that isn't mounted stays that way until someone
+// mounts it.
+//
+// A download not yet imported counts another failing sweep in the failing map, so Needs
+// you lists it once, with the folder and the error, after unreadableShowAfter. One already
+// imported (a season pack re-read to fill gaps the season still has) only logs: what it
+// brought is in the library, and the gaps aren't something it failed to do.
+func (c *Coordinator) noteSeriesImportUnreadable(it download.Item, seriesTitle string, scanErr error, imported bool) {
+	n := &c.importNotes
+	now := c.clock()
+	h := strings.ToLower(it.Hash)
+	n.mu.Lock()
+	if !imported {
+		if n.failing == nil {
+			n.failing = map[string]*seriesImportFail{}
+		}
+		f := n.failing[h]
+		if f == nil {
+			f = &seriesImportFail{since: now}
+			n.failing[h] = f
+		}
+		f.name = it.Name
+		f.sweeps++
+		f.unreadable = true
+		f.lastErr = unreadableFolder(it.ContentPath, scanErr)
+	}
+	if n.unreadLogged == nil {
+		n.unreadLogged = map[string]time.Time{}
+	}
+	last, ok := n.unreadLogged[h]
+	logNow := !ok || now.Sub(last) >= wrongCatLogEvery
+	if logNow {
+		n.unreadLogged[h] = now
+	}
+	n.mu.Unlock()
+	switch {
+	case !logNow:
+	case imported:
+		c.log.Warn("series import: can't read an imported pack's folder to fill the season's gaps — skipping it, will look again next sweep",
+			"series", seriesTitle, "release", it.Name, "content_path", it.ContentPath, "err", scanErr)
+	default:
+		c.log.Warn("series import: can't read the download folder — not blocklisting, will retry every sweep",
+			"series", seriesTitle, "release", it.Name, "content_path", it.ContentPath, "err", scanErr)
+	}
+}
+
+// unreadableFolder is what a person is told about a download folder Arrmada couldn't read:
+// the folder, the error (which names the part that failed), and where the fix usually is.
+func unreadableFolder(path string, err error) string {
+	if errors.Is(err, library.ErrChanged) {
+		return "The download folder " + path + " keeps changing while Arrmada reads it (" + err.Error() +
+			") — something is moving or rechecking it; it's tried again every sweep"
+	}
+	return "Arrmada can't read the download folder " + path + " (" + err.Error() +
+		") — check it's mounted in the Arrmada container and readable by it, or add a path mapping"
 }
 
 // clearSeriesImportFail forgets a download once a sweep has handled it.
@@ -64,6 +137,7 @@ func (c *Coordinator) clearSeriesImportFail(hash string) {
 	n := &c.importNotes
 	n.mu.Lock()
 	delete(n.failing, strings.ToLower(hash))
+	delete(n.unreadLogged, strings.ToLower(hash))
 	n.mu.Unlock()
 }
 
@@ -78,17 +152,28 @@ func (c *Coordinator) pruneSeriesImportFails(active map[string]bool) {
 			delete(n.failing, h)
 		}
 	}
+	for h := range n.unreadLogged {
+		if !active[h] {
+			delete(n.unreadLogged, h)
+		}
+	}
 }
 
 // SeriesImportFailures is every series download whose files have failed to place on one
 // sweep or more and not yet succeeded, in the shape the movie importer reports its own
-// (library.Manager.Failures). Attempts counts sweeps; the next one is the next sweep.
+// (library.Manager.Failures). Attempts counts sweeps; the next one is the next sweep. A
+// download whose folder can't be read is left out until it has been so for
+// unreadableShowAfter: a brief blip isn't worth a row.
 func (c *Coordinator) SeriesImportFailures() []library.FailureInfo {
 	n := &c.importNotes
+	now := c.clock()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	out := make([]library.FailureInfo, 0, len(n.failing))
 	for h, f := range n.failing {
+		if f.unreadable && now.Sub(f.since) < unreadableShowAfter {
+			continue
+		}
 		out = append(out, library.FailureInfo{Hash: h, Name: f.name, Attempts: f.sweeps, Since: f.since, LastErr: f.lastErr})
 	}
 	return out

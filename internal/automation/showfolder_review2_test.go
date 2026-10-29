@@ -102,7 +102,7 @@ func TestRevBSeasonFolderInsideACategory(t *testing.T) {
 			mustExec(t, h.c, `INSERT OR IGNORE INTO episodes (series_id, season_number, episode_number, air_date, monitored) VALUES (?, 1, 3, '2020-01-15', 1)`, h.seriesID)
 			dl := h.download(t, name, name+".mkv")
 			s, _ = h.c.series.Get(h.ctx, h.seriesID)
-			if placed, _, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
+			if placed, _, _, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
 				t.Errorf("import placed %v", placed)
 			}
 			noDir(t, filepath.Join(tv, category, "Season 1"), "an import made a season folder in the category")
@@ -129,7 +129,7 @@ func TestRevBAllLeftoversGone(t *testing.T) {
 	}
 	const name = "Show.S01E02.1080p.WEB-DL-GRP"
 	dl := h.download(t, name, name+".mkv")
-	if placed, _, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
+	if placed, _, _, _, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 0 {
 		t.Errorf("import placed %v", placed)
 	}
 	noDir(t, filepath.Join(tv, "Show"), "a new folder was made for a show that has one")
@@ -143,7 +143,7 @@ func TestRevBJoinsSeasonDot01(t *testing.T) {
 	const name = "Show.S01E02.1080p.WEB-DL-GRP"
 	dl := h.download(t, name, name+".mkv")
 	s, _ := h.c.series.Get(h.ctx, h.seriesID)
-	if placed, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 1 || failed != 0 {
+	if placed, _, _, failed, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 1 || failed != 0 {
 		t.Fatalf("placed %v failed %d", placed, failed)
 	}
 	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); filepath.Dir(cur.Path) != filepath.Join(tv, "Show", "Season.01") {
@@ -162,7 +162,7 @@ func TestRevBNeverJoinsATaggedSeasonFolder(t *testing.T) {
 	const name = "Show.S01E02.1080p.WEB-DL-GRP"
 	dl := h.download(t, name, name+".mkv")
 	s, _ := h.c.series.Get(h.ctx, h.seriesID)
-	if placed, _, _, failed, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 1 || failed != 0 {
+	if placed, _, _, failed, _, _ := h.c.importSeriesInto(h.ctx, s, dl, forceAll); len(placed) != 1 || failed != 0 {
 		t.Fatalf("placed %v failed %d", placed, failed)
 	}
 	if cur := h.c.series.CurrentEpisodeFile(h.ctx, h.seriesID, 1, 2); filepath.Dir(cur.Path) != filepath.Join(tv, "Show", "Season 1") {

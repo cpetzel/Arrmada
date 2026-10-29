@@ -503,7 +503,9 @@ const unseenSample = 20
 // unseenDownloads is, per client other than the bundled one, the finished downloads in
 // the shared queue snapshot whose (mapped) path isn't on disk here. The bundled client
 // saves into Arrmada's own downloads folder and is left out; a torrent the client itself
-// says has lost its files is too, since no mapping would bring it back.
+// says has lost its files is too, since no mapping would bring it back, and so is one it's
+// still moving out of its incomplete folder: its path names that folder until the move is
+// done (download.Item.ReadyToImport).
 func (a *api) unseenDownloads(ctx context.Context) ([]health.UnseenDownloads, error) {
 	clients, err := a.deps.Downloads.List(ctx)
 	if err != nil {
@@ -524,7 +526,7 @@ func (a *api) unseenDownloads(ctx context.Context) ([]health.UnseenDownloads, er
 	}
 	byClient := map[int64][]download.Item{}
 	for _, it := range snap.Items {
-		if _, ok := watch[it.ClientID]; !ok || !it.Complete() || it.ContentPath == "" || it.RawState == "missingFiles" {
+		if _, ok := watch[it.ClientID]; !ok || !it.ReadyToImport() || it.ContentPath == "" {
 			continue
 		}
 		byClient[it.ClientID] = append(byClient[it.ClientID], it)

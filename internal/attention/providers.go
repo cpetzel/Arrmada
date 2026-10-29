@@ -22,6 +22,7 @@ var groupLinks = map[string]*health.Fix{
 	KindReview:   health.FixReview,
 	KindDownload: health.FixDownloadProblems,
 	KindStalled:  health.FixDownloadProblems,
+	KindMoving:   health.FixDownloadProblems,
 	KindImport:   health.FixImportProblems,
 	KindWrongCat: health.FixWrongCategory,
 	KindSearch:   health.FixDownloadsSearching,
@@ -206,18 +207,35 @@ func reviewReason(code string) string {
 // is the earlier "worth a look".
 const StalledAfter = time.Hour
 
+// MovingStuckAfter is how long qBittorrent may spend moving a torrent (out of its
+// incomplete folder, most often) before it needs someone. Imports wait for the move
+// (download.Item.ReadyToImport), so a move that never finishes means a download that never
+// imports and nothing saying why. A move across disks is a full copy, and qBittorrent does
+// one at a time with the rest queued as "moving" too: a few 100 GB season packs finishing
+// together on a busy disk or a gigabit share take the best part of an hour. Two hours
+// leaves room for that, and is still the same day for someone waiting on an episode.
+// Nothing acts on it; it's only said.
+const MovingStuckAfter = 2 * time.Hour
+
 type downloadsProvider struct {
 	mu sync.Mutex
 	// stalledSince is when each torrent was first seen stuck (stalled, or waiting for its
 	// file list) in this run, by lowercased hash: the clock for a torrent no grab knows. An
 	// Arrmada grab goes by its stall clock (progress_at), so a restart doesn't reset its hour.
 	stalledSince map[string]time.Time
+	// movingSince is when each torrent was first seen being moved by qBittorrent in this
+	// run, by lowercased hash. The client doesn't say when a move began; a restart starts
+	// the clock again, which only delays the item.
+	movingSince map[string]time.Time
 }
 
-// Downloads reports errored torrents and ones stalled for StalledAfter or longer, from
-// the frame's queue read. With the client unreadable it reports nothing: the health
-// check says the client is down, which is the real problem.
-func Downloads() Provider { return &downloadsProvider{stalledSince: map[string]time.Time{}} }
+// Downloads reports errored torrents, ones stalled for StalledAfter or longer, and ones
+// qBittorrent has been moving for MovingStuckAfter or longer, from the frame's queue read.
+// With the client unreadable it reports nothing: the health check says the client is down,
+// which is the real problem.
+func Downloads() Provider {
+	return &downloadsProvider{stalledSince: map[string]time.Time{}, movingSince: map[string]time.Time{}}
+}
 
 func (*downloadsProvider) Name() string { return "downloads" }
 
@@ -228,7 +246,7 @@ func (p *downloadsProvider) Collect(_ context.Context, f *Frame) ([]Item, error)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var out []Item
-	stalledNow := map[string]bool{}
+	stalledNow, movingNow := map[string]bool{}, map[string]bool{}
 	for _, it := range f.Queue {
 		h := strings.ToLower(it.Hash)
 		if h == "" {
@@ -236,6 +254,26 @@ func (p *downloadsProvider) Collect(_ context.Context, f *Frame) ([]Item, error)
 		}
 		name := displayName(it, f)
 		switch phase := it.Phase(); {
+		case it.Moving():
+			movingNow[h] = true
+			first, ok := p.movingSince[h]
+			if !ok {
+				first = f.Now
+				p.movingSince[h] = first
+			}
+			if f.Now.Sub(first) < MovingStuckAfter {
+				continue
+			}
+			// Its own kind, not a stall: nobody needs to send it data, so the stall alert, the
+			// "has stalled" count and the card's Reannounce / Recheck would all be wrong. Not
+			// Grabbed: there's nothing to fail over to. The download is here; it's the
+			// move that's stuck, and only qBittorrent (or the disk) can finish it.
+			x := Item{Key: KindMoving + ":" + h, Kind: KindMoving, Level: LevelWarning, Name: name,
+				Title:  "qBittorrent has been moving " + name + " for over " + roughDuration(f.Now.Sub(first)),
+				Detail: "It won't import until the move finishes. Check qBittorrent and the disk it's moving to (full, slow, or gone).",
+				Since:  first.UnixMilli(), Hash: h}
+			linkTo(&x, health.FixDownloadProblems)
+			out = append(out, x)
 		case phase == "error" && it.Transport == download.TransportUsenet:
 			if x, ok := usenetFailure(it, name, h, f); ok {
 				out = append(out, x)
@@ -292,6 +330,12 @@ func (p *downloadsProvider) Collect(_ context.Context, f *Frame) ([]Item, error)
 			continue
 		}
 		delete(p.stalledSince, h)
+	}
+	for h := range p.movingSince {
+		if movingNow[h] || (!f.Whole && !present[h]) {
+			continue
+		}
+		delete(p.movingSince, h)
 	}
 	return out, nil
 }

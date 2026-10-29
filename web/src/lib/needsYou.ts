@@ -26,6 +26,7 @@ const ACTION: Record<AttentionKind, [one: string, many: string]> = {
   review: ["Decide", "Decide"],
   download: ["See it", "See them"],
   stalled: ["See it", "See them"],
+  moving: ["See it", "See them"],
   import: ["See it", "See them"],
   wrongcat: ["See it", "See them"],
   search: ["See what's searching", "See what's searching"],

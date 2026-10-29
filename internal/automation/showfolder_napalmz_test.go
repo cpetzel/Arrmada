@@ -141,7 +141,7 @@ func (f *napFixture) importEp(t *testing.T, season, ep int) string {
 	if _, _, err := f.h.c.seriesPlacement(f.h.ctx, s); err != nil {
 		t.Fatalf("placement refused: %v", err)
 	}
-	if _, _, _, failed, _ := f.h.c.importSeriesInto(f.h.ctx, s, dl, forceAll); failed != 0 {
+	if _, _, _, failed, _, _ := f.h.c.importSeriesInto(f.h.ctx, s, dl, forceAll); failed != 0 {
 		t.Fatalf("import of %s failed", name)
 	}
 	return f.h.c.series.CurrentEpisodeFile(f.h.ctx, f.id, season, ep).Path
