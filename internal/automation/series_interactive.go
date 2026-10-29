@@ -1053,6 +1053,16 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 		}
 	}
 
+	// A file another episode has recorded (a two-episode file one of whose episodes now has
+	// a better copy) is that episode's only file: never offered for deletion.
+	recordedAs := map[string][][2]int{}
+	for k, p := range recorded {
+		recordedAs[p] = append(recordedAs[p], k)
+	}
+	elsewhere := func(f library.FoundVideo, key [2]int) bool {
+		return slices.ContainsFunc(recordedAs[filepath.Clean(f.Path)], func(k [2]int) bool { return k != key })
+	}
+
 	out := make([]DuplicateEpisodeFile, 0)
 	for key, found := range byEpisode {
 		files := episodeClaims(found, recorded[key], s)
@@ -1070,7 +1080,7 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 		}
 		d := DuplicateEpisodeFile{Season: key[0], Episode: key[1], Keeping: copyOf(best)}
 		for _, f := range files {
-			if f.Path != best.Path && (named(f) || !named(best)) {
+			if f.Path != best.Path && (named(f) || !named(best)) && !elsewhere(f, key) {
 				d.Extras = append(d.Extras, copyOf(f))
 			}
 		}
