@@ -125,7 +125,7 @@ test.describe("desktop seasons", () => {
     const e9 = cards.nth(8).getByTestId("audio-langs");
     await expect(e9).toHaveAttribute("data-fit", "partial");
     await expect(e9).toHaveAttribute("aria-label", /Missing a preferred language: No English audio/);
-    await expect(cards.nth(9).locator("[title^='German — detected']")).toHaveText("DE");
+    await expect(cards.nth(9).locator("[title^='German (detected) — ']")).toHaveText("DE");
     // The season line: languages over its analysed files, and the one that misses.
     const summary = page.getByTestId("season-audio");
     await expect(summary).toContainText("DE 10/10 · EN 9/10");
