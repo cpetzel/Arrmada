@@ -495,8 +495,9 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     held, and shown in **Needs you**, rather than partly imported. It is never judged to
     hold no video, so it is never blocklisted or deleted for it. The folder it couldn't
     open may hold the episodes, or the film itself beside a featurette that would have
-    been taken in its place. A file that disappears while the folder is read (qBittorrent
-    renaming it as the torrent finishes) is just skipped.
+    been taken in its place. A file that disappears while the folder is read (the
+    download being moved, rechecked or renamed) means the folder is changing: nothing is
+    decided, and it's read again on the next sweep.
   - Importing such a download from **Review** says Arrmada can't read the folder, instead of
     "no video files were found". Choosing files by hand for a show lists what could be
     read and says part of the folder couldn't be.

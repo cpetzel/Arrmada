@@ -1199,8 +1199,8 @@ func FindVideos(contentPath string) ([]FoundVideo, error) {
 // into or can't list, or a file it can't stat (I/O error, permissions). The walk carries
 // on, and what it found in the rest is returned with the first such error
 // (ErrPartlyUnreadable). A file that was listed and is gone by the time it's looked at is
-// simply skipped: qBittorrent renames "x.mkv.!qB" to "x.mkv" as a torrent completes, and
-// that rename isn't a download Arrmada can't read. It used to skip all of those
+// one too (ErrChanged): the folder is changing under the walk, so what it found can't be
+// trusted either way, and the caller tries again later. It used to skip all of those
 // in silence, so a download whose episodes were all in an unreadable folder read as one
 // with no video, which is what gets a release blocklisted and its data deleted. A caller
 // deciding anything from the result treats an error as "can't tell"; one that only lists
@@ -1235,9 +1235,7 @@ func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisit
 		}
 		fi, e := entryInfo(d)
 		if e != nil {
-			if !errors.Is(e, fs.ErrNotExist) {
-				unread = firstUnreadable(unread, e)
-			}
+			unread = firstUnreadable(unread, e)
 			return nil
 		}
 		if !ListedEpisodeVideo(p, fi.Size()) {
@@ -1260,14 +1258,38 @@ func FindVideosCtx(ctx context.Context, contentPath string, maxResults, maxVisit
 // found is incomplete, so nothing may be concluded from what's missing.
 var ErrPartlyUnreadable = errors.New("part of the folder couldn't be read")
 
+// ErrChanged is a walk that found something gone between listing a folder and looking at
+// it: the download is being moved, rechecked or renamed under the walk. It is a kind of
+// ErrPartlyUnreadable, so every caller holds the download, and tries again later.
+//
+// Skipping what vanished isn't safe. A film moved out mid-walk left its featurette as the
+// largest video, and the import took that for the film; a folder renamed as a whole left
+// every file gone and none found, which reads as a release with no video: blocklisted,
+// its grab failed, its download deleted.
+var ErrChanged = fmt.Errorf("%w: it changed while it was read", ErrPartlyUnreadable)
+
 // entryInfo stats a walked entry (a test makes one vanish between listing and stat).
 var entryInfo = func(d fs.DirEntry) (fs.FileInfo, error) { return d.Info() }
 
-// firstUnreadable keeps the first error a walk met (wrapped in ErrPartlyUnreadable); it
-// names the folder or file that failed, which is what a person needs to fix it.
+// StatEntriesWithForTest swaps how the walks stat what they listed, so another package's
+// test can make files vanish mid-walk; restore puts it back. Tests only.
+func StatEntriesWithForTest(fn func(fs.DirEntry) (fs.FileInfo, error)) (restore func()) {
+	orig := entryInfo
+	entryInfo = fn
+	return func() { entryInfo = orig }
+}
+
+// firstUnreadable keeps the first error a walk met (wrapped in ErrPartlyUnreadable, or in
+// ErrChanged for something that's gone); it names the folder or file that failed, which is
+// what a person needs to fix it. A real read error replaces an earlier "changed": it's the
+// one that won't clear by itself.
 func firstUnreadable(have, err error) error {
-	if have != nil {
+	changed := errors.Is(err, fs.ErrNotExist)
+	if have != nil && (changed || !errors.Is(have, ErrChanged)) {
 		return have
+	}
+	if changed {
+		return fmt.Errorf("%w: %w", ErrChanged, err)
 	}
 	return fmt.Errorf("%w: %w", ErrPartlyUnreadable, err)
 }
@@ -2178,9 +2200,7 @@ func pickMediaFile(contentPath string, strict bool) (string, int64, error) {
 		}
 		fi, e := entryInfo(d)
 		if e != nil {
-			if !errors.Is(e, fs.ErrNotExist) {
-				unread = firstUnreadable(unread, e)
-			}
+			unread = firstUnreadable(unread, e)
 			return nil
 		}
 		if isSampleName(p) || fi.Size() < minVideoSize {

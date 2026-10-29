@@ -2,12 +2,15 @@ package automation
 
 import (
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tristenlammi/arrmada/internal/library"
 )
 
 // The series import used to read a download folder it couldn't open as a release with no
@@ -176,6 +179,31 @@ func TestSeriesImportWaitsWhileQbittorrentMovesATorrent(t *testing.T) {
 	h.c.ImportSeriesDownloads(h.ctx)
 	if got := h.status(t, gid); got != grabStatusImported {
 		t.Fatalf("after the move: grab status = %q, want %q", got, grabStatusImported)
+	}
+}
+
+// The pack's folder is renamed as a whole after the walk listed it, so every file is gone
+// when it's looked at. That's a folder that changed, not a release with no video: nothing
+// is blocklisted, failed or removed, and once it holds still it imports.
+func TestSeriesImportWaitsOutAFolderChangingUnderIt(t *testing.T) {
+	h := newLifecycleHarness(t)
+	dir := h.pack(t)
+	hash := h.completedTorrent(waitPack, seriesCategory, dir)
+	gid := h.seriesGrab(t, waitPack, hash)
+	restore := library.StatEntriesWithForTest(func(d fs.DirEntry) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "lstat", Path: d.Name(), Err: fs.ErrNotExist}
+	})
+	h.c.ImportSeriesDownloads(h.ctx)
+	h.c.ImportSeriesDownloads(h.ctx)
+	restore()
+	h.assertWaiting(t, hash, gid)
+	if fails := h.c.SeriesImportFailures(); len(fails) != 0 {
+		t.Errorf("listed in Needs you within a minute: %+v", fails)
+	}
+
+	h.c.ImportSeriesDownloads(h.ctx)
+	if got := h.status(t, gid); got != grabStatusImported {
+		t.Fatalf("once the folder held still: grab status = %q, want %q", got, grabStatusImported)
 	}
 }
 

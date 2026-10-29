@@ -76,37 +76,67 @@ func TestWalksOfAReadableFolderHaveNoError(t *testing.T) {
 	}
 }
 
-// A file listed and gone by the time it's looked at (qBittorrent renaming "x.mkv.!qB" as a
-// torrent completes, a sample deleted by hand) is skipped: it isn't a part of the download
-// Arrmada can't read, and holding the download for it would hold it for nothing. A file
-// that's there but can't be looked at (an I/O error, permissions) still is one.
-func TestWalksSkipAFileThatVanished(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "Show.S01E01.mkv"), 60<<20)
-	writeFile(t, filepath.Join(dir, "Show.S01E02.mkv"), 60<<20)
-	fail := fs.ErrNotExist
+// vanish makes the named files disappear between the walk listing them and looking at
+// them, as a move, a recheck or a folder rename under the walk does.
+func vanish(t *testing.T, names ...string) {
+	t.Helper()
+	gone := map[string]bool{}
+	for _, n := range names {
+		gone[n] = true
+	}
 	orig := entryInfo
 	entryInfo = func(d fs.DirEntry) (fs.FileInfo, error) {
-		if d.Name() == "Show.S01E02.mkv" {
-			return nil, &fs.PathError{Op: "lstat", Path: d.Name(), Err: fail}
+		if gone[d.Name()] {
+			return nil, &fs.PathError{Op: "lstat", Path: d.Name(), Err: fs.ErrNotExist}
 		}
 		return d.Info()
 	}
 	t.Cleanup(func() { entryInfo = orig })
+}
+
+// The film vanishes mid-walk (moved out, rechecked back to ".!qB", a mover script) while
+// its featurette stays: the import must not take the featurette for the film. The folder
+// changed under it, so it's an error to retry (ErrChanged, a kind of ErrPartlyUnreadable).
+func TestAVanishedFilmIsNeverReplacedByItsFeaturette(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "Film.2020.1080p.mkv"), 90<<20)
+	writeFile(t, filepath.Join(dir, "Film.2020.Featurette.mkv"), 60<<20)
+	vanish(t, "Film.2020.1080p.mkv")
+
+	got, _, err := findMediaFile(dir)
+	if !errors.Is(err, ErrChanged) || !errors.Is(err, ErrPartlyUnreadable) || got != "" {
+		t.Errorf("findMediaFile = %q, %v; want no pick and ErrChanged", got, err)
+	}
+	if _, err := FindVideos(dir); !errors.Is(err, ErrChanged) {
+		t.Errorf("FindVideos err = %v, want ErrChanged", err)
+	}
+}
+
+// A folder renamed as a whole after it was listed: every file is gone when it's looked at.
+// That's a folder that changed, not one with no video in it.
+func TestEveryFileVanishingIsAnErrorNotEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "Show.S01E01.mkv"), 60<<20)
+	writeFile(t, filepath.Join(dir, "Show.S01E02.mkv"), 60<<20)
+	vanish(t, "Show.S01E01.mkv", "Show.S01E02.mkv")
 
 	vids, err := FindVideos(dir)
-	if err != nil || len(vids) != 1 || filepath.Base(vids[0].Path) != "Show.S01E01.mkv" {
-		t.Errorf("a vanished file: FindVideos = %+v, %v; want the other episode and no error", vids, err)
+	if !errors.Is(err, ErrChanged) || len(vids) != 0 {
+		t.Errorf("FindVideos = %+v, %v; want nothing and ErrChanged", vids, err)
 	}
-	if got, _, err := findMediaFile(dir); err != nil || filepath.Base(got) != "Show.S01E01.mkv" {
-		t.Errorf("a vanished file: findMediaFile = %q, %v", got, err)
+	if _, _, err := FindVideo(dir); !errors.Is(err, ErrChanged) {
+		t.Errorf("FindVideo err = %v, want ErrChanged", err)
 	}
+}
 
-	fail = fs.ErrPermission
-	if _, err := FindVideos(dir); !errors.Is(err, ErrPartlyUnreadable) {
-		t.Errorf("a file that can't be stat'd: err = %v, want ErrPartlyUnreadable", err)
+// A real read error outranks "changed": it's the one that won't clear by itself, so it's
+// the one a person is told about.
+func TestARealReadErrorOutranksAChange(t *testing.T) {
+	got := firstUnreadable(firstUnreadable(nil, fs.ErrNotExist), fs.ErrPermission)
+	if errors.Is(got, ErrChanged) || !errors.Is(got, fs.ErrPermission) {
+		t.Errorf("err = %v, want the permission error", got)
 	}
-	if _, _, err := findMediaFile(dir); !errors.Is(err, ErrPartlyUnreadable) {
-		t.Errorf("a file that can't be stat'd: findMediaFile err = %v, want ErrPartlyUnreadable", err)
+	if got := firstUnreadable(got, fs.ErrNotExist); !errors.Is(got, fs.ErrPermission) {
+		t.Errorf("a later change replaced the read error: %v", got)
 	}
 }

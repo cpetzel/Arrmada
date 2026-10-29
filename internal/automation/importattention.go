@@ -1,6 +1,7 @@
 package automation
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -123,6 +124,10 @@ func (c *Coordinator) noteSeriesImportUnreadable(it download.Item, seriesTitle s
 // unreadableFolder is what a person is told about a download folder Arrmada couldn't read:
 // the folder, the error (which names the part that failed), and where the fix usually is.
 func unreadableFolder(path string, err error) string {
+	if errors.Is(err, library.ErrChanged) {
+		return "The download folder " + path + " keeps changing while Arrmada reads it (" + err.Error() +
+			") — something is moving or rechecking it; it's tried again every sweep"
+	}
 	return "Arrmada can't read the download folder " + path + " (" + err.Error() +
 		") — check it's mounted in the Arrmada container and readable by it, or add a path mapping"
 }
