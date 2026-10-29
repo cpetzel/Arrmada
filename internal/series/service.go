@@ -1988,16 +1988,25 @@ func (s *Service) importSeriesFolder(ctx context.Context, dir string, videos []l
 		keep = s.EpisodeFileFilter(ctx, full, dir)
 	}
 	marked := 0
-	for _, v := range videos {
-		if !keep(v.Path) || library.InExtrasFolder(dir, v.Path) {
-			continue
-		}
-		p := library.ParseEpisodeFile(v.Path)
-		// ResolveEpisodes handles multi-episode files, and — for anime — absolute
-		// numbering and the per-cour positional fallback.
-		for _, ref := range s.ResolveEpisodes(ctx, added.ID, p) {
-			if s.repo.SetEpisodeFile(ctx, added.ID, ref.Season, ref.Episode, v.Path, v.Size) == nil {
-				marked++
+	// Files read by their names as releases are, first; then those only the on-disk "1x8"
+	// rule reads (#81), which only fill episodes nothing else claimed.
+	claimed := map[EpisodeRef]bool{}
+	for _, onDiskOnly := range []bool{false, true} {
+		for _, v := range videos {
+			if !keep(v.Path) || library.InExtrasFolder(dir, v.Path) || library.ReadOnlyOnDisk(v.Path) != onDiskOnly {
+				continue
+			}
+			p := library.ParseEpisodeFile(v.Path)
+			// ResolveEpisodes handles multi-episode files, and — for anime — absolute
+			// numbering and the per-cour positional fallback.
+			for _, ref := range s.ResolveEpisodes(ctx, added.ID, p) {
+				if onDiskOnly && claimed[ref] {
+					continue
+				}
+				claimed[ref] = true
+				if s.repo.SetEpisodeFile(ctx, added.ID, ref.Season, ref.Episode, v.Path, v.Size) == nil {
+					marked++
+				}
 			}
 		}
 	}

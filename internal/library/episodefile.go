@@ -14,3 +14,14 @@ func ParseEpisodeFile(path string) parser.Release {
 	season, inSeason := SeasonFolderNumber(filepath.Base(filepath.Dir(path)))
 	return parser.ParseLibraryFile(filepath.Base(path), season, inSeason)
 }
+
+// ReadOnlyOnDisk reports whether the file at path holds an episode only by
+// ParseEpisodeFile's on-disk reading (#81's single-digit "1x8"), not by its name alone as a
+// release is read. Such a file only fills an episode with no file: it never takes the place
+// of the file an episode already has.
+func ReadOnlyOnDisk(path string) bool {
+	if len(parser.Parse(filepath.Base(path)).Episodes) > 0 {
+		return false
+	}
+	return len(ParseEpisodeFile(path).Episodes) > 0
+}

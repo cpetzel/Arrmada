@@ -78,6 +78,40 @@ func TestParseLibraryFileSingleDigitNxE(t *testing.T) {
 		// A dash with no title before it: nothing sets the token off.
 		{"- 1x8 - Title.mkv", 0, false, 0, nil},
 		{"1x8 - Title.mkv", 0, false, 0, nil},
+		// Nothing before the token, even in its season's folder: far more often the show's
+		// own title ("3x3 Eyes", "2x2 Club"). Only a name that is the token alone.
+		{"1x8 - Title.mkv", 1, true, 0, nil},
+		{"- 1x8 - Title.mkv", 1, true, 0, nil},
+		{"3x3 Eyes 08.mkv", 3, true, 0, nil},
+		{"3x3 Eyes 05.mkv", 3, true, 0, nil},
+		{"2x2 Club Ep 5.mkv", 2, true, 0, nil},
+		{"[Grp] 1x8 - Title.mkv", 1, true, 0, nil},
+		{"1x8.mkv", 1, true, 1, []int{8}},
+		{"1x8.mkv", 0, false, 0, nil},
+		// A spaced dash separates two tokens, it doesn't join them into a range.
+		{"Kids 2x2 - 2x5 - Title.mkv", 2, true, 0, nil},
+		{"Kids 2x2 - 2x5 - Title.mkv", 0, false, 0, nil},
+		{"Show - 1x1 - 1x8 - Ep.mkv", 1, true, 0, nil},
+		{"Show - 1x1 - 1x8 - Ep.mkv", 0, false, 0, nil},
+		{"Show - 1x3 - 1x4 - Ep.mkv", 1, true, 0, nil},
+		// A joined run goes up, a step at a time.
+		{"Show - 1x9-1x8 - Ep.mkv", 1, true, 0, nil},
+		{"Show - 1x1-1x9 - Ep.mkv", 1, true, 0, nil},
+		{"Show - 1x8 & 1x8 - Ep.mkv", 1, true, 0, nil},
+		{"Show - 1x8 + 1x9 - Ep.mkv", 0, false, 1, []int{8, 9}},
+		// The same number twice, and dimensions: only dashed AND in that season's folder.
+		{"Speedcubing - 3x3.mkv", 0, false, 0, nil},
+		{"Rubik - 2x2 - Tutorial.mkv", 0, false, 0, nil},
+		{"Lego - 2x4 - Brick.mkv", 0, false, 0, nil},
+		{"Show 3x3 Title.mkv", 3, true, 0, nil},
+		{"Show - 3x3 - Title.mkv", 3, true, 3, []int{3}},
+		{"Show - 2x4 - Title.mkv", 2, true, 2, []int{4}},
+		{"11.22.63 - 1x1- The Rabbit Hole.mkv", 0, false, 0, nil},
+		// An unread NxN twin is a second candidate, not a lookalike to step over.
+		{"Show - 2x2 - 2x5.mkv", 2, true, 0, nil},
+		// En and em dashes are dashes.
+		{"Show – 1x8 – Title.mkv", 0, false, 1, []int{8}},
+		{"Show — 1x8.mkv", 0, false, 1, []int{8}},
 	}
 	for _, c := range cases {
 		t.Run(fmt.Sprintf("%s|%d|%v", c.name, c.folderSeason, c.inSeason), func(t *testing.T) {
@@ -108,6 +142,9 @@ func TestParseLibraryFileReadsAsThePaddedForm(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%q:\n got  %#v\n want %#v", c.name, got, want)
 		}
+	}
+	if r := ParseLibraryFile("Show – 1x8 – Title.mkv", 0, false); r.Title != "Show" {
+		t.Errorf("en-dash name: title %q, want %q (no trailing dash)", r.Title, "Show")
 	}
 	r := ParseLibraryFile("11.22.63 - 1x8- The Day in Question [HDTVMux1080p Ita 5.1] NovaRip.mkv", 1, true)
 	if r.Title != "11 22 63" || r.Resolution != Res1080p {

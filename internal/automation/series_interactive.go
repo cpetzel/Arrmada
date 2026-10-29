@@ -649,11 +649,19 @@ func (c *Coordinator) RescanSeries(ctx context.Context, seriesID int64) error {
 		return err // a rescan cut short writes nothing
 	}
 
+	recordedAt := recordedEpisodeFiles(s)
 	dupes := 0
 	for key, files := range byEpisode {
-		best := files[0]
+		best, ok := keptEpisodeFile(files, recordedAt[key])
+		if !ok {
+			// Only files read by the on-disk "1x8" rule, beside a recorded file that's still
+			// there: the recorded file stays.
+			dupes += len(files)
+			c.log.Info("series rescan: an episode keeps its recorded file; another copy read only as a library file is left as it is",
+				"series", s.Title, "episode", fmt.Sprintf("S%02dE%02d", key[0], key[1]), "kept", filepath.Base(recordedAt[key]))
+			continue
+		}
 		if len(files) > 1 {
-			best = bestLibraryVideo(files)
 			dupes += len(files) - 1
 			others := make([]string, 0, len(files)-1)
 			for _, f := range files {
@@ -817,7 +825,7 @@ func (c *Coordinator) SeriesImportCandidates(ctx context.Context, dir string) (c
 	partly = errors.Is(err, library.ErrPartlyUnreadable)
 	out := make([]SeriesImportCandidate, 0, len(vids))
 	for _, v := range vids {
-		p := library.ParseEpisodeFile(v.Path)
+		p := parser.Parse(filepath.Base(v.Path))
 		ep := 0
 		if len(p.Episodes) > 0 {
 			ep = p.Episodes[0]
@@ -1014,12 +1022,16 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 		}
 	}
 
+	recordedAt := recordedEpisodeFiles(s)
 	out := make([]DuplicateEpisodeFile, 0)
 	for key, files := range byEpisode {
 		if len(files) < 2 {
 			continue
 		}
-		best := bestLibraryVideo(files)
+		best, ok := keptEpisodeFile(files, recordedAt[key])
+		if !ok {
+			continue // the recorded file isn't among them: none of these is the one kept
+		}
 		d := DuplicateEpisodeFile{Season: key[0], Episode: key[1], Keeping: copyOf(best)}
 		for _, f := range files {
 			if f.Path != best.Path {
@@ -1035,6 +1047,45 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 		return out[i].Episode < out[j].Episode
 	})
 	return out, nil
+}
+
+// recordedEpisodeFiles is each episode's recorded file path.
+func recordedEpisodeFiles(s series.Series) map[[2]int]string {
+	out := map[[2]int]string{}
+	for _, sn := range s.Seasons {
+		for _, e := range sn.Episodes {
+			if e.HasFile && e.FilePath != "" {
+				out[[2]int{e.SeasonNumber, e.EpisodeNumber}] = e.FilePath
+			}
+		}
+	}
+	return out
+}
+
+// keptEpisodeFile picks which of the files on disk claiming one episode is kept: the best
+// (bestLibraryVideo). A file only the on-disk "1x8" rule reads (library.ReadOnlyOnDisk, #81)
+// only fills an episode nothing else holds: it never takes the place of the episode's
+// recorded file while that is still there, nor of another file read by its name. ok is
+// false when every candidate is such a file and the recorded one, still there, isn't among
+// them — the recorded file stays.
+func keptEpisodeFile(files []library.FoundVideo, recorded string) (library.FoundVideo, bool) {
+	keepRecorded := recorded != "" && !fileGone(recorded)
+	var eligible []library.FoundVideo
+	for _, f := range files {
+		if (keepRecorded && filepath.Clean(f.Path) == filepath.Clean(recorded)) || !library.ReadOnlyOnDisk(f.Path) {
+			eligible = append(eligible, f)
+		}
+	}
+	switch {
+	case len(eligible) > 0:
+		files = eligible
+	case keepRecorded:
+		return library.FoundVideo{}, false
+	}
+	if len(files) == 1 {
+		return files[0], true
+	}
+	return bestLibraryVideo(files), true
 }
 
 func copyOf(v library.FoundVideo) DuplicateCopy {

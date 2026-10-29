@@ -32,7 +32,7 @@ import (
 // This file uses only what v0.3.3, main (931de3b3) and the fix share, so it runs unchanged
 // on all three. v033 and main are what those two record (NXE_LAYOUT_PRINT=1 prints a run's
 // readings instead of checking them); want is the fix. The only differences are the files
-// the #81 rule reads that nothing read before.
+// the #81 rule reads that nothing read before, filling episodes nothing else holds.
 type nxeLayoutCase struct {
 	name    string
 	title   string
@@ -201,9 +201,9 @@ var nxeLayoutCases = []nxeLayoutCase{
 		want: nxeSame("S1E3=f0 S1E4=f1"),
 	},
 	{
-		// A newly read copy is a second file for its episode: a rescan keeps the better of
-		// the two, exactly as it does for two SxxEyy copies (the control case below). The
-		// other stays on disk and is listed as a duplicate; nothing is deleted.
+		// A file only the new rule reads never displaces one read by its name, nor an
+		// episode's recorded file, even when it's the better copy (unlike two SxxEyy copies,
+		// the control case below). It stays on disk, listed as a duplicate.
 		name:  "a 1080p 1x8 copy beside a 720p S01E08 file",
 		title: "Dupe Show", year: 2012, seasons: map[int]int{1: 8}, files: []string{
 			"Dupe Show (2012)/Season 1/Dupe.Show.S01E08.720p.HDTV.x264-GRP.mkv",
@@ -211,7 +211,41 @@ var nxeLayoutCases = []nxeLayoutCase{
 		},
 		v033: nxeSame("S1E8=f0"),
 		main: nxeSame("S1E8=f0"),
-		want: [3]string{"S1E8=f0", "S1E8=f1", "S1E8=f1"},
+		want: nxeSame("S1E8=f0"),
+	},
+	{
+		// The show "3x3 Eyes": a token opening the name is its title, never the episode —
+		// a bigger "3x3 Eyes 05" must not become S3E3 over the real S03E03 file.
+		name:  "show titled 3x3 Eyes, Season 3 folder",
+		title: "3x3 Eyes", year: 1991, seasons: map[int]int{3: 8}, files: []string{
+			"3x3 Eyes (1991)/Season 3/3x3 Eyes - S03E03 - Third.mkv",
+			"3x3 Eyes (1991)/Season 3/3x3 Eyes 08.mkv",
+			"3x3 Eyes (1991)/Season 3/3x3 Eyes 05.mkv",
+		},
+		v033: nxeSame("S3E3=f0"),
+		main: nxeSame("S3E3=f0"),
+		want: nxeSame("S3E3=f0"),
+	},
+	{
+		name:  "show titled 2x2 Club, Season 2 folder",
+		title: "2x2 Club", year: 2005, seasons: map[int]int{2: 6}, files: []string{
+			"2x2 Club (2005)/Season 2/2x2 Club Ep 5.mkv",
+			"2x2 Club (2005)/Season 2/2x2 Club - S02E02.mkv",
+		},
+		v033: nxeSame("S2E2=f1"),
+		main: nxeSame("S2E2=f1"),
+		want: nxeSame("S2E2=f1"),
+	},
+	{
+		// A spaced dash between two tokens is two candidates, never the range 2..5.
+		name:  "Kids 2x2 - 2x5 - Title in Season 2",
+		title: "Kids", year: 2001, seasons: map[int]int{2: 6}, files: []string{
+			"Kids (2001)/Season 2/Kids 2x2 - 2x5 - Title.mkv",
+			"Kids (2001)/Season 2/Kids - S02E01.mkv",
+		},
+		v033: nxeSame("S2E1=f1"),
+		main: nxeSame("S2E1=f1"),
+		want: nxeSame("S2E1=f1"),
 	},
 	{
 		name:  "control: a 1080p S01E08 copy beside a 720p S01E08 file",

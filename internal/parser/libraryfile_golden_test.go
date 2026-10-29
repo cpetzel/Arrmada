@@ -80,10 +80,10 @@ func TestParseCorpusUnchanged(t *testing.T) {
 }
 
 // libraryReadsNoFolder are the corpus names ParseLibraryFile reads differently from Parse
-// for a file in no season folder: each "Title - NxE - …" set off by dashes.
+// for a file in no season folder: each "Title - NxE - …" set off by dashes (an NxN twin like
+// the reporter's "1x1" needs its season folder too).
 var libraryReadsNoFolder = map[string]string{
 	"11.22.63 - 1x8- The Day in Question [HDTVMux1080p Ita 5.1] NovaRip.mkv": "1x8",
-	"11.22.63 - 1x1- The Rabbit Hole [HDTVMux1080p Ita 5.1] NovaRip.mkv":     "1x1",
 	"11.22.63 - 1x2- The Kill Floor [HDTVMux1080p Ita 5.1] NovaRip.mkv":      "1x2",
 	"Show - 1x8 - Title.mkv":                                          "1x8",
 	"Show - 1x8- Title.mkv":                                           "1x8",
@@ -101,11 +101,12 @@ var libraryReadsNoFolder = map[string]string{
 	"Show - [1x2] - Title.mkv":                                        "",
 	"La Casa di Carta - 1x3 - Episodio 3 [WEBDLMux1080p Ita Eng].mkv": "1x3",
 	"Gomorra - 2x5 - Titolo [HDTVMux720p Ita].mkv":                    "2x5",
+	"Show – 1x8 – Title.mkv":                                          "1x8",
 }
 
 // libraryReadsSeason1 are the corpus names ParseLibraryFile reads differently from Parse
-// for a file in a "Season 1" folder: every season-1 token, dashes or not, outside brackets
-// and before the release tags.
+// for a file in a "Season 1" folder: every season-1 token after a title, dashes or not,
+// outside brackets and before the release tags, and a name that is the token alone.
 var libraryReadsSeason1 = map[string]string{
 	"11.22.63 - 1x8- The Day in Question [HDTVMux1080p Ita 5.1] NovaRip.mkv": "1x8",
 	"11.22.63 - 1x1- The Rabbit Hole [HDTVMux1080p Ita 5.1] NovaRip.mkv":     "1x1",
@@ -123,8 +124,8 @@ var libraryReadsSeason1 = map[string]string{
 	"Show_-_1x8_-_Title.mkv":                 "1x8",
 	"[Group] Show - 1x8 - Title [1080p].mkv": "1x8",
 	"Show (2016) - 1x8 - Title.mkv":          "1x8",
-	"1x8 - Title.mkv":                        "1x8",
-	"- 1x8 - Title.mkv":                      "1x8",
+	"1x8.mkv":                                "1x8",
+	"Show – 1x8 – Title.mkv":                 "1x8",
 	"La Casa di Carta - 1x3 - Episodio 3 [WEBDLMux1080p Ita Eng].mkv": "1x3",
 }
 
@@ -157,6 +158,9 @@ func TestParseLibraryFileCorpusDiff(t *testing.T) {
 		// Not a file name (a calendar UID from the iCal tests), but its token is the
 		// season-2 episode it names; in a Season 2 folder that is what it would be.
 		"UID:arrmada-ep-11-2x5@arrmada.example.com": "2x5",
+		// Lookalikes dashed AND in their season's folder: the one place they're read.
+		"Rubik - 2x2 - Tutorial.mkv": "2x2",
+		"Lego - 2x4 - Brick.mkv":     "2x4",
 	}
 	specials := map[string]string{
 		"Show - 0x1 - Special.mkv": "0x1",
