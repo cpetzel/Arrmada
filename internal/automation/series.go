@@ -603,8 +603,14 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 	// releases and took none was indistinguishable from one that found nothing. Count
 	// the reasons and keep one example of each — "why wasn't this grabbed?" is the
 	// single most common question this code has to answer.
-	var nBlocked, nWrongTitle int
-	var exampleWrongTitle string
+	// Another library show with this one's name (#81): nil for nearly every show.
+	same, err := c.sameNameFor(ctx, s)
+	if err != nil {
+		c.skipUnreadable(s.Title, err)
+		return 0, wanted, nil
+	}
+	var nBlocked, nWrongTitle, nSameName int
+	var exampleWrongTitle, exampleSameName string
 	rts := newRuntimeIndex(s)
 	notes := notesFrom(ctx)
 	fit := c.seriesFit(ctx)
@@ -622,6 +628,16 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 			notes.mark(rel.Title, DropWrongTitle)
 			if exampleWrongTitle == "" {
 				exampleWrongTitle = rel.Title
+			}
+			continue
+		}
+		if refuse, why := same.refuses(rel); refuse {
+			// It names this show and a same-named one alike, and its date doesn't say
+			// which — or says it's the other's. Grabbing it could only end in Needs you.
+			nSameName++
+			notes.mark(rel.Title, DropWrongTitle)
+			if exampleSameName == "" {
+				exampleSameName = sameNameDropNote(rel.Title, why)
 			}
 			continue
 		}
@@ -649,6 +665,9 @@ func (c *Coordinator) grabSeriesScoped(ctx context.Context, s series.Series, rel
 		}
 		if exampleWrongTitle != "" {
 			attrs = append(attrs, "example_title_mismatch", exampleWrongTitle)
+		}
+		if nSameName > 0 {
+			attrs = append(attrs, "rejected_same_name", nSameName, "example_same_name", exampleSameName)
 		}
 		// The ceiling now judges packs by the runtime summed from TMDB. When TMDB's
 		// lengths or episode list are off, a pack is wrongly "over the ceiling" — name one,
@@ -1110,6 +1129,7 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 	// won't import: logged (once an hour each) and kept for Needs you, so it's not a
 	// silent no-op.
 	c.noteWrongCategory(wrongCategory(completed, matchRelease))
+	var sameNamed func(series.Series) []series.Series // built on first need (#81)
 	for _, it := range completed {
 		if it.Category != seriesCategory {
 			continue
@@ -1273,6 +1293,34 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 				})
 			}
 			continue // not something we grabbed and not a library title — leave alone
+		}
+		// Grabbed for a show that another library show shares its name with, and the
+		// release doesn't say which (#81): "Scrubs.S02E03" grabbed for the 2001 show could
+		// be the 2026 revival's S02E03, and importing it would replace the original's. The
+		// grab's publish date (or, failing that, when it was added) settles it when the
+		// other show's episodes aired later; otherwise a person decides. A release picked
+		// by hand from the list — which says so beside it — is the person deciding.
+		if expected != nil && !c.grabForce(ctx, it.Hash).On {
+			if sameNamed == nil {
+				sameNamed = series.SameNameIndex(all)
+			}
+			reason, err := c.sameNameHold(ctx, s, sameNamed(s), parsed, it)
+			if err != nil {
+				c.log.Warn("series import: couldn't read the same-named shows — not importing this round",
+					"series", s.Title, "release", it.Name, "err", err)
+				continue
+			}
+			if reason != "" {
+				c.log.Warn("series import: a same-named show could own this release — held for review",
+					"series", s.Title, "release", it.Name, "reason", reason)
+				c.addReview(ctx, Review{
+					Hash: it.Hash, Name: it.Name, ContentPath: it.ContentPath, MediaType: "series", ReasonCode: ReasonMismatch,
+					ExpectedID: s.ID, ExpectedTitle: s.Title, ParsedTitle: parsed.Title,
+					SizeBytes: it.SizeBytes, Indexer: gIndexer,
+					Reason: reason,
+				})
+				continue
+			}
 		}
 		// No sound folder for the show — its files are all in a folder named like a season,
 		// or one other shows use — means nothing is placed, and a human sees it at once:
@@ -1476,10 +1524,11 @@ func (c *Coordinator) recordSeriesGrab(ctx context.Context, seriesID int64, titl
 	// download that stalled was never blocklisted, never removed, and its grab row sat at
 	// 'grabbed' forever. Movies have always passed the profile's value here.
 	_, err := c.db.ExecContext(ctx,
-		`INSERT INTO grabs (movie_id, version_id, title, indexer, quality_profile, stall_minutes, seed_enabled, seed_ratio, seed_hours, media_type, info_hash, decided_by, decided_mode, transport, seed_source)
-		 VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, 'series', ?, ?, ?, ?, ?)`,
+		`INSERT INTO grabs (movie_id, version_id, title, indexer, quality_profile, stall_minutes, seed_enabled, seed_ratio, seed_hours, media_type, info_hash, decided_by, decided_mode, transport, seed_source, published_at)
+		 VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, 'series', ?, ?, ?, ?, ?, ?)`,
 		seriesID, title, indexer, profile, c.quality.StallMinutes(ctx, profile),
-		boolToInt(seedEnabled), seedRatio, seedHours, infoHash, decidedBy, decidedMode, transport, seedSource)
+		boolToInt(seedEnabled), seedRatio, seedHours, infoHash, decidedBy, decidedMode, transport, seedSource,
+		releasePublished(ctx)) // the import's same-name check reads it (samename.go)
 	if err != nil {
 		c.log.Warn("series: record grab failed", "err", err)
 		return

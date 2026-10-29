@@ -297,8 +297,16 @@ func (c *Coordinator) upgradeSeries(ctx context.Context, seriesID int64, b *upgr
 		c.skipUnreadable(s.Title, err)
 		return err
 	}
+	// An upgrade replaces a file, so a release that could as well be a same-named show's
+	// (#81) is never one: the reporter's "Scrubs.S02E03.2160p" replaced the 2001 show's
+	// S02E03 with what may be the revival's.
+	same, err := c.sameNameFor(ctx, s)
+	if err != nil {
+		c.skipUnreadable(s.Title, err)
+		return err
+	}
 	byName := make(map[string]indexer.Release, len(releases))
-	droppedTitle := 0
+	droppedTitle, droppedSameName := 0, 0
 	fit := c.seriesFit(ctx)
 	for _, rel := range c.networks(ctx).usable(ctx, releases) {
 		// The candidate must actually BE this show. Nothing here checked, and matching on
@@ -316,11 +324,20 @@ func (c *Coordinator) upgradeSeries(ctx context.Context, seriesID int64, b *upgr
 			notes.mark(rel.Title, DropBlocklisted)
 			continue
 		}
+		if refuse, _ := same.refuses(rel); refuse {
+			droppedSameName++
+			notes.mark(rel.Title, DropWrongTitle)
+			continue
+		}
 		byName[rel.Title] = rel
 	}
 	if droppedTitle > 0 {
 		c.log.Info("series: upgrade search filtered", "series", s.Title,
 			"kept", len(byName), "dropped_wrong_title", droppedTitle)
+	}
+	if droppedSameName > 0 {
+		c.log.Info("series: upgrade search skipped releases a same-named show could own", "series", s.Title,
+			"kept", len(byName), "dropped_same_name", droppedSameName)
 	}
 
 	grabbed := map[string]bool{}
@@ -384,7 +401,7 @@ func (c *Coordinator) upgradeSeries(ctx context.Context, seriesID int64, b *upgr
 		} else {
 			c.log.Info("series: upgrading episode", "series", s.Title, "s", u.season, "e", u.episode, "to", winner.Title)
 		}
-		if err := c.GrabForSeriesAuto(ctx, s.ID, winner.Indexer, winner.DownloadURL, winner.Title); err != nil {
+		if err := c.GrabForSeriesAuto(withReleasePublished(ctx, winner.PublishedAt), s.ID, winner.Indexer, winner.DownloadURL, winner.Title); err != nil {
 			c.log.Warn("series: upgrade grab failed", "series", s.Title, "err", err)
 			return false
 		}

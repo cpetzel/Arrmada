@@ -850,7 +850,10 @@ func (a *api) handleGrabSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope := automation.ScopeFor(ref.Season, ref.Episode)
-	if err := a.deps.Automation.GrabForSeries(r.Context(), id, ref.Indexer, ref.DownloadURL, ref.Title, scope); err != nil {
+	// The grab keeps the release's publish date: the import tells same-named shows apart
+	// by it (#81).
+	ctx := automation.WithReleasePublished(r.Context(), ref.PublishedAt)
+	if err := a.deps.Automation.GrabForSeries(ctx, id, ref.Indexer, ref.DownloadURL, ref.Title, scope); err != nil {
 		a.writeGrabError(w, err, ref)
 		return
 	}

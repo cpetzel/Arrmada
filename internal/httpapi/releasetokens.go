@@ -25,6 +25,7 @@ func (a *api) tokenize(r *http.Request, list *automation.ReleaseList, scope auto
 		ref := scope
 		ref.Indexer, ref.DownloadURL, ref.Title, ref.InfoHash = rel.Indexer, rel.DownloadURL, rel.Title, rel.InfoHash
 		ref.Transport = rel.Transport
+		ref.PublishedAt = rel.PublishedAt
 		if scope.MediaKind == automation.ReleaseKindBook {
 			ref.VersionID = rel.VersionID
 		}

@@ -386,7 +386,7 @@ func (g *seriesGrabber) try(ctx context.Context, name, label string) bool {
 	g.n++
 	g.grabbedGB += rel.SizeGB()
 	g.titles = append(g.titles, rel.Title)
-	c.recordSeriesGrab(ctx, s.ID, rel.Title, rel.Indexer, g.profile, hash)
+	c.recordSeriesGrab(withReleasePublished(ctx, rel.PublishedAt), s.ID, rel.Title, rel.Indexer, g.profile, hash)
 	scope := g.scope
 	if sc, ok := g.scopeOf[name]; ok {
 		scope = sc

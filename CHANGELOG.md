@@ -499,6 +499,25 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Two shows with the same name no longer get each other's episodes** (#81). With Scrubs
+  (2001) and the 2026 Scrubs both in the library, a release named `Scrubs.S02E03…` doesn't
+  say which show it's from. A search for one show grabbed it, and the import trusted the
+  grab, so the revival's S02E03 could replace the original's. This only changes anything
+  for a show that shares its name with another show in your library. Releases that name
+  the year (`Scrubs.2026.S02E03…`) or the country (`The.Office.US…`) work as before. For a
+  release that names neither:
+  - Searches use the release's publish date. A release posted before an episode aired
+    can't be that episode, so `Scrubs.S02E03` posted in 2015 is grabbed for the 2001 show
+    and never for the revival.
+  - When a release could belong to either show, or the indexer gave no date, the
+    automatic searches, upgrades and quick **Grab** buttons skip it. **Choose release**
+    still lists it with the reason, and you can grab it by hand.
+  - A grabbed download that could belong to either show goes to **Needs you** with a
+    reason naming both shows. It isn't imported or used to replace a file. **Import
+    anyway** puts it in the show it was grabbed for; **Choose different show…** puts it in
+    the other one.
+  - A release you pick by hand from **Choose release** imports as before.
+
 - **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
   (reported in #94 by cpetzel). With qBittorrent's **Default Download Path (incomplete
   torrents)** on, a finished torrent is moved from that folder to its save folder, and

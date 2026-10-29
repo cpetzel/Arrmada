@@ -285,6 +285,11 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 		c.skipUnreadable(s.Title, err)
 		return out, err
 	}
+	same, err := c.sameNameFor(ctx, s) // another library show with this one's name (#81)
+	if err != nil {
+		c.skipUnreadable(s.Title, err)
+		return out, err
+	}
 	byName := make(map[string]indexer.Release, len(releases))
 	cands := make([]quality.Candidate, 0, len(releases))
 	rts := newRuntimeIndex(s)
@@ -310,6 +315,10 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 			byTitle[rel.Title] = GrabScope{Season: 0, Episode: special}
 			cands = append(cands, c.specialCandidate(c.newSeriesCandidate(ctx, s, rts, rel), rts, special))
 		case !searchTitleMatches(fit, rel.Title, s):
+			out.WrongShow++
+			notes.mark(rel.Title, DropWrongTitle)
+		case sameNameRefuses(same, rel):
+			// It could as well be a same-named show's: Choose release lists it, with why.
 			out.WrongShow++
 			notes.mark(rel.Title, DropWrongTitle)
 		case !c.releaseMatchesScope(ctx, s, parser.Parse(rel.Title), sc.Season, sc.Episode):

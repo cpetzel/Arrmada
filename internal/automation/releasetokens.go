@@ -72,6 +72,9 @@ type ReleaseRef struct {
 	// and for a book which edition it is.
 	SizeGB  float64
 	Edition string
+	// PublishedAt is when the release was posted, as the list showed it (RFC3339, ""
+	// when unknown). A series grab records it for the import's same-name check (#81).
+	PublishedAt string
 }
 
 type releaseTokens struct {
