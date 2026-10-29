@@ -86,11 +86,14 @@ func (sc SeriesScope) label() string {
 type GrabOutcome struct {
 	Scope string `json:"scope"`
 	// Searched is false when the click needed no search at all (nothing was missing).
-	Searched    bool `json:"searched"`
-	Found       int  `json:"found"`
-	WrongShow   int  `json:"wrong_show"`
-	OutOfScope  int  `json:"out_of_scope"`
-	Blocklisted int  `json:"blocklisted"`
+	Searched  bool `json:"searched"`
+	Found     int  `json:"found"`
+	WrongShow int  `json:"wrong_show"`
+	// SameName counts releases that could as well be a same-named library show's (#81):
+	// not grabbed automatically, but listed in Choose release.
+	SameName    int `json:"same_name,omitempty"`
+	OutOfScope  int `json:"out_of_scope"`
+	Blocklisted int `json:"blocklisted"`
 	// Pending counts releases the plan wanted that are already downloading.
 	Pending  int `json:"pending"`
 	Eligible int `json:"eligible"`
@@ -144,6 +147,7 @@ func (o GrabOutcome) Summary() string {
 		}
 	}
 	add(o.WrongShow, "other shows")
+	add(o.SameName, "that could be a same-named show's (use Choose release)")
 	add(o.OutOfScope, "other episodes")
 	add(o.Blocklisted, "blocklisted")
 	for k, n := range o.Rejected {
@@ -263,6 +267,11 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 		return out, nil
 	}
 
+	// Another library show with this one's name (#81), read before any indexer is asked.
+	if ctx, err = c.withSameNameJudge(ctx, s); err != nil {
+		c.skipSameNameUnreadable(s.Title, err)
+		return out, err
+	}
 	releases, ixErrs, serr := c.searchSeriesScope(ctx, s, sc.Season, sc.Episode)
 	out.Searched = true
 	out.IndexerErrors = len(ixErrs)
@@ -283,6 +292,11 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 	pending, err := c.pendingSeriesGrabTitles(ctx, s.ID)
 	if err != nil {
 		c.skipUnreadable(s.Title, err)
+		return out, err
+	}
+	same, err := c.sameNameFor(ctx, s) // another library show with this one's name (#81)
+	if err != nil {
+		c.skipSameNameUnreadable(s.Title, err)
 		return out, err
 	}
 	byName := make(map[string]indexer.Release, len(releases))
@@ -312,6 +326,10 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 		case !searchTitleMatches(fit, rel.Title, s):
 			out.WrongShow++
 			notes.mark(rel.Title, DropWrongTitle)
+		case sameNameRefuses(same, rel):
+			// It could as well be a same-named show's: Choose release lists it, with why.
+			out.SameName++
+			notes.mark(rel.Title, DropSameName)
 		case !c.releaseMatchesScope(ctx, s, parser.Parse(rel.Title), sc.Season, sc.Episode):
 			out.OutOfScope++
 			notes.mark(rel.Title, DropOutOfScope)

@@ -8,6 +8,7 @@ import { jobFailed, jobToast } from "./useJob";
 // A reject or drop code as the end of "12 …": "12 over your bitrate ceiling".
 export const REASON_LABELS: Record<string, string> = {
   wrong_title: "for other titles",
+  same_name: "maybe a same-named show's", // #81; the series page explains (SameNameHint)
   blocklisted: "blocklisted",
   pending: "already downloading",
   out_of_scope: "for other episodes or editions",

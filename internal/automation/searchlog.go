@@ -74,7 +74,10 @@ const (
 // Why one release wasn't taken, besides the quality profile's own reject codes
 // (quality.Reject*). Stored in reasons_json; never rename one.
 const (
-	DropWrongTitle   = "wrong_title"   // for a different film, show, book or album
+	DropWrongTitle = "wrong_title" // for a different film, show, book or album
+	// DropSameName is a release that names a show and a same-named library show alike and
+	// doesn't say which (#81): not grabbed automatically; Choose release lists it.
+	DropSameName     = "same_name"
 	DropBlocklisted  = "blocklisted"   // blocklisted for this title
 	DropPending      = "pending"       // already grabbed and still downloading
 	DropOutOfScope   = "out_of_scope"  // the right title, but other episodes, another edition or version
@@ -109,7 +112,7 @@ func classRank(code string) int {
 		return 4
 	case classEligible:
 		return 3
-	case DropWrongTitle, DropBlocklisted, DropOutOfScope, DropNotTorrent, DropNotUsenet, DropWrongEdition, DropVideo, DropSize:
+	case DropWrongTitle, DropSameName, DropBlocklisted, DropOutOfScope, DropNotTorrent, DropNotUsenet, DropWrongEdition, DropVideo, DropSize:
 		return 1
 	}
 	return 2 // a profile rejection
@@ -228,8 +231,8 @@ func (n *searchNotes) tally() tally {
 		switch code {
 		case classGrabbed, classEligible, DropPending:
 			t.eligible++ // a pending release passed the profile too
-		case DropWrongTitle:
-			t.wrongTitle++
+		case DropWrongTitle, DropSameName:
+			t.wrongTitle++ // the reasons keep them apart; the column counts title skips
 		case DropBlocklisted:
 			t.blocklisted++
 		case DropOutOfScope, DropWrongEdition:
@@ -761,6 +764,7 @@ func ReasonLabel(code string) string {
 
 var reasonLabels = map[string]string{
 	DropWrongTitle:                "for other titles",
+	DropSameName:                  "that could be a same-named show's (use Choose release)",
 	DropBlocklisted:               "blocklisted",
 	DropPending:                   "already downloading",
 	DropOutOfScope:                "for other episodes or editions",

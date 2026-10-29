@@ -18,6 +18,7 @@ import { waitingOnSearch } from "./util";
 import { ManualImportModal } from "./ManualImportModal";
 import { invalidate } from "../../lib/query";
 import { ProfileSelector } from "./ProfileSelector";
+import { SameNameHint } from "./SameNameHint";
 import { TitleProfilePicker } from "../subtitles/ProfileSelect";
 import { shownTitle } from "../../lib/displayTitle";
 
@@ -144,6 +145,7 @@ export function HeroActions({ series, onChange, flash, extraItems = [] }: { seri
         </div>
       )}
       <LastSearches kind="series" id={series.id} />
+      <SameNameHint seriesId={series.id} />
 
       {open === "upload" && (
         <UploadTorrentModal

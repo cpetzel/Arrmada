@@ -137,6 +137,10 @@ const (
 	// disagree, so placing it would put a file on the wrong episode (titleConflict).
 	// Offers the same Map files… as ReasonNumbering.
 	ReasonTitleConflict = "title_conflict"
+	// ReasonSameName: grabbed for a show another library show shares its name with, and
+	// the release doesn't say which of them it is (#81). Offers what ReasonMismatch does;
+	// importing it confirms the show, not the quality, so the import gate still applies.
+	ReasonSameName = "same_name"
 	// ReasonImportFailed: the import itself keeps failing (a folder it can't write, a full disk).
 	ReasonImportFailed = "import_failed"
 	// ReasonNoMedia: nothing importable inside — still archived, or unreadable.
@@ -224,7 +228,46 @@ const (
 	ResolutionDismissed = "dismissed" // left for the user to handle; files kept
 	ResolutionRejected  = "rejected"  // removed with its files and blocklisted
 	ResolutionRemoved   = "removed"   // the download was removed from the client
+	// ResolutionKept: Import anyway on a same-name hold (#81), and the quality gate kept
+	// every file already there — the release isn't better than any of them.
+	ResolutionKept = "kept_existing"
 )
+
+// KeptExistingMessage is what Import anyway says when it kept the files already there.
+const KeptExistingMessage = "Kept the existing file — this release isn't better"
+
+// keptExistingError: importContentInto placed nothing because the import gate judged every
+// file it could match no better than what's there (a same-name hold's Import anyway).
+// Unmatched counts the files it couldn't match to an episode, left in the download.
+type keptExistingError struct{ Unmatched int }
+
+func (e keptExistingError) Error() string { return KeptExistingText(e.Unmatched) }
+
+// KeptExistingText is Import anyway's message when it kept the files already there, naming
+// the files it couldn't match.
+func KeptExistingText(unmatched int) string {
+	if unmatched == 0 {
+		return KeptExistingMessage
+	}
+	return fmt.Sprintf("%s; %d file%s couldn't be matched and %s left in the download",
+		KeptExistingMessage, unmatched, plural(unmatched), map[bool]string{true: "was", false: "were"}[unmatched == 1])
+}
+
+// ReviewImportOutcome is what an ImportReview came to beyond succeeding: KeptExisting when
+// nothing replaced the files already there (ResolutionKept), Unmatched the files it couldn't
+// match to an episode.
+type ReviewImportOutcome struct {
+	KeptExisting bool
+	Unmatched    int
+}
+
+type reviewOutcomeKey struct{}
+
+// WithReviewImportOutcome collects what an ImportReview under the returned ctx came to.
+func WithReviewImportOutcome(ctx context.Context) (context.Context, *ReviewImportOutcome) {
+	o := &ReviewImportOutcome{}
+	return context.WithValue(ctx, reviewOutcomeKey{}, o), o
+}
 
 func (c *Coordinator) addReview(ctx context.Context, r Review) {
 	if c.hasReview(ctx, r.Hash) {
@@ -766,7 +809,22 @@ func (c *Coordinator) ImportReview(ctx context.Context, id, targetID int64, targ
 	}
 	left := &importLeftovers{}
 	ctx = context.WithValue(ctx, importLeftoversKey{}, left)
-	if err := c.importContentInto(withCopyAccounting(ctx, r), r, dest, "review"); err != nil {
+	err = c.importContentInto(withCopyAccounting(ctx, r), r, dest, "review")
+	var kept keptExistingError
+	if errors.As(err, &kept) {
+		// Settled, not failed: the person said which show it is, and the profile said the
+		// files there are as good. The download stays as it was ('dismissed' keeps its
+		// files through seed cleanup) and isn't imported again by the sweep.
+		c.recordImportedHash(ctx, r.Hash, r.Name, r.SizeBytes)
+		c.noteImportUnmatched(ctx, r.Hash, r.Name, kept.Unmatched) // while the grab is still live
+		c.setGrabStatusByHash(ctx, r.Hash, r.Name, r.MediaType, grabStatusDismissed)
+		c.reviewEvent(ctx, r.MediaType, dest, "dismissed", KeptExistingText(kept.Unmatched)+": "+r.Name)
+		if o, ok := ctx.Value(reviewOutcomeKey{}).(*ReviewImportOutcome); ok {
+			o.KeptExisting, o.Unmatched = true, kept.Unmatched
+		}
+		return c.resolveReview(ctx, id, ResolutionKept)
+	}
+	if err != nil {
 		c.importFailed(ctx, r, dest, "review", err)
 		return err
 	}
@@ -807,7 +865,13 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		if _, _, ferr := c.seriesImportPlacement(ctx, s); ferr != nil {
 			return fmt.Errorf("%w: %w", ErrNothingToImport, ferr)
 		}
-		placed, matched, unresolved, failed, conflict, scanErr := c.importSeriesInto(ctx, s, r.ContentPath, forceAll)
+		force := forceAll
+		if r.ReasonCode == ReasonSameName {
+			// The person said which show it is; whether it beats the file there is still
+			// the profile's call, as for any automatic grab.
+			force = forceRule{Target: WholeShow}
+		}
+		placed, matched, unresolved, failed, conflict, scanErr := c.importSeriesInto(ctx, s, r.ContentPath, force)
 		if scanErr != nil {
 			// "No video files were found" sent people looking at the release when the
 			// folder (or one inside it) is one Arrmada can't read.
@@ -818,6 +882,9 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 			return fmt.Errorf("%w: %s", ErrNothingToImport, conflict)
 		}
 		n := len(placed)
+		if r.ReasonCode == ReasonSameName && n == 0 && matched > 0 && failed == 0 {
+			return keptExistingError{Unmatched: unresolved} // the gate kept every file it matched
+		}
 		if matched == 0 {
 			// Wrapped in ErrNothingToImport so the API answers 422 rather than 500: the
 			// request was understood and the server is fine, the download just doesn't

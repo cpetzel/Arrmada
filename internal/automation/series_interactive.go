@@ -44,6 +44,9 @@ func (c *Coordinator) RankSeriesReleasesWith(ctx context.Context, seriesID int64
 	// banner lists each failing indexer once whichever query it failed.
 	ctx, notes := withSearchNotes(ctx)
 	ctx = c.withSeriesFit(ctx)
+	if ctx, err = c.withSameNameJudge(ctx, s); err != nil { // #81, before any indexer is asked
+		return ReleaseList{}, err
+	}
 	releases, _, err := c.searchSeriesScope(ctx, s, season, episode)
 	if allIndexersFailed(err) {
 		return ReleaseList{Profile: c.effectiveProfile(ctx, s.QualityProfile, quality.MediaSeries)}.withIssues(notes), nil
@@ -52,9 +55,17 @@ func (c *Coordinator) RankSeriesReleasesWith(ctx context.Context, seriesID int64
 		return ReleaseList{}, err
 	}
 
+	// Another library show with this one's name (#81): releases that could as well be its
+	// are listed apart, saying so, and still grabbable by hand.
+	same, err := c.sameNameFor(ctx, s)
+	if err != nil {
+		return ReleaseList{}, err
+	}
+	sameWhy := map[string]string{}
 	byName := make(map[string]indexer.Release, len(releases))
 	cands := make([]quality.Candidate, 0, len(releases))
 	var unusable []quality.Candidate // listed, but ranked apart: no client can take them
+	var sameNamed []quality.Candidate
 	var droppedTitle, droppedScope int
 	var sampleDropped, sampleScope []string
 	rts := newRuntimeIndex(s)
@@ -110,6 +121,11 @@ func (c *Coordinator) RankSeriesReleasesWith(ctx context.Context, seriesID int64
 			unusable = append(unusable, c.newSeriesCandidate(ctx, s, rts, rel))
 			continue
 		}
+		if refuse, why := same.refuses(rel); refuse {
+			sameWhy[rel.Title] = "Not grabbed automatically: " + why
+			sameNamed = append(sameNamed, c.newSeriesCandidate(ctx, s, rts, rel))
+			continue
+		}
 		cands = append(cands, c.newSeriesCandidate(ctx, s, rts, rel))
 	}
 	c.log.Info("series: search filtered", "series", s.Title, "kept", len(cands), "dropped_wrong_title", droppedTitle, "dropped_out_of_scope", droppedScope)
@@ -124,6 +140,10 @@ func (c *Coordinator) RankSeriesReleasesWith(ctx context.Context, seriesID int64
 	profile := c.effectiveProfile(ctx, s.QualityProfile, quality.MediaSeries)
 	decision := c.decideWith(ctx, profile, spec, cands)
 	apart := c.decideWith(ctx, profile, spec, unusable)
+	var apartSame quality.Decision
+	if len(sameNamed) > 0 {
+		apartSame = c.decideWith(ctx, profile, spec, sameNamed)
+	}
 
 	winnerName := ""
 	if decision.Winner != nil {
@@ -168,6 +188,15 @@ func (c *Coordinator) RankSeriesReleasesWith(ctx context.Context, seriesID int64
 	}
 	for _, evs := range [][]quality.Evaluation{decision.Rejected, apart.Eligible, apart.Rejected} {
 		for _, ev := range evs {
+			appendEval(ev, false)
+		}
+	}
+	for _, evs := range [][]quality.Evaluation{apartSame.Eligible, apartSame.Rejected} {
+		for _, ev := range evs {
+			if ev.Eligible {
+				// The profile would take it; the name is what holds it back.
+				ev.Eligible, ev.RejectReason = false, sameWhy[ev.Candidate.Name]
+			}
 			appendEval(ev, false)
 		}
 	}

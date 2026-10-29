@@ -499,6 +499,28 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Two shows with the same name no longer get each other's episodes** (#81). With Scrubs
+  (2001) and the 2026 Scrubs both in the library, a release named `Scrubs.S02E03…` doesn't
+  say which show it's from. A search for one show grabbed it, and the import trusted the
+  grab, so the revival's S02E03 could replace the original's. This only changes anything
+  for a show that shares its name with another show in your library. Releases that name
+  the year (`Scrubs.2026.S02E03…`) or the country (`The.Office.US…`) work as before. For a
+  release that names neither:
+  - Searches use the release's publish date. A release posted before a show's season
+    began can't be from that season, so `Scrubs.S02E03` posted in 2015 is grabbed for the 2001 show
+    and never for the revival. A release for a season the other show doesn't list yet
+    only counts as the older show's if it was posted before the other show first aired.
+  - When a release could belong to either show, or the indexer gave no date, the
+    automatic searches, upgrades and quick **Grab** buttons skip it. The show's last
+    search says so, and **Choose release** still lists it with the reason, so you can
+    grab it by hand. In practice, the newer show only grabs releases that name its year.
+  - A grabbed download that could belong to either show goes to **Needs you** as **Which
+    show?**, naming both shows. It isn't imported or used to replace a file. **Import
+    anyway** puts it in the show it was grabbed for; **Choose different show…** puts it in
+    the other one. Either way, it only replaces a file it's better than; when it isn't
+    better, Needs you says **Kept the existing file** and leaves the download as it is.
+  - A release you pick by hand from **Choose release** imports as before.
+
 - **Library episodes named "1x8" are read** (reported in #81). A show whose files are
   named with a single-digit episode — "11.22.63 - 1x8- The Day in Question [HDTVMux1080p
   Ita 5.1].mkv" in an "S01" folder — had none of them read: the "1x08" form needed a

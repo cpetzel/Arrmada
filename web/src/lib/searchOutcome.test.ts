@@ -24,6 +24,11 @@ describe("attemptLine", () => {
     expect(attemptLine(attempt({ outcome: "skipped_in_flight", example: "Show.S03.1080p" }), now)).toBe("Last search 2 h ago — Not searched — already downloading Show.S03.1080p");
     expect(attemptLine(attempt({}), now)).toBe("Last search 2 h ago — No releases found");
   });
+
+  it("counts releases a same-named show could own apart from other titles (#81)", () => {
+    const a = attempt({ media_type: "series", outcome: "none_suitable", returned: 4, reasons: { same_name: 3, wrong_title: 1 } });
+    expect(attemptLine(a, now)).toBe("Last search 2 h ago — Found 4 releases — 3 maybe a same-named show's, 1 for other titles");
+  });
 });
 
 describe("outcomeLine", () => {
