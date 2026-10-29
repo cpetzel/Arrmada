@@ -18,8 +18,8 @@ connection.
   with it: Plex and Jellyfin (on your LAN, which Gluetun blocks unless you open it), TMDB and
   the other metadata sources (some refuse or rate-limit VPN addresses), alerts, the update
   check, and the web page itself, which your reverse proxy and your LAN would then have to
-  reach through Gluetun. And when the VPN drops, Gluetun's kill switch takes the whole app
-  down rather than just pausing downloads.
+  reach through Gluetun. And when the VPN drops, Gluetun's kill switch cuts off everything
+  Arrmada fetches (metadata, Plex, alerts), not just downloads; only its page stays up.
 - **Not FlareSolverr.** For TorrentLeech, Arrmada asks FlareSolverr to get past Cloudflare
   once, then signs in and searches itself, carrying the clearance FlareSolverr got.
   Cloudflare ties that clearance to the address it was solved from, so it only works while
@@ -53,7 +53,8 @@ services:
     devices: [/dev/net/tun:/dev/net/tun]
     environment:
       TZ: "${TZ:-Etc/UTC}"
-      # Your provider's settings, from Gluetun's wiki. For example:
+      # Your provider's settings, from Gluetun's wiki. For example (Mullvad has no port
+      # forwarding since 2023; see "The torrent port" below):
       VPN_SERVICE_PROVIDER: "mullvad"
       VPN_TYPE: "wireguard"
       WIREGUARD_PRIVATE_KEY: "${VPN_WIREGUARD_PRIVATE_KEY}"   # in .env
@@ -111,8 +112,12 @@ Docker Compose 2.24 or newer (`docker compose version`).
 - **The Docker network is already open.** Gluetun lets its own Docker network in, so Arrmada
   reaches qBittorrent with nothing set. `FIREWALL_OUTBOUND_SUBNETS` (your LAN, e.g.
   `192.168.1.0/24`) is only for when something in Gluetun's network has to reach a computer
-  on your LAN, which qBittorrent doesn't. If qBittorrent's page doesn't open from another
-  computer after `ARRMADA_QBIT_WEBUI_BIND=0.0.0.0`, that's Gluetun's firewall: see its wiki.
+  on your LAN, which qBittorrent doesn't.
+- **qBittorrent's page is published by Gluetun now.** After changing `ARRMADA_QBIT_WEBUI_BIND`
+  or `ARRMADA_QBIT_WEBUI_PORT`, run `docker compose up -d gluetun` (not
+  `docker compose up -d arrmada-qbittorrent`, as the other pages say). If the page still
+  doesn't open from another computer with `ARRMADA_QBIT_WEBUI_BIND=0.0.0.0`, that's Gluetun's
+  firewall: see its wiki.
 
 ### The torrent port
 
@@ -120,14 +125,16 @@ The old torrent port lines on qBittorrent are gone (`!reset`): incoming peers no
 through the VPN, not your router, so you can drop that port forward.
 
 At every start Arrmada sets qBittorrent's incoming port to `ARRMADA_QBIT_PORT`. Without port
-forwarding from your provider that's harmless. With it, the port is the one your provider
-gives you, and it may change:
+forwarding from your provider (Mullvad, in the example, has none) that's harmless: peers
+can't reach you through the VPN, and qBittorrent still downloads, just from fewer of them.
+With it, the port is the one your provider gives you, and it may change:
 
-- **A fixed forwarded port:** set `ARRMADA_QBIT_PORT` in `.env` to it, then `docker compose
-  up -d`.
+- **A fixed forwarded port:** set `ARRMADA_QBIT_PORT` in `.env` to it, and open it in
+  Gluetun's firewall by adding `FIREWALL_VPN_INPUT_PORTS: "<port>"` to Gluetun's
+  `environment`. Then `docker compose up -d`.
 - **One that changes** (Gluetun's `VPN_PORT_FORWARDING`): tell Arrmada to leave the port
   alone, and keep it current in qBittorrent yourself or with Gluetun's port forwarding
-  command. Add this to the override:
+  command (Gluetun opens a port it forwards itself). Add this to the override:
 
   ```yaml
     arrmada-app:
@@ -140,14 +147,19 @@ gives you, and it may change:
 - **When Gluetun restarts, restart qBittorrent too** (`docker compose restart
   arrmada-qbittorrent`): a container in another's network loses it when that one restarts.
   `docker compose up -d` after updating Gluetun's image recreates both.
-- **When the VPN is down,** qBittorrent can't be reached: Settings → Status shows it, and
-  grabs wait. Arrmada, Discover, Plex and the rest carry on.
+- **When the VPN is down,** torrents stall, but Arrmada can still add them: Gluetun keeps
+  letting its Docker network in. **If Gluetun's container stops,** qBittorrent can't be
+  reached: Settings → Status shows it, and grabs wait. Arrmada, Discover, Plex and the rest
+  carry on either way.
 - **Reverse proxies** don't change: they point at Arrmada as before
   ([Reverse proxies and tunnels](configuration.md#reverse-proxies-and-tunnels)). To proxy
   qBittorrent's own page as well, point the proxy at `arrmada-qbittorrent:8080` (Gluetun),
-  and pass the `Host` header through.
+  and pass the `Host` header through: qBittorrent's CSRF protection compares it with the
+  page's address and refuses requests where they differ.
 - **Keep the localhost login on** in qBittorrent (Arrmada switches it on): anything else
   you put in Gluetun's network shares qBittorrent's `localhost`.
+- **Belt and braces:** in qBittorrent, Tools → Options → Advanced → **Network interface**
+  `tun0` keeps it from using any other interface, even if Gluetun's firewall were off.
 
 ## The Unraid all-in-one container
 
@@ -159,10 +171,12 @@ Switch off the built-in qBittorrent and run your own behind Gluetun instead:
    port entries ([Using your own download client](unraid.md#using-your-own-download-client-or-flaresolverr)).
    Leave **Built-in FlareSolverr** on: it goes out from Arrmada's address, which is what
    TorrentLeech needs.
-2. Run Gluetun and a qBittorrent container in its network (on qBittorrent, **Network Type**
-   `None` and `--net=container:<Gluetun's container name>` in **Extra Parameters**, or a
-   Compose stack), with qBittorrent's web UI port published on Gluetun. Give qBittorrent your media share at
-   `/storage`, the same as Arrmada, so imports hardlink.
+2. Run Gluetun and a qBittorrent container in its network, with qBittorrent's web UI port
+   published on Gluetun. On qBittorrent, Unraid 6.12 and later offer **Network Type**
+   `Container:` with Gluetun's container picked; on older versions, use **Network Type**
+   `None` and `--net=container:<Gluetun's container name>` in **Extra Parameters**. A Compose
+   stack works too. Give qBittorrent your media share at `/storage`, the same as Arrmada, so
+   imports hardlink.
 3. In Arrmada, **Settings → Connections → + Add client** → qBittorrent: the server's IP and
    the port Gluetun publishes for its web UI (`http://192.168.1.10:8080`), and qBittorrent's
    username and password.
