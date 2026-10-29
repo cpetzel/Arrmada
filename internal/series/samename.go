@@ -195,6 +195,9 @@ func JudgeSameName(p parser.Release, s Series, named []Series, published time.Ti
 	if len(sibs) == 0 {
 		return SameNameNone, ""
 	}
+	if !plausibleDate(published, time.Now()) {
+		published = time.Time{} // a 1970 pubDate, a client clock that was reset: unknown
+	}
 	if exact && !published.IsZero() {
 		if first, complete, known := seasonsPremiere(p, s); known && complete && published.Before(first.Add(-SameNameMargin)) {
 			return SameNameOther, fmt.Sprintf("it was posted %s, before %s's %s began (%s) — it can't be this show's, and %s shares its name",
@@ -267,6 +270,12 @@ func seasonsPremiere(p parser.Release, s Series) (first time.Time, complete, kno
 	}
 	complete = true
 	for _, n := range want {
+		if n == 0 {
+			// Specials: TVDB and TMDB disagree on what's in season 0 and when, so its
+			// premiere proves nothing — the show's own premiere is used instead.
+			complete = false
+			continue
+		}
 		dated := false
 		for _, sn := range s.Seasons {
 			if sn.SeasonNumber != n {
@@ -282,6 +291,17 @@ func seasonsPremiere(p parser.Release, s Series) (first time.Time, complete, kno
 		complete = complete && dated
 	}
 	return first, complete, true
+}
+
+// earliestPlausible is the first date a release's publish date (or a download's added
+// time) is believed from: indexers that don't know send the Unix epoch ("01 Jan 1970"),
+// and a client whose clock was reset reports its torrents as added then.
+var earliestPlausible = time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// plausibleDate reports whether t can be a real publish or added time: not before 1990,
+// and not more than a day ahead of now. A zero t is not.
+func plausibleDate(t, now time.Time) bool {
+	return !t.IsZero() && !t.Before(earliestPlausible) && !t.After(now.Add(24*time.Hour))
 }
 
 // earliestAir is the earliest air date among eps; ok is false when none has one.
