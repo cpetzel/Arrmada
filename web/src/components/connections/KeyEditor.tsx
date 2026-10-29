@@ -259,7 +259,8 @@ export function DiscoveryRegion() {
       </div>
       <p className="m-0 text-xs text-ink-faint">
         Localizes Discover's popular, upcoming and genre lists (release dates, theatrical calendar). Two-letter
-        country code — e.g. AU, US, GB. Leave empty for TMDB's global lists.
+        country code — e.g. AU, US, GB. Leave empty for TMDB's global lists. It also picks whose cinema, digital and
+        disc dates a film's page shows (US when empty); library films take a new region from the next restart, or a Refresh.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <input

@@ -33,6 +33,9 @@ type CalendarItem struct {
 	// An album's artist and kind (Album, EP, Single…). Albums are staff-only.
 	Artist    string `json:"artist,omitempty"`
 	AlbumType string `json:"album_type,omitempty"`
+	// Release is a movie entry's kind: "" its main release date, "digital" or "physical"
+	// its digital or disc release, an entry of its own on that day.
+	Release string `json:"release,omitempty"`
 	// CanonicalTitle is the title's own (TMDB English) name when Title is the shown one
 	// (Settings → Library → "Show titles as"); never sent, only judged by the adult filter.
 	CanonicalTitle string `json:"-"`
@@ -92,13 +95,20 @@ func (a *api) calendarItems(ctx context.Context, start, end string, albums bool)
 	if mv, err := a.deps.Movies.Upcoming(ctx, start, end); err == nil {
 		for _, m := range mv {
 			sub := "Movie"
+			switch m.Release {
+			case "digital":
+				sub = "Digital release"
+			case "physical":
+				sub = "Physical release"
+			}
 			if m.Year > 0 {
-				sub = itoa(m.Year) + " · Movie"
+				sub += " · " + itoa(m.Year) // kind first, as the Calendar page writes it (lib/calendar.ts itemLine)
 			}
 			items = append(items, CalendarItem{
 				Date: m.ReleaseDate, Type: "movie", Title: m.Title, Subtitle: sub,
 				PosterURL: m.PosterURL, RefID: m.ID, HasFile: m.HasFile, Monitored: m.Monitored,
 				TMDBID: m.TMDBID, MediaType: "movie", Year: m.Year, CanonicalTitle: m.CanonicalTitle,
+				Release: m.Release,
 			})
 		}
 	}

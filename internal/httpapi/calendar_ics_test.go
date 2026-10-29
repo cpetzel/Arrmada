@@ -28,6 +28,7 @@ func TestICSFormat(t *testing.T) {
 		{Date: "2026-10-20", Type: "episode", Title: "Harbour, Lights; \\ Night", RefID: 11, Season: 2, Episode: 5, EpisodeTitle: "The\nBreakwater"},
 		{Date: "2026-12-31", Type: "movie", Title: long, RefID: 21, Year: 2026},
 		{Date: "not a date", Type: "movie", Title: "skipped", RefID: 22},
+		{Date: "2027-01-12", Type: "movie", Title: "Glass Orchard", RefID: 21, Year: 2026, Release: "digital"},
 	}
 	var b bytes.Buffer
 	if err := writeICS(&b, items, "arrmada.example.com", now); err != nil {
@@ -58,13 +59,16 @@ func TestICSFormat(t *testing.T) {
 		"DTSTART;VALUE=DATE:20261231", "DTEND;VALUE=DATE:20270101",
 		`SUMMARY:Harbour\, Lights\; \\ Night — S02E05 · The\nBreakwater`,
 		"SUMMARY:" + long + " (2026)",
+		// A digital release is an event of its own, beside the film's main date.
+		"UID:arrmada-movie-21-digital@arrmada.example.com",
+		"SUMMARY:Glass Orchard (2026) — Digital release",
 	} {
 		if !strings.Contains(unfolded, want) {
 			t.Errorf("missing %q in:\n%s", want, unfolded)
 		}
 	}
-	if strings.Count(out, "BEGIN:VEVENT") != 2 {
-		t.Errorf("events = %d, want 2 (the undated one skipped)", strings.Count(out, "BEGIN:VEVENT"))
+	if strings.Count(out, "BEGIN:VEVENT") != 3 {
+		t.Errorf("events = %d, want 3 (the undated one skipped)", strings.Count(out, "BEGIN:VEVENT"))
 	}
 }
 

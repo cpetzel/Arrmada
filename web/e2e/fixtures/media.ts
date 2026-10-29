@@ -43,7 +43,7 @@ const ep = (offset: number, ref: number, tmdb: number, title: string, season: nu
   has_file: false, monitored: true, tmdb_id: tmdb, media_type: "series", season, episode, episode_title: name, ...over,
 });
 const mv = (offset: number, ref: number, tmdb: number, title: string, over: Partial<CalendarItem> = {}): CalendarItem => ({
-  date: day(offset), type: "movie", title, subtitle: "2026 · Movie", poster_url: poster(ref), ref_id: ref,
+  date: day(offset), type: "movie", title, subtitle: "Movie · 2026", poster_url: poster(ref), ref_id: ref,
   has_file: false, monitored: true, tmdb_id: tmdb, media_type: "movie", year: 2026, ...over,
 });
 export const calendarItems: CalendarItem[] = [

@@ -254,10 +254,22 @@ func writeICS(w io.Writer, items []CalendarItem, host string, now time.Time) err
 				summary += " — " + it.Artist
 			}
 		default:
-			uid = "arrmada-movie-" + strconv.FormatInt(it.RefID, 10) + "@" + host
+			// A digital or physical release is an event of its own beside the film's main
+			// date; the main one keeps the UID it always had.
+			uid = "arrmada-movie-" + strconv.FormatInt(it.RefID, 10)
+			if it.Release != "" {
+				uid += "-" + it.Release
+			}
+			uid += "@" + host
 			summary = it.Title
 			if it.Year > 0 {
 				summary += " (" + strconv.Itoa(it.Year) + ")"
+			}
+			switch it.Release {
+			case "digital":
+				summary += " — Digital release"
+			case "physical":
+				summary += " — Physical release"
 			}
 		}
 		line("BEGIN:VEVENT")
