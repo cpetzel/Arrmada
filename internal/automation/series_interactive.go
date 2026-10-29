@@ -1032,11 +1032,19 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 		if !ok {
 			continue // the recorded file isn't among them: none of these is the one kept
 		}
+		// Offered for deletion only when both names say it's this episode as releases are
+		// read: never when the only evidence is the on-disk "1x8" reading (#81) of either.
+		if library.ReadOnlyOnDisk(best.Path) {
+			continue
+		}
 		d := DuplicateEpisodeFile{Season: key[0], Episode: key[1], Keeping: copyOf(best)}
 		for _, f := range files {
-			if f.Path != best.Path {
+			if f.Path != best.Path && !library.ReadOnlyOnDisk(f.Path) {
 				d.Extras = append(d.Extras, copyOf(f))
 			}
+		}
+		if len(d.Extras) == 0 {
+			continue
 		}
 		out = append(out, d)
 	}
@@ -1064,23 +1072,29 @@ func recordedEpisodeFiles(s series.Series) map[[2]int]string {
 
 // keptEpisodeFile picks which of the files on disk claiming one episode is kept: the best
 // (bestLibraryVideo). A file only the on-disk "1x8" rule reads (library.ReadOnlyOnDisk, #81)
-// only fills an episode nothing else holds: it never takes the place of the episode's
-// recorded file while that is still there, nor of another file read by its name. ok is
-// false when every candidate is such a file and the recorded one, still there, isn't among
-// them — the recorded file stays.
+// only fills an episode nothing else holds: a file read by its name always wins over it —
+// even when it is the episode's recorded file, having filled the episode earlier — and it
+// never takes the place of the recorded file while that is still there. ok is false when
+// every candidate is such a file and the recorded one, still there, isn't among them — the
+// recorded file stays.
 func keptEpisodeFile(files []library.FoundVideo, recorded string) (library.FoundVideo, bool) {
-	keepRecorded := recorded != "" && !fileGone(recorded)
-	var eligible []library.FoundVideo
+	var named []library.FoundVideo
 	for _, f := range files {
-		if (keepRecorded && filepath.Clean(f.Path) == filepath.Clean(recorded)) || !library.ReadOnlyOnDisk(f.Path) {
-			eligible = append(eligible, f)
+		if !library.ReadOnlyOnDisk(f.Path) {
+			named = append(named, f)
 		}
 	}
-	switch {
-	case len(eligible) > 0:
-		files = eligible
-	case keepRecorded:
+	if len(named) == 0 && recorded != "" && !fileGone(recorded) {
+		// Only on-disk reads: the recorded file stays, whichever it is.
+		for _, f := range files {
+			if filepath.Clean(f.Path) == filepath.Clean(recorded) {
+				return f, true
+			}
+		}
 		return library.FoundVideo{}, false
+	}
+	if len(named) > 0 {
+		files = named
 	}
 	if len(files) == 1 {
 		return files[0], true
