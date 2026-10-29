@@ -126,8 +126,11 @@ func TestReleaseDatesFollowRegion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Releases.Cinema == nil || d.Releases.Cinema.Country != "AU" {
-		t.Errorf("GetMovie cinema = %+v, want AU's", d.Releases.Cinema)
+	if d.Releases.Cinema == nil || d.Releases.Cinema.Country != "AU" || d.Releases.Region != "AU" {
+		t.Errorf("GetMovie releases = %+v, want AU's, read for AU", d.Releases)
+	}
+	if tm.ReleaseRegion() != "AU" {
+		t.Errorf("ReleaseRegion = %q, want AU", tm.ReleaseRegion())
 	}
 	md, err := tm.MediaDetails(ctx, "movie", 693134)
 	if err != nil {

@@ -2176,7 +2176,7 @@ export interface MediaDetail {
 /** One kind of a film's release: the day (YYYY-MM-DD) and whose release it is (ISO country code). */
 export interface DatedRelease { date: string; country: string }
 /** A film's cinema, digital and physical release dates, for the admin's region when it has them. */
-export interface ReleaseDates { cinema?: DatedRelease; digital?: DatedRelease; physical?: DatedRelease }
+export interface ReleaseDates { cinema?: DatedRelease; digital?: DatedRelease; physical?: DatedRelease; region?: string }
 /** One "Complete the <name>" row on Discover. */
 export interface CollectionRow { collection_id: number; title: string; items: DiscoverCard[] }
 /** A movie collection's page: every member as a card, and how much of what's out is here. */

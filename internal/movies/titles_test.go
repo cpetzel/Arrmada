@@ -132,6 +132,47 @@ func TestBackfillReleaseDates(t *testing.T) {
 	}
 }
 
+// regionMeta is titlesMeta picking release dates for a discovery region.
+type regionMeta struct {
+	*titlesMeta
+	region string
+}
+
+func (f *regionMeta) ReleaseRegion() string { return f.region }
+func (f *regionMeta) GetMovie(ctx context.Context, id int) (*metadata.MovieDetails, error) {
+	d, err := f.titlesMeta.GetMovie(ctx, id)
+	if d != nil {
+		d.Releases.Region = f.region
+	}
+	return d, err
+}
+
+// A film whose dates were read for another discovery region is read again; one read for
+// this region is left alone.
+func TestBackfillReleaseDatesNewRegion(t *testing.T) {
+	meta := &regionMeta{titlesMeta: &titlesMeta{}, region: "AU"}
+	s := titlesService(t, meta)
+	ctx := context.Background()
+	us, err := s.repo.Create(ctx, Movie{TMDBID: 7, Title: "Seven", Year: 2007,
+		Extra: &MovieExtra{TitlesRead: true, Releases: &metadata.ReleaseDates{Region: "US"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.repo.Create(ctx, Movie{TMDBID: 8, Title: "Eight", Year: 2008,
+		Extra: &MovieExtra{TitlesRead: true, Releases: &metadata.ReleaseDates{Region: "AU"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.BackfillAltTitles(ctx, time.Millisecond); err != nil || n != 1 || meta.calls.Load() != 1 {
+		t.Fatalf("filled %d (%d calls, %v), want just the US-read film", n, meta.calls.Load(), err)
+	}
+	if got, _ := s.repo.Get(ctx, us.ID); got.Extra.Releases.Region != "AU" || got.Extra.Releases.Digital == nil {
+		t.Errorf("releases = %+v, want them read again for AU", got.Extra.Releases)
+	}
+	if n, _ := s.BackfillAltTitles(ctx, time.Millisecond); n != 0 {
+		t.Errorf("second run filled %d, want nothing", n)
+	}
+}
+
 // New movies store their release dates straight away, read even when TMDB has none.
 func TestExtraFromKeepsReleases(t *testing.T) {
 	rd := &metadata.ReleaseDates{Physical: &metadata.DatedRelease{Date: "2026-12-01", Country: "AU"}}

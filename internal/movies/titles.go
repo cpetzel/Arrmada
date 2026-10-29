@@ -107,7 +107,8 @@ func TitleMatches(keys []string, m Movie, title string, year int) bool {
 
 // BackfillAltTitles reads the original and alternative titles of every movie stored before
 // they were kept (Extra.TitlesRead unset) — and, from the same answer, the release dates
-// of every movie stored before those were kept (Extra.Releases nil) — the translated titles of every movie not yet
+// of every movie stored before those were kept or read for another discovery region
+// (needsReleases) — the translated titles of every movie not yet
 // read for all the "Also match titles in" languages (needsLocalTitles), and the display
 // names the "Show titles as" setting needs (needsDisplayNames), one movie per every so a
 // large library never bursts TMDB, and returns how many it filled. It stops
@@ -150,10 +151,11 @@ func (s *Service) backfillTitlesOnce(ctx context.Context, every time.Duration) (
 	}
 	langs := s.localLangs()
 	display := s.policy()
+	region, knowsRegion := s.releaseRegion()
 	filled := 0
 	for _, m := range all {
 		needAlt := m.TMDBID > 0 && (m.Extra == nil || !m.Extra.TitlesRead)
-		needDates := m.TMDBID > 0 && (m.Extra == nil || m.Extra.Releases == nil)
+		needDates := m.TMDBID > 0 && needsReleases(m, region, knowsRegion)
 		needLocal := s.titles != nil && needsLocalTitles(m, langs)
 		needDisplay := s.titles != nil && needsDisplayNames(m, display)
 		if !needAlt && !needDates && !needLocal && !needDisplay {
@@ -186,6 +188,10 @@ func (s *Service) backfillTitlesOnce(ctx context.Context, every time.Duration) (
 				}
 			}
 			if needDates {
+				if d.Releases == nil {
+					// TMDB no longer has it: read for this region, nothing to show.
+					d.Releases = &metadata.ReleaseDates{Region: region}
+				}
 				if err := s.repo.SetReleases(ctx, m.ID, d.Releases); err != nil {
 					return filled, err
 				}
@@ -249,6 +255,24 @@ func (r *Repo) SetTitles(ctx context.Context, id int64, original string, alts []
 			'$.original_title', ?, '$.alt_titles', json(?), '$.titles_read', json('true'))
 		WHERE id = ?`, original, string(b), id)
 	return err
+}
+
+// releaseRegion is the region the metadata provider picks release dates for now, and
+// whether it says (TMDB does; a provider that doesn't is never asked to re-read).
+func (s *Service) releaseRegion() (string, bool) {
+	if r, ok := s.meta.(interface{ ReleaseRegion() string }); ok {
+		return r.ReleaseRegion(), true
+	}
+	return "", false
+}
+
+// needsReleases reports whether m's release dates are to be read: never read, or read for
+// another discovery region than region (when it's known).
+func needsReleases(m Movie, region string, knowsRegion bool) bool {
+	if m.Extra == nil || m.Extra.Releases == nil {
+		return true
+	}
+	return knowsRegion && m.Extra.Releases.Region != region
 }
 
 // SetReleases stores a movie's release dates (nil stores them read and empty), leaving the

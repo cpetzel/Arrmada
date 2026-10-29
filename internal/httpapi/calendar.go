@@ -102,7 +102,7 @@ func (a *api) calendarItems(ctx context.Context, start, end string, albums bool)
 				sub = "Physical release"
 			}
 			if m.Year > 0 {
-				sub = itoa(m.Year) + " · " + sub
+				sub += " · " + itoa(m.Year) // kind first, as the Calendar page writes it (lib/calendar.ts itemLine)
 			}
 			items = append(items, CalendarItem{
 				Date: m.ReleaseDate, Type: "movie", Title: m.Title, Subtitle: sub,

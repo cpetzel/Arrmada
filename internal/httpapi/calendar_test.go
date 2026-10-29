@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/tristenlammi/arrmada/internal/auth"
 	"github.com/tristenlammi/arrmada/internal/books"
@@ -99,13 +102,16 @@ func TestCalendarIncludesTMDBID(t *testing.T) {
 }
 
 // A film's digital and physical releases are entries of their own, labelled, on their
-// own days; one outside the window, or on the main date's day, isn't.
+// own days — two on one day when they share it, each its own event in the feed. One
+// outside the window (Glass Orchard's disc in December), or on the main date's day
+// (Paper Moons' digital), isn't.
 func TestCalendarDigitalAndPhysicalReleases(t *testing.T) {
 	s := calendarServer(t)
 	_, admin := s.user(t, "admin@example.com", auth.RoleAdmin)
 	if _, err := s.st.DB().Exec(`INSERT INTO movies (id, tmdb_id, title, year, monitored, has_file, extra_json) VALUES
 		(31, 701, 'Glass Orchard', 2026, 1, 0, '{"release_date":"2026-09-01","releases":{"cinema":{"date":"2026-09-01","country":"US"},"digital":{"date":"2026-10-14","country":"US"},"physical":{"date":"2026-12-02","country":"US"}}}'),
-		(32, 702, 'Paper Moons', 2026, 1, 0, '{"release_date":"2026-10-03","releases":{"digital":{"date":"2026-10-03","country":"US"}}}')`); err != nil {
+		(32, 702, 'Paper Moons', 2026, 1, 0, '{"release_date":"2026-10-03","releases":{"digital":{"date":"2026-10-03","country":"US"}}}'),
+		(33, 703, 'Salt Ledger', 2026, 1, 0, '{"release_date":"2026-08-01","releases":{"digital":{"date":"2026-10-22","country":"GB"},"physical":{"date":"2026-10-22","country":"GB"}}}')`); err != nil {
 		t.Fatal(err)
 	}
 	b := getCalendar(t, s, "/api/v1/calendar?start=2026-10-01&end=2026-10-31", admin)
@@ -114,8 +120,10 @@ func TestCalendarDigitalAndPhysicalReleases(t *testing.T) {
 		got = append(got, it.Date+" "+it.Title+" "+it.Release+" "+it.Subtitle)
 	}
 	want := map[string]bool{
-		"2026-10-14 Glass Orchard digital 2026 · Digital release": true,
-		"2026-10-03 Paper Moons  2026 · Movie":                    true,
+		"2026-10-14 Glass Orchard digital Digital release · 2026": true,
+		"2026-10-03 Paper Moons  Movie · 2026":                    true,
+		"2026-10-22 Salt Ledger digital Digital release · 2026":   true,
+		"2026-10-22 Salt Ledger physical Physical release · 2026": true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("items = %q, want %d", got, len(want))
@@ -123,6 +131,17 @@ func TestCalendarDigitalAndPhysicalReleases(t *testing.T) {
 	for _, g := range got {
 		if !want[g] {
 			t.Errorf("unexpected item %q (all: %q)", g, got)
+		}
+	}
+
+	var feed bytes.Buffer
+	if err := writeICS(&feed, b.Items, "arrmada.example.com", time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	ics := strings.ReplaceAll(feed.String(), "\r\n ", "")
+	for _, uid := range []string{"arrmada-movie-33-digital@", "arrmada-movie-33-physical@", "arrmada-movie-32@"} {
+		if strings.Count(ics, "UID:"+uid) != 1 {
+			t.Errorf("want one event with UID %s… in:\n%s", uid, ics)
 		}
 	}
 }

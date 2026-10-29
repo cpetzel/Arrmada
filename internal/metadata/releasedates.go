@@ -10,7 +10,14 @@ type ReleaseDates struct {
 	Cinema   *DatedRelease `json:"cinema,omitempty"`
 	Digital  *DatedRelease `json:"digital,omitempty"`
 	Physical *DatedRelease `json:"physical,omitempty"`
+	// Region is the discovery region they were picked for ("" for none), so a library film
+	// read under another region can be read again (ReleaseRegion).
+	Region string `json:"region,omitempty"`
 }
+
+// ReleaseRegion is the region release dates are picked for now: the admin's discovery
+// region, "" when there's none.
+func (t *TMDB) ReleaseRegion() string { return t.regionCode() }
 
 // DatedRelease is one kind of release: the day (YYYY-MM-DD) and the country (ISO 3166-1
 // alpha-2) whose release it is, which is the region's own when it has one.
@@ -37,6 +44,7 @@ func pickReleaseDates(results []tmdbReleaseDates, region string) *ReleaseDates {
 		Cinema:   pickRelease(results, region, tmdbTheatricalLimited, tmdbTheatrical),
 		Digital:  pickRelease(results, region, tmdbDigital),
 		Physical: pickRelease(results, region, tmdbPhysical),
+		Region:   region,
 	}
 }
 

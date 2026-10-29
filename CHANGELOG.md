@@ -217,9 +217,10 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   dates come from TMDB, for your region (Settings → Connections → **Discovery region**).
   Where your region has no date for one of them, the US date is shown, then the earliest
   anywhere, with the country beside it. Films you already have get them in the background
-  after you update, or straight away from **Refresh & rescan**, which also picks up a
-  changed region. They're only shown: when a film is searched for still goes by its minimum
-  availability and its main release date, as before.
+  after you update, or straight away from **Refresh & rescan**. After you change the region,
+  they're read again in the background from the next restart (or from **Refresh & rescan**).
+  They're only shown: when a film is searched for still goes by its minimum availability and
+  its main release date, as before.
 - **Other files in a film's folder.** When a film's folder holds a video Arrmada doesn't use
   (another cut, an old copy, a second film left there), the film's page shows **+1 other
   file** by its file, and the Movies library has a **Has other files** filter and a small
