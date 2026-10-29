@@ -2,6 +2,7 @@ package subtitles
 
 import (
 	"context"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -53,18 +54,81 @@ func TestDetectArgs(t *testing.T) {
 	}
 }
 
-// The sample is the first speech chunk past 10% of the runtime, at most 30 s of it.
+// A stretch's sample is its first speech chunk, at most 30 s of it; without speech, its
+// first 30 s.
 func TestDetectionWindow(t *testing.T) {
-	m := time.Minute
-	chunks := []chunk{{0, 4 * m}, {4*m + 5*time.Second, 9 * m}, {12 * m, 12*m + 10*time.Second}}
-	if w := detectionWindow(40*m, chunks); w.start != 4*m+5*time.Second || w.end != 4*m+35*time.Second {
+	s := time.Second
+	if w := detectionWindow(2*time.Minute, []chunk{{12 * s, 100 * s}, {102 * s, 120 * s}}); w.start != 12*s || w.end != 42*s {
 		t.Errorf("window %v-%v", w.start, w.end)
 	}
-	if w := detectionWindow(100*m, chunks[:2]); w.start != 10*m || w.end != 10*m+30*time.Second {
-		t.Errorf("no chunk past 10%%: window %v-%v", w.start, w.end)
-	}
-	if w := detectionWindow(110*m, []chunk{{12 * m, 12*m + 10*time.Second}}); w.end != 12*m+10*time.Second {
+	if w := detectionWindow(2*time.Minute, []chunk{{5 * s, 15 * s}}); w.start != 5*s || w.end != 15*s {
 		t.Errorf("short chunk: window %v-%v", w.start, w.end)
+	}
+	if w := detectionWindow(2*time.Minute, nil); w.start != 0 || w.end != 30*s {
+		t.Errorf("no speech: window %v-%v", w.start, w.end)
+	}
+	if w := detectionWindow(20*s, nil); w.end != 20*s {
+		t.Errorf("short stretch: window %v-%v", w.start, w.end)
+	}
+}
+
+// The samples come from a quarter, half and three quarters through, past the opening
+// minutes; a runtime too short for three samples a sample apart gives fewer.
+func TestDetectionMarks(t *testing.T) {
+	m, s := time.Minute, time.Second
+	for total, want := range map[time.Duration][]time.Duration{
+		40 * m:  {10 * m, 20 * m, 30 * m},
+		120 * m: {30 * m, 60 * m, 90 * m},
+		80 * s:  {20 * s, 60 * s},
+		30 * s:  {7500 * time.Millisecond},
+	} {
+		if got := detectionMarks(total); !slices.Equal(got, want) {
+			t.Errorf("%v: %v, want %v", total, got, want)
+		}
+	}
+}
+
+// The vote: the language most samples heard, as sure as their mean, and no answer (Prob 0)
+// unless more than half the samples tried agree on it.
+func TestVoteLanguage(t *testing.T) {
+	en := func(p float64) DetectedLang { return DetectedLang{"en", p} }
+	fr := func(p float64) DetectedLang { return DetectedLang{"fr", p} }
+	cases := []struct {
+		name  string
+		heard []DetectedLang
+		tried int
+		want  DetectedLang
+		sure  bool
+	}{
+		{"all agree", []DetectedLang{en(0.9), en(0.8), en(0.7)}, 3, en(0.8), true},
+		{"two of three", []DetectedLang{en(0.97), fr(0.6), en(0.95)}, 3, en(0.96), true},
+		{"a failed sample is no vote", []DetectedLang{en(0.9), en(0.9)}, 3, en(0.9), true},
+		{"one sample of three", []DetectedLang{en(0.99)}, 3, en(0), false},
+		{"no majority", []DetectedLang{en(0.9), fr(0.95), {"de", 0.99}}, 3, DetectedLang{"de", 0}, false},
+		{"a tie", []DetectedLang{en(0.9), fr(0.8)}, 2, en(0), false},
+		{"a short file's one sample", []DetectedLang{en(0.9)}, 1, en(0.9), true},
+		{"agreed but unsure", []DetectedLang{en(0.5), en(0.55), fr(0.99)}, 3, en(0.525), false},
+		{"nothing heard", nil, 3, DetectedLang{}, false},
+	}
+	for _, tc := range cases {
+		got := voteLanguage(tc.heard, tc.tried)
+		if got.Lang != tc.want.Lang || math.Abs(got.Prob-tc.want.Prob) > 1e-9 {
+			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
+		// Sure is what withDetected trusts.
+		mi := &mediaInfo{Audio: []AudioTrack{{Index: 0, Lang: "und"}}, Detected: map[int]DetectedLang{0: got}}
+		if sure := len(mi.withDetected().AudioLangs) == 1; sure != tc.sure {
+			t.Errorf("%s: used = %v, want %v", tc.name, sure, tc.sure)
+		}
+	}
+}
+
+// One stretch of one audio stream, seeking the input, as 16 kHz mono PCM.
+func TestStretchArgs(t *testing.T) {
+	got := strings.Join(stretchArgs("/m/Film.mkv", 2, chunk{30 * time.Minute, 32 * time.Minute}, "/tmp/s.wav"), " ")
+	want := "-y -hide_banner -nostats -ss 1800.000 -t 120.000 -i /m/Film.mkv -map 0:a:2 -vn -ac 1 -ar 16000 -c:a pcm_s16le /tmp/s.wav"
+	if got != want {
+		t.Errorf("args\n got %q\nwant %q", got, want)
 	}
 }
 

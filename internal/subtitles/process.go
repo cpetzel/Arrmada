@@ -847,7 +847,7 @@ func (s *Service) heardAudio(ctx context.Context, job *Job, ref fileRef, mi *med
 		}
 		mi.Detected[t.Index] = d
 		changed = true
-		s.event("info", fmt.Sprintf("%s: untagged audio track %d sounds like %s (p = %.2f)", ref.Title, t.Index+1, d.Lang, d.Prob))
+		s.event("info", heardLine(ref.Title, t.Index, d))
 	}
 	if changed {
 		s.saveProbe(ctx, ref.Path, mi)

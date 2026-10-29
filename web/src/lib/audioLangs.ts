@@ -13,7 +13,7 @@ export function chipText(l: AudioLang): string {
 export function chipTitle(l: AudioLang): string {
   if (!l.code) return "An audio track with no language tag, not identified yet";
   const name = l.name || l.code.toUpperCase();
-  return l.detected ? `${name} — detected by the AI (the track isn't tagged)` : name;
+  return l.detected ? `${name} (detected) — the track isn't tagged; the local AI identified it from the audio` : name;
 }
 
 /** langsLabel names a file's audio languages in one line, for screen readers. */

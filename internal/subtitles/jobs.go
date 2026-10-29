@@ -181,6 +181,13 @@ func (s *Service) Run(ctx context.Context) {
 		start(fmt.Sprintf("subtitles: fast worker %d", i+1), LaneFast)
 	}
 	start("subtitles: GPU worker", LaneGPU)
+	// The untagged-audio identification's one worker (identify.go): it runs only while
+	// both lanes are idle.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		safego.Loop(ctx, s.log, "subtitles: audio identification", s.identifyWorker)
+	}()
 	wg.Wait()
 }
 
@@ -579,6 +586,9 @@ func (s *Service) QueueSeries(ctx context.Context, seriesID int64) (int, error) 
 // OnMovieImported is the import hook: a movie that just landed gets its subtitles ensured
 // now, rather than whenever the next 6-hourly sweep happens to run.
 func (s *Service) OnMovieImported(ctx context.Context, movieID int64) {
+	// Its untagged audio, if any, is identified ahead of the library (identify.go),
+	// whether or not subtitles are ensured automatically.
+	s.identifyImported(ctx, movieID)
 	if !s.settings.GetBool(ctx, keyMoviesAuto, defaultMoviesAuto) {
 		return
 	}
@@ -641,6 +651,11 @@ func (s *Service) OnMovieRemoved(_ context.Context, movieID int64) {
 // show put the whole back-catalogue in the queue in front of whatever came next. Anything
 // older that is missing is the 6-hourly sweep's job.
 func (s *Service) OnSeriesImported(ctx context.Context, seriesID int64, episodes []series.EpisodeRef) {
+	imported := make(map[epRef]bool, len(episodes))
+	for _, e := range episodes {
+		imported[epRef{e.Season, e.Episode}] = true
+	}
+	s.identifyEpisodes(ctx, seriesID, imported)
 	if !s.settings.GetBool(ctx, keySeriesAuto, defaultSeriesAuto) {
 		return
 	}

@@ -219,9 +219,17 @@ func (a *api) handleUpdateSubtitleSettings(w http.ResponseWriter, r *http.Reques
 		SeriesAuto *bool     `json:"series_auto"`
 		Languages  *[]string `json:"languages"`
 		MinScore   *int      `json:"min_score"`
+		// IdentifyAudio switches the background identification of untagged audio.
+		IdentifyAudio *bool `json:"identify_audio"`
 	}
 	if !a.decodeJSON(w, r, &req) {
 		return
+	}
+	if req.IdentifyAudio != nil {
+		if err := a.deps.Subtitles.SetIdentifyAudio(r.Context(), *req.IdentifyAudio); err != nil {
+			a.writeError(w, http.StatusInternalServerError, "could not save subtitle settings")
+			return
+		}
 	}
 	if req.MinScore != nil {
 		if err := a.deps.Subtitles.SetMinScore(r.Context(), *req.MinScore); err != nil {

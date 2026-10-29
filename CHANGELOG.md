@@ -210,6 +210,23 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### New
 
+- **Untagged audio tracks are identified** (#90). Plenty of releases tag their audio `und`,
+  or nothing, so the language badges showed **?** and a profile's **Must** audio language
+  couldn't judge the file. Where the local AI (whisper) is installed, Arrmada now listens to
+  every such track in your library once, in the background: three 30-second samples from a
+  quarter, half and three quarters through, and the language most of them hear wins. When
+  the samples don't agree, or whisper isn't sure, the track stays unknown rather than taking
+  a guess. Tracks with a real language tag are left alone, and so are commentary tracks.
+  - What it hears is kept in Arrmada's database, never written into the file. The badges
+    show it as detected (a dashed chip, "English (detected)"), and the language rules,
+    upgrades and the save dialog's count read it like a tag. A file that changes is
+    listened to again.
+  - It runs one file at a time, only while no subtitle is being made, at idle priority, and
+    newly imported files go first. Switch it off under Settings → Subtitles → **Local AI
+    (whisper)** → **Identify untagged audio**. It's on by default, but does nothing until a
+    whisper model is installed.
+  - The AI subtitles' own check of an untagged track (before choosing transcribe or
+    translate) now takes the same three-sample vote instead of one sample.
 - **Other files in a film's folder.** When a film's folder holds a video Arrmada doesn't use
   (another cut, an old copy, a second film left there), the film's page shows **+1 other
   file** by its file, and the Movies library has a **Has other files** filter and a small
