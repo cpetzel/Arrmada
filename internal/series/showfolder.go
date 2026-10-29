@@ -228,7 +228,7 @@ func (s *Service) EpisodeFileFilter(ctx context.Context, sr Series, showDir stri
 		if pl := s.placeOf(j.roots, path, j.titles); pl.unsure || filepath.Clean(pl.dir) != showDir {
 			return false
 		}
-		rel := parser.Parse(filepath.Base(path))
+		rel := library.ParseEpisodeFile(path)
 		key := parser.TitleKey(rel.Title)
 		if key == "" {
 			// A name without a title ("S01E01.mkv", "01.mkv") could be anyone's: only one
@@ -403,10 +403,11 @@ func (s *Service) FolderUnclear(ctx context.Context, seriesID int64) string {
 	return ""
 }
 
-// NameFitsShow reports whether a file name says it's show sr's episode (fitsShow): the
-// duplicate check offers only such files — or ones the show recorded — for deletion, never
-// one read on the benefit of the doubt in the show's own folder.
-func NameFitsShow(name string, sr Series) bool { return fitsShow(parser.Parse(name), sr) }
+// FileFitsShow reports whether the name of the file at path says it's show sr's episode
+// (fitsShow), read as a file on disk (library.ParseEpisodeFile) like the rescan reads it:
+// the duplicate check offers only such files — or ones the show recorded — for deletion,
+// never one read on the benefit of the doubt in the show's own folder.
+func FileFitsShow(path string, sr Series) bool { return fitsShow(library.ParseEpisodeFile(path), sr) }
 
 // fitsShow reports whether a file's parsed name is show sr's: FitRelease against its title
 // and aliases, or against its display title or title override — every one with the year
