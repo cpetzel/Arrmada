@@ -80,6 +80,12 @@ An install from before this keeps its page open to your network until qBittorren
 is recreated: `update.sh` only restarts Arrmada, and says so at the end of each update until
 `.env` has `ARRMADA_QBIT_WEBUI_BIND` either way (or the container has been recreated).
 
+### qBittorrent through a VPN
+
+Arrmada has no VPN of its own. To send torrent traffic through one, put qBittorrent (and
+only qBittorrent) in a [Gluetun](https://github.com/qdm12/gluetun) container's network with
+a `docker-compose.override.yml`: [Downloading through a VPN](vpn.md).
+
 ## SABnzbd's login
 
 The bundled SABnzbd's own page is on your network (that's where your Usenet provider is
