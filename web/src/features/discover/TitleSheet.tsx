@@ -6,9 +6,10 @@ import { posterThumb } from "../../lib/img";
 import { titlePath } from "../../lib/refLink";
 import { useTitle } from "../../lib/title";
 import { isStaff, useMe } from "../../lib/me";
-import { shownOverview } from "../../lib/displayTitle";
+import { releaseFacts, shownOverview } from "../../lib/displayTitle";
 import { Button, IconButton, Sheet, StatusChip, POSTER_CHIP_BG, POSTER_TONE, type ToastFn } from "../../ui";
 import { WatchButton } from "../../components/brand/WatchPills";
+import { formatReleaseDay } from "../../lib/format";
 import { watchLinksOf } from "../../components/brand/servers";
 import { badgeFor, FOLLOWING, PosterPlaceholder, useCloseOverlay, useOpenOverlay, useOpenTitle, type OverlayState, type ReqStatus, type RowCtx } from "./shared";
 
@@ -190,6 +191,7 @@ function RequestDetailModal({ card, ctx, pick, onClose }: { card: DiscoverCard; 
 
   const overview = shownOverview(d) || shownOverview(c);
   const runtime = d?.runtime ? `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m` : "";
+  const releases = releaseFacts(d?.releases);
   const director = crewByJob(d?.crew, "Director");
   const writer = crewByJob(d?.crew, "Writer");
   const producer = crewByJob(d?.crew, "Producer");
@@ -389,6 +391,21 @@ function RequestDetailModal({ card, ctx, pick, onClose }: { card: DiscoverCard; 
             <button onClick={() => openOverlay("collection", collection.id)} className="mt-3 min-h-[32px] text-base font-semibold" style={{ color: "var(--accent-text)" }}>
               Part of the {collection.name} →
             </button>
+          )}
+
+          {/* A movie's cinema, digital and disc release dates (GH-93), with whose release each is. */}
+          {releases.length > 0 && (
+            <dl className="m-0 mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3" aria-label="Release dates">
+              {releases.map((f) => (
+                <div key={f.label} className="min-w-0">
+                  <dt className="font-mono text-2xs uppercase text-ink-faint">{f.label}</dt>
+                  <dd className="m-0 text-ink-dim">
+                    {formatReleaseDay(f.date)}
+                    {f.country && <span className="ml-1 font-mono text-2xs text-ink-faint" title={`${f.country} release`}>{f.country}</span>}
+                  </dd>
+                </div>
+              ))}
+            </dl>
           )}
 
           {/* Crew */}

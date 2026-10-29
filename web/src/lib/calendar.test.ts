@@ -48,6 +48,8 @@ describe("item lines and links", () => {
     expect(itemLine(item({}))).toBe("S02E05 · The Breakwater");
     expect(itemLine(item({ episode_title: "" }))).toBe("S02E05");
     expect(itemLine(item({ type: "movie", media_type: "movie", year: 2026 }))).toBe("Movie · 2026");
+    expect(itemLine(item({ type: "movie", media_type: "movie", year: 2026, release: "digital" }))).toBe("Digital release · 2026");
+    expect(itemLine(item({ type: "movie", media_type: "movie", release: "physical" }))).toBe("Physical release");
     // An older server without the fields: fall back to its subtitle.
     expect(itemLine(item({ season: undefined, episode: undefined }))).toBe("S2 · E5 · The Breakwater");
   });

@@ -106,7 +106,9 @@ func TitleMatches(keys []string, m Movie, title string, year int) bool {
 }
 
 // BackfillAltTitles reads the original and alternative titles of every movie stored before
-// they were kept (Extra.TitlesRead unset), the translated titles of every movie not yet
+// they were kept (Extra.TitlesRead unset) — and, from the same answer, the release dates
+// of every movie stored before those were kept or read for another discovery region
+// (needsReleases) — the translated titles of every movie not yet
 // read for all the "Also match titles in" languages (needsLocalTitles), and the display
 // names the "Show titles as" setting needs (needsDisplayNames), one movie per every so a
 // large library never bursts TMDB, and returns how many it filled. It stops
@@ -149,12 +151,14 @@ func (s *Service) backfillTitlesOnce(ctx context.Context, every time.Duration) (
 	}
 	langs := s.localLangs()
 	display := s.policy()
+	region, knowsRegion := s.releaseRegion()
 	filled := 0
 	for _, m := range all {
 		needAlt := m.TMDBID > 0 && (m.Extra == nil || !m.Extra.TitlesRead)
+		needDates := m.TMDBID > 0 && needsReleases(m, region, knowsRegion)
 		needLocal := s.titles != nil && needsLocalTitles(m, langs)
 		needDisplay := s.titles != nil && needsDisplayNames(m, display)
-		if !needAlt && !needLocal && !needDisplay {
+		if !needAlt && !needDates && !needLocal && !needDisplay {
 			continue
 		}
 		t := time.NewTimer(every)
@@ -164,7 +168,7 @@ func (s *Service) backfillTitlesOnce(ctx context.Context, every time.Duration) (
 			return filled, ctx.Err()
 		case <-t.C:
 		}
-		if needAlt {
+		if needAlt || needDates {
 			d, err := s.meta.GetMovie(ctx, m.TMDBID)
 			switch {
 			case errors.Is(err, metadata.ErrNotConfigured):
@@ -178,8 +182,19 @@ func (s *Service) backfillTitlesOnce(ctx context.Context, every time.Duration) (
 				s.log.Debug("movies: couldn't read alternative titles; trying again next start", "movie", m.Title, "err", err)
 				continue
 			}
-			if err := s.repo.SetTitles(ctx, m.ID, d.OriginalTitle, d.AltTitles); err != nil {
-				return filled, err
+			if needAlt {
+				if err := s.repo.SetTitles(ctx, m.ID, d.OriginalTitle, d.AltTitles); err != nil {
+					return filled, err
+				}
+			}
+			if needDates {
+				if d.Releases == nil {
+					// TMDB no longer has it: read for this region, nothing to show.
+					d.Releases = &metadata.ReleaseDates{Region: region}
+				}
+				if err := s.repo.SetReleases(ctx, m.ID, d.Releases); err != nil {
+					return filled, err
+				}
 			}
 		}
 		if needLocal {
@@ -239,6 +254,41 @@ func (r *Repo) SetTitles(ctx context.Context, id int64, original string, alts []
 			CASE WHEN json_valid(extra_json) AND extra_json <> '' THEN extra_json ELSE '{}' END,
 			'$.original_title', ?, '$.alt_titles', json(?), '$.titles_read', json('true'))
 		WHERE id = ?`, original, string(b), id)
+	return err
+}
+
+// releaseRegion is the region the metadata provider picks release dates for now, and
+// whether it says (TMDB does; a provider that doesn't is never asked to re-read).
+func (s *Service) releaseRegion() (string, bool) {
+	if r, ok := s.meta.(interface{ ReleaseRegion() string }); ok {
+		return r.ReleaseRegion(), true
+	}
+	return "", false
+}
+
+// needsReleases reports whether m's release dates are to be read: never read, or read for
+// another discovery region than region (when it's known).
+func needsReleases(m Movie, region string, knowsRegion bool) bool {
+	if m.Extra == nil || m.Extra.Releases == nil {
+		return true
+	}
+	return knowsRegion && m.Extra.Releases.Region != region
+}
+
+// SetReleases stores a movie's release dates (nil stores them read and empty), leaving the
+// rest of its extra metadata as it is (json_set, as SetTitles).
+func (r *Repo) SetReleases(ctx context.Context, id int64, rd *metadata.ReleaseDates) error {
+	if rd == nil {
+		rd = &metadata.ReleaseDates{}
+	}
+	b, err := json.Marshal(rd)
+	if err != nil {
+		return err
+	}
+	_, err = r.q().ExecContext(ctx, `UPDATE movies SET extra_json = json_set(
+			CASE WHEN json_valid(extra_json) AND extra_json <> '' THEN extra_json ELSE '{}' END,
+			'$.releases', json(?))
+		WHERE id = ?`, string(b), id)
 	return err
 }
 

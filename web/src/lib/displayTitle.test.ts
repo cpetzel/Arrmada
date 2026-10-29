@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shownOverview, shownTitle } from "./displayTitle";
+import { releaseFacts, shownOverview, shownTitle } from "./displayTitle";
 import { seriesLibraryConfig } from "../pages/series/library";
 import type { Series } from "./api";
 
@@ -31,5 +31,21 @@ describe("series library", () => {
     const text = config.searchText(list[0]).toLowerCase();
     expect(text).toContain("gomorra");
     expect(text).toContain("gomorrah");
+  });
+});
+
+// A film's cinema, digital and physical release dates (GH-93): only the kinds there are,
+// in order, each with whose release it is.
+describe("releaseFacts", () => {
+  it("lists the kinds there are, in order", () => {
+    expect(releaseFacts({ physical: { date: "2027-01-12", country: "GB" }, cinema: { date: "2026-09-04", country: "AU" } })).toEqual([
+      { label: "In cinemas", date: "2026-09-04", country: "AU" },
+      { label: "Physical", date: "2027-01-12", country: "GB" },
+    ]);
+  });
+  it("is empty without dates", () => {
+    expect(releaseFacts(undefined)).toEqual([]);
+    expect(releaseFacts({})).toEqual([]);
+    expect(releaseFacts({ digital: { date: "", country: "US" } })).toEqual([]);
   });
 });

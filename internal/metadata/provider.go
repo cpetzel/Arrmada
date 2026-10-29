@@ -130,6 +130,8 @@ type MovieDetails struct {
 	// not); AltTitles the other titles its releases may be named by (movieAltTitles).
 	OriginalTitle string   `json:"original_title,omitempty"`
 	AltTitles     []string `json:"alt_titles,omitempty"`
+	// Releases are the cinema, digital and physical release dates (never nil from TMDB).
+	Releases *ReleaseDates `json:"releases,omitempty"`
 }
 
 // CastMember is one billed actor. ID is their TMDB person id (0 in records stored before
