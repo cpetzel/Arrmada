@@ -847,8 +847,8 @@ func (w *whisperGen) detectVote(ctx context.Context, ffmpeg string, total time.D
 // detectSample runs whisper's detection on one sample. A subtitle job's detection uses the
 // build it would transcribe with, down the same fallbacks (probing the oneAPI build first,
 // and setting it aside for good when it fails). A background one never decides that: it
-// uses the oneAPI build only once a job's probe has passed it, and a failure there is just
-// this sample's (tried again on a later pass), not a reason to retire the GPU build.
+// uses the oneAPI build only once a job's probe has passed it, and when it fails there the
+// sample is asked of the Vulkan/CPU build instead, without retiring the GPU build.
 func (w *whisperGen) detectSample(ctx context.Context, model, sample string, background bool) (DetectedLang, error) {
 	var bin string
 	if background {
@@ -868,12 +868,16 @@ func (w *whisperGen) detectSample(ctx context.Context, model, sample string, bac
 		return runWhisper(ctx, b, args, nil)
 	}
 	out, err := run(bin, false)
-	if err != nil && bin == w.sycl && ctx.Err() == nil && !background {
-		w.disableSycl("it failed: " + tailStr(out, 300))
+	if err != nil && bin == w.sycl && ctx.Err() == nil {
+		// The oneAPI build failed. A job's detection sets it aside for good; a background
+		// one leaves that to the jobs and just asks the Vulkan/CPU build this once.
+		if !background {
+			w.disableSycl("it failed: " + tailStr(out, 300))
+		}
 		bin = w.bin
 		out, err = run(bin, false)
 	}
-	if err != nil && w.noGPUFlag && ctx.Err() == nil && bin != w.sycl {
+	if err != nil && w.noGPUFlag && ctx.Err() == nil {
 		out, err = run(bin, true)
 	}
 	if err != nil {

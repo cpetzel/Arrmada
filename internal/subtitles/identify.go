@@ -347,9 +347,11 @@ func (s *Service) identifyFile(ctx context.Context, det fileDetector, it identif
 			s.queueIdentify(true, it)
 			return
 		}
-		s.gpu.Lock()
-		d, err := det.detectFile(ctx, s.ffmpeg, it.path, t.Index, total, s.queueBusy)
-		s.gpu.Unlock()
+		d, err := func() (DetectedLang, error) {
+			s.gpu.Lock()
+			defer s.gpu.Unlock() // a panic in here must not leave the GPU lane locked out
+			return det.detectFile(ctx, s.ffmpeg, it.path, t.Index, total, s.queueBusy)
+		}()
 		if ctx.Err() != nil {
 			return
 		}

@@ -14,7 +14,8 @@ import (
 )
 
 // A background detection never probes or sets aside the oneAPI build: it uses it only once
-// a job's probe has passed it, and its failure there is just that sample's. A subtitle
+// a job's probe has passed it, and a failure there falls back to the Vulkan build for that
+// sample without retiring the oneAPI one. A subtitle
 // job's own detection still sets it aside and carries on with the Vulkan build.
 func TestBackgroundDetectionLeavesSyclAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -43,9 +44,13 @@ func TestBackgroundDetectionLeavesSyclAlone(t *testing.T) {
 		t.Errorf("background probed (%v) or retired (%v) the oneAPI build", w.syclProbed, w.syclOff)
 	}
 
-	w.syclProbed = true // a job's probe passed it: background uses it, and it fails
-	if _, err := w.detectSample(ctx, "m.bin", "s.wav", true); err == nil {
-		t.Error("a failed oneAPI sample came back as an answer")
+	w.syclProbed = true // a job's probe passed it: background uses it, it fails, and the
+	// sample is asked of the Vulkan build instead
+	if b := w.settledBin(); b != sycl {
+		t.Errorf("probed: background picked %s", b)
+	}
+	if d, err := w.detectSample(ctx, "m.bin", "s.wav", true); err != nil || d.Lang != "en" {
+		t.Errorf("oneAPI failure: %+v %v, want the Vulkan build's answer", d, err)
 	}
 	if w.syclOff {
 		t.Fatal("a background failure retired the oneAPI build")

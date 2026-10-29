@@ -143,7 +143,9 @@ func fileLangs(f *FileFacts, name langSet) langSet {
 	}
 	nameSays := name.known && len(name.codes) > 0
 	switch {
-	case f.AudioUntagged && nameSays:
+	case (f.AudioUntagged || f.AudioHeard) && nameSays:
+		// A heard track is still one no tag speaks for: the name's languages count for it
+		// as they did before it was heard.
 		for _, c := range name.codes {
 			s.add(c)
 		}

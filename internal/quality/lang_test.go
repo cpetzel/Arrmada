@@ -657,19 +657,33 @@ func TestHeardLanguageNeverForcesAnUpgrade(t *testing.T) {
 		setRanking(t, s, mode)
 		heardEN := &FileFacts{Resolution: "1080p", Codec: "h264", HDR: "SDR", AudioLangs: []string{"en"}, AudioHeard: true}
 		cur := onDisk("Film.2021.1080p.BluRay.x264-GRP", heardEN)
+		// An "eng" track beside an "und" one heard as English reads the same ([en], heard):
+		// before the detection the und track kept the file open, and it still does.
+		engAndHeard := onDisk("Film.2021.1080p.BluRay.x264-GRP", &FileFacts{Resolution: "1080p", Codec: "h264", HDR: "SDR",
+			AudioLangs: []string{"eng", "en"}, AudioHeard: true})
 		german := enCand("Film.2021.German.DL.1080p.WEB-DL.x264-GER", 6)
 		for _, row := range []map[string]string{{"de": PrefMust}, {"de": PrefWant}, {"en": PrefAvoid}} {
 			ref := upgradeProfile(t, s, langStored(row, TriggerAny))
 			sp, _ := s.GetStored(ctx, ref)
-			if v := sp.JudgeFile(cur); !v.Eligible || v.Current.langShort || v.Current.TargetAvoided {
-				t.Errorf("%v: eligible %v short %v avoided %v %q", row, v.Eligible, v.Current.langShort, v.Current.TargetAvoided, v.Current.RejectReason)
+			for name, c := range map[string]CurrentFile{"heard only": cur, "eng + heard en": engAndHeard} {
+				if v := sp.JudgeFile(c); !v.Eligible || v.Current.langShort || v.Current.TargetAvoided {
+					t.Errorf("%v %s: eligible %v short %v avoided %v %q", row, name, v.Eligible, v.Current.langShort, v.Current.TargetAvoided, v.Current.RejectReason)
+				}
+				if _, key, ok := s.UpgradePick(ctx, ref, c, []Candidate{german}); ok {
+					t.Errorf("%v %s: upgraded on a detection alone (%s)", row, name, key)
+				}
+				if s.IsQualityUpgrade(ctx, ref, german.Name, 6, c) {
+					t.Errorf("%v %s: the import gate took a language upgrade over a detection", row, name)
+				}
 			}
-			if _, key, ok := s.UpgradePick(ctx, ref, cur, []Candidate{german}); ok {
-				t.Errorf("%v: upgraded on a detection alone (%s)", row, key)
-			}
-			if s.IsQualityUpgrade(ctx, ref, german.Name, 6, cur) {
-				t.Errorf("%v: the import gate took a language upgrade over a detection", row)
-			}
+		}
+		// A name that states the language still speaks for the heard track, as it did for
+		// the untagged one: "GERMAN" with an eng track and one heard as English has German.
+		named := onDisk("Film.2021.GERMAN.1080p.BluRay.x264-GRP", &FileFacts{Resolution: "1080p", Codec: "h264", HDR: "SDR",
+			AudioLangs: []string{"eng", "en"}, AudioHeard: true})
+		mustDE := langStored(map[string]string{"de": PrefMust}, TriggerAny)
+		if v := mustDE.JudgeFile(named); !v.Eligible || v.Current.langShort {
+			t.Errorf("GERMAN name + heard track: eligible %v short %v %q", v.Eligible, v.Current.langShort, v.Current.RejectReason)
 		}
 		// The badge goes by the detection, and says so.
 		sp := langStored(map[string]string{"de": PrefMust}, TriggerAny)

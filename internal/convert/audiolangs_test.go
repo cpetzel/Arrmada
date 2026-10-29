@@ -27,9 +27,10 @@ func TestAudioLangsAndBadges(t *testing.T) {
 	if !reflect.DeepEqual(f.AudioLangs, []string{"de", "en", "ja"}) || f.AudioUntagged || !f.AudioHeard {
 		t.Errorf("facts: %+v", f)
 	}
-	// Heard as a language a tagged track already has: nothing rests on the detection.
-	if _, _, heardOnly := audioLangs(mi, map[int]string{3: "de"}); heardOnly {
-		t.Error("a heard language a tag already names counts as heard-only")
+	// Heard as a language a tagged track already has: still a track only the detection
+	// speaks for, so the file's languages stay as open as when it was untagged.
+	if _, _, heardOnly := audioLangs(mi, map[int]string{3: "de"}); !heardOnly {
+		t.Error("a heard track whose language a tag also names isn't marked heard")
 	}
 	badges := langtab.OrderAudio(AudioBadges(mi, map[int]string{3: "ja"}), "en")
 	want := []string{"en", "de", "ja"}

@@ -36,18 +36,19 @@ func (s *Service) heardFor(ctx context.Context, path string, sizeBytes int64) ma
 
 // audioLangs reads the languages of a file's (non-commentary) audio tracks: each tagged
 // one's base code, an untagged one's heard language, whether any track is neither, and
-// whether a language is known only from what was heard (no track is tagged with it).
+// whether any track's language is known only from what was heard. That holds even when a
+// tagged track has the same language: the heard track is still a track nobody tagged, and
+// before it was heard it kept the file's languages open (quality's fileLangs).
 func audioLangs(mi *MediaInfo, heard map[int]string) (codes []string, untagged, heardOnly bool) {
-	var tagged, fromHeard []string
 	for _, a := range mi.Audio {
 		if a.Commentary {
 			continue
 		}
 		code := langtab.AudioBase(a.Lang)
-		if code != "" {
-			tagged = append(tagged, code)
-		} else if code = langtab.AudioBase(heard[a.AudIndex]); code != "" {
-			fromHeard = append(fromHeard, code)
+		if code == "" {
+			if code = langtab.AudioBase(heard[a.AudIndex]); code != "" {
+				heardOnly = true
+			}
 		}
 		if code == "" {
 			untagged = true
@@ -56,9 +57,6 @@ func audioLangs(mi *MediaInfo, heard map[int]string) (codes []string, untagged, 
 		if !containsCode(codes, code) {
 			codes = append(codes, code)
 		}
-	}
-	for _, c := range fromHeard {
-		heardOnly = heardOnly || !containsCode(tagged, c)
 	}
 	return codes, untagged, heardOnly
 }

@@ -339,6 +339,25 @@ func TestIdentifiedLanguageReachesTheRules(t *testing.T) {
 	if b := convert.AudioBadges(analysed, heard); len(b) != 1 || b[0].Code != "en" || !b[0].Detected {
 		t.Errorf("badge %+v, want a detected EN", b)
 	}
+	// The engine never refuses (so never replaces) a file on a detection: one heard only
+	// as English still fits a German Must — and so does one with a tagged English track
+	// beside the heard one, as it did while that track was untagged.
+	mustDE := quality.StoredProfile{MediaType: quality.MediaMovie, Ideal: &quality.IdealFile{Language: map[string]string{"de": quality.PrefMust}}}
+	engAndUnd := &convert.MediaInfo{VideoCodec: "h264", Resolution: "1080p", Audio: []convert.AudioStream{{AudIndex: 0, Lang: "eng"}, {AudIndex: 1, Lang: "und"}}}
+	for name, facts := range map[string]quality.FileFacts{
+		"heard only":     convert.FactsHeard(analysed, heard),
+		"eng + heard en": convert.FactsHeard(engAndUnd, map[int]string{1: "en"}),
+	} {
+		v := mustDE.JudgeFile(quality.CurrentFile{Release: "Film.2021.1080p.WEB-DL.x264-GRP", SizeGB: 8, RuntimeMin: 100, Facts: &facts, OrigLanguage: "en"})
+		if !v.Eligible {
+			t.Errorf("%s: a detection refused the file under a German Must: %s", name, v.Current.RejectReason)
+		}
+	}
+	// Whereas a file tagged English only is known to lack German.
+	tagged := convert.FactsHeard(&convert.MediaInfo{VideoCodec: "h264", Resolution: "1080p", Audio: []convert.AudioStream{{AudIndex: 0, Lang: "eng"}}}, nil)
+	if v := mustDE.JudgeFile(quality.CurrentFile{Release: "Film.2021.1080p.WEB-DL.x264-GRP", SizeGB: 8, RuntimeMin: 100, Facts: &tagged, OrigLanguage: "en"}); v.Eligible {
+		t.Error("a tagged English-only file fits a German Must")
+	}
 }
 
 // A subtitle job turning up mid-file: the detection gives way between samples, what was
