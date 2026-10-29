@@ -22,10 +22,12 @@ import (
 // was is v0.3.3's outcome and main is 931de3b3's (both run this file unchanged; "" means
 // the same as want); want is now. The only differences allowed: a file whose name isn't the
 // show's never displaces the file an episode has recorded, and the show's named copy is
-// never offered for deletion because of it. Another show's file an earlier rescan already
-// recorded as the episode gives way to the show's own copy, and is never offered for
-// deletion either ("foreign already recorded"). A file named as another show still fills
-// an episode with no file in a folder provably the show's own ("foreign fills"), as before.
+// never offered for deletion because of it. A recorded file whose name isn't the show's —
+// another show's file an earlier rescan recorded ("foreign already recorded"), a romaji
+// name with no alias set — still competes for its own episode as it always did, but the
+// show's named copy is never offered for deletion beside it, nor it beside the show's. A
+// file named as another show still fills an episode with no file in a folder provably the
+// show's own ("foreign fills"), as before.
 
 type foreignFile struct {
 	name string
@@ -87,6 +89,10 @@ var foreignScenarios = []foreignScenario{
 		{name: "S01E02.mkv", mb: 90, ep: 2},
 		{name: "Show - S01E02.mkv", mb: 60},
 	}},
+	{name: "romaji recorded, bigger", files: []foreignFile{
+		{name: "Shingeki - S01E02.mkv", mb: 90, ep: 2},
+		{name: "Show - S01E02.mkv", mb: 60},
+	}},
 	{name: "foreign two-episode file", files: []foreignFile{
 		{name: "Show - S01E02.mkv", mb: 60, ep: 2},
 		{name: "Beta - S01E02-E03 - Other.mkv", mb: 90},
@@ -128,10 +134,11 @@ var foreignWant = map[string]string{
 	"standard|untitled displaces":                                   "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"standard|untitled fills":                                       "E1=Show - S01E01.mkv E2=- E3=S01E03.mkv",
 	"standard|library show's file":                                  "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
-	"standard|foreign already recorded":                             "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
+	"standard|foreign already recorded":                             "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=-",
 	"standard|foreign recorded, smaller":                            "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"standard|untitled recorded, own bigger":                        "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"standard|untitled recorded, own smaller":                       "E1=Show - S01E01.mkv E2=S01E02.mkv E3=-",
+	"standard|romaji recorded, bigger":                              "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=-",
 	"standard|foreign two-episode file":                             "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=Beta - S01E02-E03 - Other.mkv",
 	"standard|own better resolution":                                "E1=Show - S01E01.mkv E2=Show - S01E02 - 1080p.mkv E3=- | dup E2 keep=Show - S01E02 - 1080p.mkv del=Show - S01E02 - 720p.mkv",
 	"standard|own bigger copy":                                      "E1=Show - S01E01.mkv E2=Show.S01E02.WEB-DL-GRP.mkv E3=- | dup E2 keep=Show.S01E02.WEB-DL-GRP.mkv del=Show - S01E02.mkv",
@@ -145,10 +152,11 @@ var foreignWant = map[string]string{
 	"flat|untitled displaces":                                       "refused",
 	"flat|untitled fills":                                           "refused",
 	"flat|library show's file":                                      "refused",
-	"flat|foreign already recorded":                                 "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
+	"flat|foreign already recorded":                                 "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=-",
 	"flat|foreign recorded, smaller":                                "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"flat|untitled recorded, own bigger":                            "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"flat|untitled recorded, own smaller":                           "E1=Show - S01E01.mkv E2=S01E02.mkv E3=-",
+	"flat|romaji recorded, bigger":                                  "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=-",
 	"flat|foreign two-episode file":                                 "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=Beta - S01E02-E03 - Other.mkv",
 	"flat|own better resolution":                                    "E1=Show - S01E01.mkv E2=Show - S01E02 - 1080p.mkv E3=- | dup E2 keep=Show - S01E02 - 1080p.mkv del=Show - S01E02 - 720p.mkv",
 	"flat|own bigger copy":                                          "E1=Show - S01E01.mkv E2=Show.S01E02.WEB-DL-GRP.mkv E3=- | dup E2 keep=Show.S01E02.WEB-DL-GRP.mkv del=Show - S01E02.mkv",
@@ -162,10 +170,11 @@ var foreignWant = map[string]string{
 	"S01 folder|untitled displaces":                                 "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"S01 folder|untitled fills":                                     "E1=Show - S01E01.mkv E2=- E3=S01E03.mkv",
 	"S01 folder|library show's file":                                "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
-	"S01 folder|foreign already recorded":                           "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
+	"S01 folder|foreign already recorded":                           "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=-",
 	"S01 folder|foreign recorded, smaller":                          "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"S01 folder|untitled recorded, own bigger":                      "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"S01 folder|untitled recorded, own smaller":                     "E1=Show - S01E01.mkv E2=S01E02.mkv E3=-",
+	"S01 folder|romaji recorded, bigger":                            "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=-",
 	"S01 folder|foreign two-episode file":                           "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"S01 folder|own better resolution":                              "E1=Show - S01E01.mkv E2=Show - S01E02 - 1080p.mkv E3=- | dup E2 keep=Show - S01E02 - 1080p.mkv del=Show - S01E02 - 720p.mkv",
 	"S01 folder|own bigger copy":                                    "E1=Show - S01E01.mkv E2=Show.S01E02.WEB-DL-GRP.mkv E3=- | dup E2 keep=Show.S01E02.WEB-DL-GRP.mkv del=Show - S01E02.mkv",
@@ -179,10 +188,11 @@ var foreignWant = map[string]string{
 	"category|untitled displaces":                                   "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"category|untitled fills":                                       "E1=Show - S01E01.mkv E2=- E3=S01E03.mkv",
 	"category|library show's file":                                  "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
-	"category|foreign already recorded":                             "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
+	"category|foreign already recorded":                             "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=-",
 	"category|foreign recorded, smaller":                            "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"category|untitled recorded, own bigger":                        "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"category|untitled recorded, own smaller":                       "E1=Show - S01E01.mkv E2=S01E02.mkv E3=-",
+	"category|romaji recorded, bigger":                              "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=-",
 	"category|foreign two-episode file":                             "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"category|own better resolution":                                "E1=Show - S01E01.mkv E2=Show - S01E02 - 1080p.mkv E3=- | dup E2 keep=Show - S01E02 - 1080p.mkv del=Show - S01E02 - 720p.mkv",
 	"category|own bigger copy":                                      "E1=Show - S01E01.mkv E2=Show.S01E02.WEB-DL-GRP.mkv E3=- | dup E2 keep=Show.S01E02.WEB-DL-GRP.mkv del=Show - S01E02.mkv",
@@ -196,10 +206,11 @@ var foreignWant = map[string]string{
 	"franchise S01, issue 56|untitled displaces":                    "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"franchise S01, issue 56|untitled fills":                        "E1=Show - S01E01.mkv E2=- E3=S01E03.mkv",
 	"franchise S01, issue 56|library show's file":                   "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
-	"franchise S01, issue 56|foreign already recorded":              "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
+	"franchise S01, issue 56|foreign already recorded":              "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=-",
 	"franchise S01, issue 56|foreign recorded, smaller":             "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"franchise S01, issue 56|untitled recorded, own bigger":         "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"franchise S01, issue 56|untitled recorded, own smaller":        "E1=Show - S01E01.mkv E2=S01E02.mkv E3=-",
+	"franchise S01, issue 56|romaji recorded, bigger":               "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=-",
 	"franchise S01, issue 56|foreign two-episode file":              "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=-",
 	"franchise S01, issue 56|own better resolution":                 "E1=Show - S01E01.mkv E2=Show - S01E02 - 1080p.mkv E3=- | dup E2 keep=Show - S01E02 - 1080p.mkv del=Show - S01E02 - 720p.mkv",
 	"franchise S01, issue 56|own bigger copy":                       "E1=Show - S01E01.mkv E2=Show.S01E02.WEB-DL-GRP.mkv E3=- | dup E2 keep=Show.S01E02.WEB-DL-GRP.mkv del=Show - S01E02.mkv",
@@ -217,6 +228,7 @@ var foreignWant = map[string]string{
 	"S01 in the TV folder, issue 56|foreign recorded, smaller":      "refused",
 	"S01 in the TV folder, issue 56|untitled recorded, own bigger":  "refused",
 	"S01 in the TV folder, issue 56|untitled recorded, own smaller": "refused",
+	"S01 in the TV folder, issue 56|romaji recorded, bigger":        "refused",
 	"S01 in the TV folder, issue 56|foreign two-episode file":       "refused",
 	"S01 in the TV folder, issue 56|own better resolution":          "refused",
 	"S01 in the TV folder, issue 56|own bigger copy":                "refused",
@@ -232,6 +244,7 @@ var foreignWas = map[string]string{
 	"standard|foreign already recorded":                      "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"standard|untitled recorded, own bigger":                 "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=- | dup E2 keep=Show - S01E02.mkv del=S01E02.mkv",
 	"standard|untitled recorded, own smaller":                "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
+	"standard|romaji recorded, bigger":                       "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=- | dup E2 keep=Shingeki - S01E02.mkv del=Show - S01E02.mkv",
 	"standard|foreign two-episode file":                      "E1=Show - S01E01.mkv E2=Beta - S01E02-E03 - Other.mkv E3=Beta - S01E02-E03 - Other.mkv | dup E2 keep=Beta - S01E02-E03 - Other.mkv del=Show - S01E02.mkv",
 	"flat|foreign displaces":                                 "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"flat|foreign higher res":                                "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other - 1080p.mkv E3=- | dup E2 keep=Beta - 1x02 - Other - 1080p.mkv del=Show - S01E02 - 720p.mkv",
@@ -241,6 +254,7 @@ var foreignWas = map[string]string{
 	"flat|foreign already recorded":                          "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"flat|untitled recorded, own bigger":                     "E1=Show - S01E01.mkv E2=Show - S01E02.mkv E3=- | dup E2 keep=Show - S01E02.mkv del=S01E02.mkv",
 	"flat|untitled recorded, own smaller":                    "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
+	"flat|romaji recorded, bigger":                           "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=- | dup E2 keep=Shingeki - S01E02.mkv del=Show - S01E02.mkv",
 	"flat|foreign two-episode file":                          "E1=Show - S01E01.mkv E2=Beta - S01E02-E03 - Other.mkv E3=Beta - S01E02-E03 - Other.mkv | dup E2 keep=Beta - S01E02-E03 - Other.mkv del=Show - S01E02.mkv",
 	"S01 folder|foreign displaces":                           "refused",
 	"S01 folder|foreign smaller":                             "refused",
@@ -254,13 +268,13 @@ var foreignWas = map[string]string{
 	"S01 folder|foreign recorded, smaller":                   "refused",
 	"S01 folder|untitled recorded, own bigger":               "refused",
 	"S01 folder|untitled recorded, own smaller":              "refused",
+	"S01 folder|romaji recorded, bigger":                     "refused",
 	"S01 folder|foreign two-episode file":                    "refused",
 	"S01 folder|own better resolution":                       "refused",
 	"S01 folder|own bigger copy":                             "refused",
 	"S01 folder|own smaller copy":                            "refused",
 	"S01 folder|own fills":                                   "refused",
 	"category|untitled fills":                                "E1=Show - S01E01.mkv E2=- E3=-",
-	"category|foreign already recorded":                      "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=-",
 	"category|foreign recorded, smaller":                     "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=-",
 	"category|untitled recorded, own bigger":                 "E1=Show - S01E01.mkv E2=S01E02.mkv E3=-",
 	"category|own better resolution":                         "E1=Show - S01E01.mkv E2=Show - S01E02 - 720p.mkv E3=-",
@@ -278,6 +292,7 @@ var foreignWas = map[string]string{
 	"franchise S01, issue 56|foreign recorded, smaller":      "refused",
 	"franchise S01, issue 56|untitled recorded, own bigger":  "refused",
 	"franchise S01, issue 56|untitled recorded, own smaller": "refused",
+	"franchise S01, issue 56|romaji recorded, bigger":        "refused",
 	"franchise S01, issue 56|foreign two-episode file":       "refused",
 	"franchise S01, issue 56|own better resolution":          "refused",
 	"franchise S01, issue 56|own bigger copy":                "refused",
@@ -291,20 +306,25 @@ var foreignMain = map[string]string{
 	"standard|untitled displaces":                            "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
 	"standard|foreign already recorded":                      "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"standard|untitled recorded, own smaller":                "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
+	"standard|romaji recorded, bigger":                       "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=- | dup E2 keep=Shingeki - S01E02.mkv del=Show - S01E02.mkv",
 	"standard|foreign two-episode file":                      "E1=Show - S01E01.mkv E2=Beta - S01E02-E03 - Other.mkv E3=Beta - S01E02-E03 - Other.mkv | dup E2 keep=Beta - S01E02-E03 - Other.mkv del=Show - S01E02.mkv",
 	"flat|foreign displaces":                                 "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"flat|foreign already recorded":                          "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"flat|untitled recorded, own smaller":                    "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
+	"flat|romaji recorded, bigger":                           "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=- | dup E2 keep=Shingeki - S01E02.mkv del=Show - S01E02.mkv",
 	"flat|foreign two-episode file":                          "E1=Show - S01E01.mkv E2=Beta - S01E02-E03 - Other.mkv E3=Beta - S01E02-E03 - Other.mkv | dup E2 keep=Beta - S01E02-E03 - Other.mkv del=Show - S01E02.mkv",
 	"S01 folder|untitled displaces":                          "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
 	"S01 folder|foreign already recorded":                    "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"S01 folder|untitled recorded, own smaller":              "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
+	"S01 folder|romaji recorded, bigger":                     "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=- | dup E2 keep=Shingeki - S01E02.mkv del=Show - S01E02.mkv",
 	"category|untitled displaces":                            "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
 	"category|foreign already recorded":                      "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"category|untitled recorded, own smaller":                "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
+	"category|romaji recorded, bigger":                       "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=- | dup E2 keep=Shingeki - S01E02.mkv del=Show - S01E02.mkv",
 	"franchise S01, issue 56|untitled displaces":             "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
 	"franchise S01, issue 56|foreign already recorded":       "E1=Show - S01E01.mkv E2=Beta - 1x02 - Other.mkv E3=- | dup E2 keep=Beta - 1x02 - Other.mkv del=Show - S01E02.mkv",
 	"franchise S01, issue 56|untitled recorded, own smaller": "E1=Show - S01E01.mkv E2=S01E02.mkv E3=- | dup E2 keep=S01E02.mkv del=Show - S01E02.mkv",
+	"franchise S01, issue 56|romaji recorded, bigger":        "E1=Show - S01E01.mkv E2=Shingeki - S01E02.mkv E3=- | dup E2 keep=Shingeki - S01E02.mkv del=Show - S01E02.mkv",
 }
 
 func TestRescanForeignFileLayouts(t *testing.T) {
