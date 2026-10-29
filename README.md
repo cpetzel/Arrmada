@@ -139,6 +139,7 @@ server ([Following main](docs/updating.md#following-main-developers)).
 | [Unraid](docs/unraid.md) | The Unraid template: share layout, the built-in qBittorrent or your own, GPU, updates |
 | [Updating](docs/updating.md) | Updates, rollbacks, published images |
 | [Configuration](docs/configuration.md) | Ports, `.env`, media folders and hardlinks, recycle bin, reverse proxies |
+| [VPN (Gluetun)](docs/vpn.md) | Sending qBittorrent's traffic through a VPN with Gluetun, Compose or Unraid |
 | [GPU](docs/gpu.md) | Hardware encoding for Convert (Intel, AMD, NVIDIA) and GPU AI subtitles |
 | [Backups](docs/backups.md) | Backups, restoring, a forgotten admin password |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
