@@ -452,6 +452,10 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 - **A rename never gathers a show into another show's folder.** A move into a folder where
   another show keeps its files is refused and shown as a conflict in the preview. Season
   folders named "S01", "Staffel 1" or "Saison 1" are recognised as part of the show.
+- **A guide to downloading through a VPN** (#92,
+  [docs/vpn.md](https://github.com/tristenlammi/Arrmada/blob/main/docs/vpn.md)): qBittorrent
+  behind Gluetun with a `docker-compose.override.yml`, keeping Arrmada and FlareSolverr on your
+  normal connection, and what to do on the Unraid all-in-one container. Arrmada doesn't test it.
 
 ### Changed
 
