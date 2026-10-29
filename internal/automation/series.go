@@ -321,6 +321,11 @@ func (c *Coordinator) searchSeriesOnceScoped(ctx context.Context, seriesID int64
 		c.skipUnreadable(s.Title, err)
 		return SearchOutcome{}, err
 	}
+	// The same-named shows too (#81): read now, before any indexer is asked.
+	if ctx, err = c.withSameNameJudge(ctx, s); err != nil {
+		c.skipSameNameUnreadable(s.Title, err)
+		return SearchOutcome{}, err
+	}
 	var inSeasons map[int]bool
 	var whole bool
 	var busy []string
@@ -1239,6 +1244,13 @@ func (c *Coordinator) ImportSeriesDownloads(ctx context.Context) {
 			// again for the same reason, and alerted on again — the dismissal never stuck.
 			// They said they'd handle it; a re-grab by hand reopens it (reopenImportedRelease).
 			if c.lastReviewDismissed(ctx, it.Hash, s.ID) {
+				continue
+			}
+			// Nor one a person settled from a same-name hold (#81) — imported, kept or
+			// dismissed. Which show it is was their call; re-reading it would only hold it
+			// again every sweep (and keep it from seed cleanup), or place it in the show it
+			// was grabbed for after they put it in the other one.
+			if c.sameNameSettled(ctx, it.Hash) {
 				continue
 			}
 			c.log.Info("series import: re-processing an already-imported pack to fill missing episodes",

@@ -201,6 +201,116 @@ func TestSameNameLibraryReadOncePerPass(t *testing.T) {
 	}
 }
 
+// A same-name hold a person settled is never held again: a season pack with gaps left is
+// re-read by later sweeps (to fill them), and must not come back to Needs you each time —
+// whether Import anyway placed files or kept the ones there.
+func TestSameNameSettledPackNotHeldAgain(t *testing.T) {
+	for _, c := range []struct {
+		name, release string
+		files         []string
+		wantPlaced    bool
+	}{
+		// Imported: better, and fills S02E01–E02; S02E04 stays missing.
+		{"imported", "Scrubs.S02.1080p.BluRay.x264-PACK",
+			[]string{"Scrubs.S02E01.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E02.1080p.BluRay.x264-PACK.mkv", "Scrubs.S02E03.1080p.BluRay.x264-PACK.mkv"}, true},
+		// Kept: its one file is worse than the 720p S02E03 there; S02E01, E02, E04 stay missing.
+		{"kept_existing", "Scrubs.S02.480p.WEB-DL.x264-WORSE",
+			[]string{"Scrubs.S02E03.480p.WEB-DL.x264-WORSE.mkv"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newSameNameRig(t)
+			if got := r.runImport(t, importCase{release: c.release, files: c.files, grabFor: "old", added: time.Now()}); got != "held:same_name" {
+				t.Fatalf("got %q, want held", got)
+			}
+			rv := reviewFor(t, r.c, hashFor(c.release))
+			ctx, outcome := WithReviewImportOutcome(context.Background())
+			if err := r.c.ImportReview(ctx, rv.ID, r.old, ""); err != nil {
+				t.Fatalf("import anyway: %v", err)
+			}
+			if outcome.KeptExisting == c.wantPlaced {
+				t.Fatalf("kept existing = %v, want %v", outcome.KeptExisting, !c.wantPlaced)
+			}
+			if !r.c.series.SeasonHasMissing(r.ctx, r.old, 2) {
+				t.Fatal("setup: season 2 must still have gaps, or the sweep won't re-read the pack")
+			}
+			before := r.libraryFiles(t)
+			for range 2 {
+				r.c.ImportSeriesDownloads(r.ctx)
+			}
+			if n := pendingSameName(t, r); n != 0 {
+				t.Errorf("%d new same-name hold(s) after the person settled it", n)
+			}
+			if after := r.libraryFiles(t); len(after) != len(before) {
+				t.Errorf("later sweeps changed the library: %v -> %v", before, after)
+			}
+		})
+	}
+}
+
+func pendingSameName(t *testing.T, r *sameNameRig) int {
+	t.Helper()
+	var n int
+	if err := r.c.db.QueryRow(`SELECT COUNT(*) FROM import_reviews WHERE reason_code = ? AND status = 'pending'`, ReasonSameName).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Kept with files it couldn't match says so.
+func TestKeptExistingText(t *testing.T) {
+	if got := KeptExistingText(0); got != "Kept the existing file — this release isn't better" {
+		t.Errorf("%q", got)
+	}
+	if got := KeptExistingText(2); got != "Kept the existing file — this release isn't better; 2 files couldn't be matched and were left in the download" {
+		t.Errorf("%q", got)
+	}
+	if got := KeptExistingText(1); !strings.Contains(got, "1 file couldn't be matched and was left") {
+		t.Errorf("%q", got)
+	}
+}
+
+// A failed read of the same-named shows isn't kept for the pass: the next show retries.
+func TestSameNameLibraryReadRetries(t *testing.T) {
+	r := newSameNameRig(t)
+	s, err := r.c.series.Get(r.ctx, r.old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := withSameNameLibrary(r.ctx)
+	dead, cancel := context.WithCancel(pass)
+	cancel()
+	if _, err := r.c.sameNamedIn(dead, s); err == nil {
+		t.Fatal("a read under a cancelled context succeeded")
+	}
+	if named, err := r.c.sameNamedIn(pass, s); err != nil || len(named) != 1 {
+		t.Errorf("the retry: %v, %v — want the revival", named, err)
+	}
+}
+
+// A show whose same-named shows can't be read is skipped before any indexer is asked.
+func TestSameNameUnreadableCostsNoIndexerQuery(t *testing.T) {
+	r := newSameNameRig(t)
+	r.apply(t, "unreadable")
+	r.ix.offer("Scrubs.S02E04.1080p.WEB-DL.x264-GRP")
+	before := r.ix.searchCount()
+	if _, err := r.c.SearchSeriesNow(r.ctx, r.old); err == nil {
+		t.Error("the search reported success with the same-named shows unreadable")
+	}
+	if _, err := r.c.GrabForScope(r.ctx, r.old, SeriesScope{Season: 2, Episode: 4}); err == nil {
+		t.Error("the quick Grab reported success with the same-named shows unreadable")
+	}
+	if n := r.ix.searchCount() - before; n != 0 {
+		t.Errorf("%d indexer queries for a show that was skipped", n)
+	}
+	// A show with no same-named sibling is searched as before.
+	if _, err := r.c.SearchSeriesNow(r.ctx, r.house); err != nil {
+		t.Errorf("control show: %v", err)
+	}
+	if r.ix.searchCount() == before {
+		t.Error("the control show wasn't searched")
+	}
+}
+
 func TestWithReleasePublished(t *testing.T) {
 	ctx := WithReleasePublished(context.Background(), "2020-05-06T07:08:09+02:00")
 	if got := releasePublished(ctx); got != "2020-05-06T05:08:09Z" {

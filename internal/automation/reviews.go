@@ -236,14 +236,29 @@ const (
 // KeptExistingMessage is what Import anyway says when it kept the files already there.
 const KeptExistingMessage = "Kept the existing file — this release isn't better"
 
-// errKeptExisting: importContentInto placed nothing because the import gate judged every
-// file no better than what's there (a same-name hold's Import anyway).
-var errKeptExisting = errors.New(KeptExistingMessage)
+// keptExistingError: importContentInto placed nothing because the import gate judged every
+// file it could match no better than what's there (a same-name hold's Import anyway).
+// Unmatched counts the files it couldn't match to an episode, left in the download.
+type keptExistingError struct{ Unmatched int }
+
+func (e keptExistingError) Error() string { return KeptExistingText(e.Unmatched) }
+
+// KeptExistingText is Import anyway's message when it kept the files already there, naming
+// the files it couldn't match.
+func KeptExistingText(unmatched int) string {
+	if unmatched == 0 {
+		return KeptExistingMessage
+	}
+	return fmt.Sprintf("%s; %d file%s couldn't be matched and %s left in the download",
+		KeptExistingMessage, unmatched, plural(unmatched), map[bool]string{true: "was", false: "were"}[unmatched == 1])
+}
 
 // ReviewImportOutcome is what an ImportReview came to beyond succeeding: KeptExisting when
-// nothing replaced the files already there (ResolutionKept).
+// nothing replaced the files already there (ResolutionKept), Unmatched the files it couldn't
+// match to an episode.
 type ReviewImportOutcome struct {
 	KeptExisting bool
+	Unmatched    int
 }
 
 type reviewOutcomeKey struct{}
@@ -795,15 +810,17 @@ func (c *Coordinator) ImportReview(ctx context.Context, id, targetID int64, targ
 	left := &importLeftovers{}
 	ctx = context.WithValue(ctx, importLeftoversKey{}, left)
 	err = c.importContentInto(withCopyAccounting(ctx, r), r, dest, "review")
-	if errors.Is(err, errKeptExisting) {
+	var kept keptExistingError
+	if errors.As(err, &kept) {
 		// Settled, not failed: the person said which show it is, and the profile said the
 		// files there are as good. The download stays as it was ('dismissed' keeps its
 		// files through seed cleanup) and isn't imported again by the sweep.
 		c.recordImportedHash(ctx, r.Hash, r.Name, r.SizeBytes)
+		c.noteImportUnmatched(ctx, r.Hash, r.Name, kept.Unmatched) // while the grab is still live
 		c.setGrabStatusByHash(ctx, r.Hash, r.Name, r.MediaType, grabStatusDismissed)
-		c.reviewEvent(ctx, r.MediaType, dest, "dismissed", KeptExistingMessage+": "+r.Name)
+		c.reviewEvent(ctx, r.MediaType, dest, "dismissed", KeptExistingText(kept.Unmatched)+": "+r.Name)
 		if o, ok := ctx.Value(reviewOutcomeKey{}).(*ReviewImportOutcome); ok {
-			o.KeptExisting = true
+			o.KeptExisting, o.Unmatched = true, kept.Unmatched
 		}
 		return c.resolveReview(ctx, id, ResolutionKept)
 	}
@@ -866,7 +883,7 @@ func (c *Coordinator) importContentInto(ctx context.Context, r Review, dest int6
 		}
 		n := len(placed)
 		if r.ReasonCode == ReasonSameName && n == 0 && matched > 0 && failed == 0 {
-			return errKeptExisting // the gate kept every file there
+			return keptExistingError{Unmatched: unresolved} // the gate kept every file it matched
 		}
 		if matched == 0 {
 			// Wrapped in ErrNothingToImport so the API answers 422 rather than 500: the

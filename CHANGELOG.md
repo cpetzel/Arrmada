@@ -506,8 +506,8 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   for a show that shares its name with another show in your library. Releases that name
   the year (`Scrubs.2026.S02E03…`) or the country (`The.Office.US…`) work as before. For a
   release that names neither:
-  - Searches use the release's publish date. A release posted before an episode aired
-    can't be that episode, so `Scrubs.S02E03` posted in 2015 is grabbed for the 2001 show
+  - Searches use the release's publish date. A release posted before a show's season
+    began can't be from that season, so `Scrubs.S02E03` posted in 2015 is grabbed for the 2001 show
     and never for the revival. A release for a season the other show doesn't list yet
     only counts as the older show's if it was posted before the other show first aired.
   - When a release could belong to either show, or the indexer gave no date, the

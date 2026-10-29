@@ -72,7 +72,12 @@ func TestJudgeSameName(t *testing.T) {
 		{"old show, a season the revival doesn't list, posted before it premiered", "Scrubs.S05E01.720p.HDTV-GRP", old, day("2015-01-01"), true, SameNameThis, ""},
 		{"old show, a season the revival doesn't list, posted after it premiered", "Scrubs.S05E01.720p.HDTV-GRP", old, day("2026-06-01"), true, SameNameUnsure, ""},
 		{"old show, a season the revival doesn't list, no date", "Scrubs.S05E01.720p.HDTV-GRP", old, time.Time{}, true, SameNameUnsure, ""},
-		{"old show, an episode past the revival's listing", "Scrubs.S02E12.720p.HDTV-GRP", old, day("2026-06-01"), true, SameNameUnsure, ""},
+		// Seasons, not episodes: S02E12 isn't in the revival's listing, but its season 2 is,
+		// and it began in March 2027 — a release posted in mid-2026 can't be from it.
+		{"old show, an episode past the revival's listing, posted before its season began", "Scrubs.S02E12.720p.HDTV-GRP", old, day("2026-06-01"), true, SameNameThis, ""},
+		// Within the slack before the revival's season 2 began, though long before its E08
+		// aired: numbering may differ between listings, so only the season's start counts.
+		{"old show, S02E08 posted weeks before the revival's season 2 began", "Scrubs.S02E08.720p.HDTV-GRP", old, day("2027-02-10"), true, SameNameUnsure, ""},
 		{"old show, added (not posted) before the revival premiered", "Scrubs.S05E01.720p.HDTV-GRP", old, day("2020-01-01"), false, SameNameThis, ""},
 		// A multi-season pack: the revival lists S01–S02, not S03.
 		{"old show, S01-S03 pack posted before the revival premiered", "Scrubs.S01-S03.1080p.BluRay-GRP", old, day("2015-01-01"), true, SameNameThis, ""},
@@ -132,17 +137,24 @@ func TestJudgeSameNameBareSibling(t *testing.T) {
 	}
 }
 
-// A multi-season pack is fully covered only when the show lists every season in it.
-func TestCoveredEpisodesPack(t *testing.T) {
+// A release is dated against its seasons' premieres; a pack is covered only when the show
+// lists every season in it.
+func TestSeasonsPremiere(t *testing.T) {
 	_, rev := scrubsPair()
-	if _, complete, known := coveredEpisodes(parser.Parse("Scrubs.S01-S03.1080p.BluRay-GRP"), rev); complete || !known {
+	if _, complete, known := seasonsPremiere(parser.Parse("Scrubs.S01-S03.1080p.BluRay-GRP"), rev); complete || !known {
 		t.Errorf("S01-S03 against a show listing S01-S02: complete=%v known=%v, want incomplete", complete, known)
 	}
-	if eps, complete, _ := coveredEpisodes(parser.Parse("Scrubs.S01-S02.1080p.BluRay-GRP"), rev); !complete || len(eps) != 20 {
-		t.Errorf("S01-S02 against a show listing both: %d episodes, complete=%v", len(eps), complete)
+	if first, complete, _ := seasonsPremiere(parser.Parse("Scrubs.S01-S02.1080p.BluRay-GRP"), rev); !complete || !first.Equal(day("2026-02-25")) {
+		t.Errorf("S01-S02: first %v complete=%v, want the season 1 premiere", first, complete)
 	}
-	if _, complete, _ := coveredEpisodes(parser.Parse("Scrubs.S02E11.1080p.WEB-DL-GRP"), rev); complete {
-		t.Error("an episode past the listing reads as listed")
+	// Any episode of season 2, listed or not, is dated by the season's premiere.
+	for _, rel := range []string{"Scrubs.S02E01.1080p.WEB-DL-GRP", "Scrubs.S02E08.1080p.WEB-DL-GRP", "Scrubs.S02E30.1080p.WEB-DL-GRP"} {
+		if first, complete, _ := seasonsPremiere(parser.Parse(rel), rev); !complete || !first.Equal(day("2027-03-03")) {
+			t.Errorf("%s: first %v complete=%v, want season 2's premiere", rel, first, complete)
+		}
+	}
+	if _, _, known := seasonsPremiere(parser.Parse("[Grp] Scrubs - 05 [1080p]"), rev); known {
+		t.Error("absolute numbering read as seasons")
 	}
 }
 

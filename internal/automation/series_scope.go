@@ -267,6 +267,11 @@ func (c *Coordinator) GrabForScope(ctx context.Context, seriesID int64, sc Serie
 		return out, nil
 	}
 
+	// Another library show with this one's name (#81), read before any indexer is asked.
+	if ctx, err = c.withSameNameJudge(ctx, s); err != nil {
+		c.skipSameNameUnreadable(s.Title, err)
+		return out, err
+	}
 	releases, ixErrs, serr := c.searchSeriesScope(ctx, s, sc.Season, sc.Episode)
 	out.Searched = true
 	out.IndexerErrors = len(ixErrs)

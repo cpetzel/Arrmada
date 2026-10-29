@@ -175,14 +175,16 @@ func SameNameSiblings(p parser.Release, s Series, named []Series) []Series {
 // before the release was posted) it is used only as an upper bound: it can rule a
 // sibling out, never s. A zero published rules nothing out.
 //
-// For each show, the episodes the release covers are read from the show's own episode
-// list: a season and episode, a season pack, several seasons, or the whole show. A release
-// posted more than SameNameMargin before the earliest of those episodes aired isn't that
-// show's. A sibling that doesn't list all of them — metadata not refreshed since a season
-// was announced, a show just added — is ruled out only by its premiere: a release posted
-// more than SameNameMargin before the show's first episode aired. What can't be worked out
-// — no season in the name (anime absolute numbering), no air dates at all — counts as
-// could-be.
+// Shows are told apart by when their SEASONS premiered, never by one episode's air date:
+// scene and TVDB numbering split and merge seasons differently from TMDB, so an episode
+// number can name a different episode in each listing, but a season's first air date is
+// the same rough moment in all of them. For each show, the seasons the release covers are
+// read from the show's own listing: a release posted more than SameNameMargin before the
+// earliest of those seasons' premieres isn't that show's. A sibling that doesn't list one
+// of the seasons (or has no air date in it) — metadata not refreshed since a season was
+// announced, a show just added — is ruled out only by the show's own premiere. What can't
+// be worked out — no season in the name (anime absolute numbering), no air dates at all —
+// counts as could-be.
 //
 //   - no sibling fits p: SameNameNone, unchanged;
 //   - published (exact) before s's episodes aired: SameNameOther;
@@ -194,8 +196,8 @@ func JudgeSameName(p parser.Release, s Series, named []Series, published time.Ti
 		return SameNameNone, ""
 	}
 	if exact && !published.IsZero() {
-		if first, ok := firstAired(p, s); ok && published.Before(first.Add(-SameNameMargin)) {
-			return SameNameOther, fmt.Sprintf("it was posted %s, before %s's %s aired (%s) — it can't be this show's, and %s shares its name",
+		if first, complete, known := seasonsPremiere(p, s); known && complete && published.Before(first.Add(-SameNameMargin)) {
+			return SameNameOther, fmt.Sprintf("it was posted %s, before %s's %s began (%s) — it can't be this show's, and %s shares its name",
 				published.UTC().Format("2006-01-02"), labelOf(s), coverLabel(p), first.Format("2006-01-02"), DescribeCandidates(sibs))
 		}
 	}
@@ -212,90 +214,74 @@ func JudgeSameName(p parser.Release, s Series, named []Series, published time.Ti
 		joinAnd(append([]string{labelOf(s)}, labelsOf(could)...)))
 }
 
-// couldBe reports whether the release can be o's. It can't when it was posted more than
-// SameNameMargin before the earliest covered episode aired, when o lists every episode it
-// covers; when o doesn't, only when it was posted that long before o's premiere.
+// couldBe reports whether the release can be o's: it can't when it was posted more than
+// SameNameMargin before the seasons it covers premiered on o — or, when o doesn't list one
+// of them, before o itself premiered.
 func couldBe(p parser.Release, o Series, published time.Time) bool {
-	eps, complete, known := coveredEpisodes(p, o)
+	first, complete, known := seasonsPremiere(p, o)
 	if !known || published.IsZero() {
 		return true // the numbering can't be read against the show, or no date to go by
 	}
 	if !complete {
-		eps = nil
+		var all []Episode
 		for _, sn := range o.Seasons {
-			eps = append(eps, sn.Episodes...)
+			all = append(all, sn.Episodes...)
 		}
-	}
-	first, ok := earliestAir(eps)
-	if !ok {
-		return true // no air dates (or no episodes at all): nothing rules it out
+		var ok bool
+		if first, ok = earliestAir(all); !ok {
+			return true // no air dates (or no episodes at all): nothing rules it out
+		}
 	}
 	return !published.Before(first.Add(-SameNameMargin))
 }
 
-// firstAired is the earliest air date of the episodes of s the release covers; ok is false
-// when there's none to go by.
-func firstAired(p parser.Release, s Series) (time.Time, bool) {
-	eps, _, known := coveredEpisodes(p, s)
-	if !known || len(eps) == 0 {
-		return time.Time{}, false
-	}
-	return earliestAir(eps)
-}
-
-// coveredEpisodes are the episodes of s that p names. complete is whether s lists every
-// one of them: each episode of an episode release, each season of a pack, some regular
-// episode for a whole-show pack. known is false when the release's numbering can't be read
-// as seasons and episodes (no season in the name: anime absolute numbering, a date-named
-// episode).
-func coveredEpisodes(p parser.Release, s Series) (eps []Episode, complete, known bool) {
+// seasonsPremiere is the earliest premiere — first dated episode — of the seasons of s the
+// release covers: its season for an episode, each season of a pack, every regular season
+// for a whole-show pack. complete is whether s lists every one of those seasons with an
+// air date in it. known is false when the release's numbering can't be read as seasons
+// (no season in the name: anime absolute numbering, a date-named episode).
+func seasonsPremiere(p parser.Release, s Series) (first time.Time, complete, known bool) {
+	var want []int
 	switch p.Kind() {
 	case parser.KindCompleteShow:
 		for _, sn := range s.Seasons {
 			if sn.SeasonNumber > 0 {
-				eps = append(eps, sn.Episodes...)
+				want = append(want, sn.SeasonNumber)
 			}
 		}
-		return eps, len(eps) > 0, true
+		if len(want) == 0 {
+			return time.Time{}, false, true
+		}
 	case parser.KindMultiSeason, parser.KindSeasonPack:
-		seasons := p.Seasons
-		if len(seasons) == 0 {
-			seasons = []int{p.Season}
+		want = p.Seasons
+		if len(want) == 0 {
+			want = []int{p.Season}
 		}
-		complete = true
-		for _, want := range seasons {
-			listed := false
-			for _, sn := range s.Seasons {
-				if sn.SeasonNumber == want && len(sn.Episodes) > 0 {
-					eps = append(eps, sn.Episodes...)
-					listed = true
-				}
-			}
-			complete = complete && listed
-		}
-		return eps, complete, true
 	case parser.KindEpisode:
 		if len(p.Episodes) == 0 || (p.Season == 0 && !p.SeasonExplicit) {
-			return nil, false, false
+			return time.Time{}, false, false
 		}
-		want := map[int]bool{}
-		for _, e := range p.Episodes {
-			want[e] = true
-		}
+		want = []int{p.Season}
+	default:
+		return time.Time{}, false, false
+	}
+	complete = true
+	for _, n := range want {
+		dated := false
 		for _, sn := range s.Seasons {
-			if sn.SeasonNumber != p.Season {
+			if sn.SeasonNumber != n {
 				continue
 			}
-			for _, e := range sn.Episodes {
-				if want[e.EpisodeNumber] {
-					eps = append(eps, e)
-					delete(want, e.EpisodeNumber)
+			if t, ok := earliestAir(sn.Episodes); ok {
+				dated = true
+				if first.IsZero() || t.Before(first) {
+					first = t
 				}
 			}
 		}
-		return eps, len(want) == 0, true
+		complete = complete && dated
 	}
-	return nil, false, false
+	return first, complete, true
 }
 
 // earliestAir is the earliest air date among eps; ok is false when none has one.
@@ -313,17 +299,13 @@ func earliestAir(eps []Episode) (time.Time, bool) {
 	return first, !first.IsZero()
 }
 
-// coverLabel names what the release covers, for a reason: "S02E03", "season 2".
+// coverLabel names the seasons the release covers, for a reason: "season 2".
 func coverLabel(p parser.Release) string {
 	switch p.Kind() {
-	case parser.KindEpisode:
-		if len(p.Episodes) > 0 {
-			return fmt.Sprintf("S%02dE%02d", p.Season, p.Episodes[0])
-		}
-	case parser.KindSeasonPack:
+	case parser.KindEpisode, parser.KindSeasonPack:
 		return fmt.Sprintf("season %d", p.Season)
 	}
-	return "episodes"
+	return "seasons"
 }
 
 func labelOf(s Series) string { return DescribeCandidates([]Series{s}) }

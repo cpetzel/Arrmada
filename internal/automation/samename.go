@@ -39,12 +39,12 @@ type sameNameJudge struct {
 }
 
 // sameNameLib is one pass's library snapshot for finding same-named shows, read and
-// indexed once on first need: a sweep, RSS or the upgrade sweep judges every show against
-// the same one rather than re-reading the series table per show.
+// indexed on first need: a sweep, RSS or the upgrade sweep judges every show against the
+// same one rather than re-reading the series table per show. A read that fails isn't kept:
+// the next show tries again, so one busy database doesn't skip the whole pass.
 type sameNameLib struct {
-	once  sync.Once
+	mu    sync.Mutex
 	index func(series.Series) []series.Series
-	err   error
 }
 
 type sameNameLibKey struct{}
@@ -64,16 +64,14 @@ func (c *Coordinator) sameNamedIn(ctx context.Context, s series.Series) ([]serie
 	if !ok {
 		lib = &sameNameLib{}
 	}
-	lib.once.Do(func() {
+	lib.mu.Lock()
+	defer lib.mu.Unlock()
+	if lib.index == nil {
 		all, err := c.series.SameNameLibrary(ctx)
 		if err != nil {
-			lib.err = err
-			return
+			return nil, err
 		}
 		lib.index = series.SameNameIndex(all)
-	})
-	if lib.err != nil {
-		return nil, lib.err
 	}
 	return lib.index(s), nil
 }
@@ -85,6 +83,12 @@ func (c *Coordinator) sameNameFor(ctx context.Context, s series.Series) (*sameNa
 	if c.series == nil {
 		return nil, nil
 	}
+	if j, ok := ctx.Value(sameNameJudgeKey{}).(*sameNameJudge); ok && j != nil && j.s.ID == s.ID {
+		return &sameNameJudge{s: s, named: j.named}, nil // resolved before the search
+	}
+	if v, ok := ctx.Value(sameNameJudgeKey{}).(noSameName); ok && int64(v) == s.ID {
+		return nil, nil
+	}
 	named, err := c.sameNamedIn(ctx, s)
 	if err != nil || len(named) == 0 {
 		return nil, err
@@ -94,6 +98,41 @@ func (c *Coordinator) sameNameFor(ctx context.Context, s series.Series) (*sameNa
 		return nil, err
 	}
 	return &sameNameJudge{s: s, named: full}, nil
+}
+
+type sameNameJudgeKey struct{}
+
+// noSameName marks, in a search's ctx, a show found to have no same-named library show.
+type noSameName int64
+
+// withSameNameJudge resolves s's same-named shows before a search asks any indexer, so a
+// show that has to be skipped (they can't be read) costs no indexer query, and the grab
+// step after the search reuses what was read.
+func (c *Coordinator) withSameNameJudge(ctx context.Context, s series.Series) (context.Context, error) {
+	j, err := c.sameNameFor(ctx, s)
+	if err != nil {
+		return ctx, err
+	}
+	if j == nil {
+		return context.WithValue(ctx, sameNameJudgeKey{}, noSameName(s.ID)), nil
+	}
+	return context.WithValue(ctx, sameNameJudgeKey{}, j), nil
+}
+
+// sameNameSettled reports whether a same-name hold of this download was settled by a
+// person (any resolution). A read that fails says no: the re-process then runs as it
+// always has, and for a same-named show the most it can do is hold the download again.
+func (c *Coordinator) sameNameSettled(ctx context.Context, hash string) bool {
+	if hash == "" {
+		return false
+	}
+	var n int
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM import_reviews WHERE lower(hash) = lower(?) AND reason_code = ? AND status = 'resolved'`,
+		hash, ReasonSameName).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
 }
 
 // skipSameNameUnreadable logs a show skipped for the round because its same-named shows

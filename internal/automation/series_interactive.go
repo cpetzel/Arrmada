@@ -44,6 +44,9 @@ func (c *Coordinator) RankSeriesReleasesWith(ctx context.Context, seriesID int64
 	// banner lists each failing indexer once whichever query it failed.
 	ctx, notes := withSearchNotes(ctx)
 	ctx = c.withSeriesFit(ctx)
+	if ctx, err = c.withSameNameJudge(ctx, s); err != nil { // #81, before any indexer is asked
+		return ReleaseList{}, err
+	}
 	releases, _, err := c.searchSeriesScope(ctx, s, season, episode)
 	if allIndexersFailed(err) {
 		return ReleaseList{Profile: c.effectiveProfile(ctx, s.QualityProfile, quality.MediaSeries)}.withIssues(notes), nil

@@ -280,6 +280,14 @@ func (c *Coordinator) upgradeSeries(ctx context.Context, seriesID int64, b *upgr
 			"series", s.Title, "at_ceiling", atCeiling, "searching", len(haveEps))
 	}
 
+	// An upgrade replaces a file, so a release that could as well be a same-named show's
+	// (#81) is never one: the reporter's "Scrubs.S02E03.2160p" replaced the 2001 show's
+	// S02E03 with what may be the revival's. Read before any indexer is asked.
+	same, err := c.sameNameFor(ctx, s)
+	if err != nil {
+		c.skipSameNameUnreadable(s.Title, err)
+		return err
+	}
 	title := indexerQuery(s.Title)
 	res, err := c.search(ctx, seriesQuery(s, title, 100))
 	if err != nil || len(res.Releases) == 0 {
@@ -297,14 +305,6 @@ func (c *Coordinator) upgradeSeries(ctx context.Context, seriesID int64, b *upgr
 	blocked, err := c.blockedSetSeries(ctx, s.ID)
 	if err != nil {
 		c.skipUnreadable(s.Title, err)
-		return err
-	}
-	// An upgrade replaces a file, so a release that could as well be a same-named show's
-	// (#81) is never one: the reporter's "Scrubs.S02E03.2160p" replaced the 2001 show's
-	// S02E03 with what may be the revival's.
-	same, err := c.sameNameFor(ctx, s)
-	if err != nil {
-		c.skipSameNameUnreadable(s.Title, err)
 		return err
 	}
 	byName := make(map[string]indexer.Release, len(releases))
