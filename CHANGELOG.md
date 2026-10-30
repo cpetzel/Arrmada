@@ -539,6 +539,24 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   an episode's recorded file or another copy read by its name, and stays on disk listed as
   a duplicate instead. Release names (searches, grabs, download imports) and **Manual
   import** read exactly as before.
+- **A rescan no longer swaps an episode's file for one that isn't named as the show.**
+  Another show's episode dropped in a show's season folder (`Beta - 1x08 - Other.mkv` in
+  `Show (2010)/Season 1`), or a file with no title in its name (`S01E08.mkv`), could take
+  the place of the episode's recorded file on **Refresh & rescan** when it was the bigger
+  or sharper copy, and the duplicate check then offered the show's real file for deletion.
+  Now:
+  - A file whose name isn't the show's never replaces the file an episode has. It still
+    fills an episode with no file in the show's own `Title (Year)/Season N` folder, as
+    before, so episodes named in another language or in romaji keep being found; when an
+    import later brings the episode's file, the filled one goes to the recycle bin like any
+    replaced file.
+  - The duplicate check never offers the show's own copy for deletion beside a file named
+    otherwise, never offers a file named otherwise, and never offers a two-episode file
+    that is still the other episode's only file.
+  - A file recorded under a path that differs only in letter case is still the episode's
+    recorded file on a disk that ignores case.
+  - Episodes an earlier rescan already switched to another show's file are left as they
+    are: check the duplicate list and the episode's file, and import the right one by hand.
 - **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
   (reported in #94 by cpetzel). With qBittorrent's **Default Download Path (incomplete
   torrents)** on, a finished torrent is moved from that folder to its save folder, and
