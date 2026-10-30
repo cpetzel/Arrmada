@@ -19,8 +19,9 @@ func TestTrackSaysWhenLastChecked(t *testing.T) {
 	s.coord = automation.New(nil, nil, nil, nil, db, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), "")
 
 	// A film the sweep has missed three times, last at 09:00.
-	if _, err := db.Exec(`INSERT INTO movies (id, tmdb_id, title, year, monitored, has_file, last_search_at, search_misses)
-		VALUES (1, 100, 'Dune', 2021, 1, 0, '2026-10-10 09:00:00', 3), (2, 101, 'Fresh', 2024, 1, 0, '', 0)`); err != nil {
+	// Both out (TMDB says Released), so searched for.
+	if _, err := db.Exec(`INSERT INTO movies (id, tmdb_id, title, year, status, monitored, has_file, last_search_at, search_misses)
+		VALUES (1, 100, 'Dune', 2021, 'Released', 1, 0, '2026-10-10 09:00:00', 3), (2, 101, 'Fresh', 2024, 'Released', 1, 0, '', 0)`); err != nil {
 		t.Fatal(err)
 	}
 	// A show never swept, but searched by hand at 11:30 (a stored attempt).

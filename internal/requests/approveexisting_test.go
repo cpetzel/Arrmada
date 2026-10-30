@@ -152,7 +152,7 @@ func TestApproveExistingCompleteSeriesJustApproves(t *testing.T) {
 // Approving a request for a movie the library has without a file monitors and searches it.
 func TestApproveExistingMovieWithoutFileSearches(t *testing.T) {
 	f := newApproveFixture(t, metadata.SeriesDetails{})
-	m, err := movies.NewRepo(f.s.repo.db).Create(f.ctx, movies.Movie{TMDBID: 949, Title: "Heat", Year: 1995})
+	m, err := movies.NewRepo(f.s.repo.db).Create(f.ctx, movies.Movie{TMDBID: 949, Title: "Heat", Year: 1995, Status: "Released"})
 	if err != nil {
 		t.Fatal(err)
 	}
