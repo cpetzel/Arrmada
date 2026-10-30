@@ -11,7 +11,8 @@ import (
 type UpcomingMovie struct {
 	ReleaseDate string `json:"release_date"`
 	// Release is which date this is: "" the film's main release date, "digital" or
-	// "physical" its digital or disc release (Extra.Releases).
+	// "physical" its digital or disc release (Extra.Releases), "search" the day searching
+	// starts when that is none of those (SearchStart).
 	Release   string `json:"release,omitempty"`
 	ID        int64  `json:"id"`
 	TMDBID    int    `json:"tmdb_id"`
@@ -55,8 +56,10 @@ func (s *Service) Upcoming(ctx context.Context, from, to string) ([]UpcomingMovi
 			}
 		}
 		main := dayOf(m.Extra.ReleaseDate)
+		marked := false // the start day has an entry of its own
 		if main != "" && main >= from && main <= to {
 			out = append(out, entry(main, ""))
+			marked = marked || main == start
 		}
 		if r := m.Extra.Releases; r != nil {
 			for _, k := range []struct {
@@ -68,8 +71,15 @@ func (s *Service) Upcoming(ctx context.Context, from, to string) ([]UpcomingMovi
 				}
 				if d := dayOf(k.rel.Date); d != "" && d != main && d >= from && d <= to {
 					out = append(out, entry(d, k.name))
+					marked = marked || d == start
 				}
 			}
+		}
+		// A start day that is no release of its own — cinema + 90 days with no home date
+		// known, or a year after cinemas past a re-release — gets an entry, so the Calendar
+		// shows when searching starts.
+		if !marked && start != "" && start >= from && start <= to && start != main {
+			out = append(out, entry(start, "search"))
 		}
 	}
 	return out, nil

@@ -817,7 +817,7 @@ export interface CalendarItem {
   // An album's artist and kind (MUS-24). Albums are on staff's calendar only, while Music is on.
   artist?: string; album_type?: string;
   // A movie entry's kind: absent for its main release date, else its digital or disc release.
-  release?: "digital" | "physical";
+  release?: "digital" | "physical" | "search"; // "search": the day searching starts, when it's no release of its own
   // A movie entry on the day searching for it starts: a monitored, missing film reaches its minimum availability.
   search_start?: boolean;
   // The viewer asked for this title or follows a request for it (APP-17).

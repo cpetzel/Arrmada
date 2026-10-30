@@ -33,7 +33,8 @@ type CalendarItem struct {
 	// An album's artist and kind (Album, EP, Single…). Albums are staff-only.
 	Artist    string `json:"artist,omitempty"`
 	AlbumType string `json:"album_type,omitempty"`
-	// Release is a movie entry's kind: "" its main release date, "digital" or "physical"
+	// Release is a movie entry's kind: "" its main release date, "search" the day its
+	// search starts when that is no release of its own (cinema + 90 days), "digital" or "physical"
 	// its digital or disc release, an entry of its own on that day.
 	Release string `json:"release,omitempty"`
 	// SearchStart: a movie entry on the day its search starts — the day the film reaches
@@ -103,6 +104,8 @@ func (a *api) calendarItems(ctx context.Context, start, end string, albums bool)
 				sub = "Digital release"
 			case "physical":
 				sub = "Physical release"
+			case "search":
+				sub = "Search starts"
 			}
 			if m.Year > 0 {
 				sub += " · " + itoa(m.Year) // kind first, as the Calendar page writes it (lib/calendar.ts itemLine)
