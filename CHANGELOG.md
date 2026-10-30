@@ -220,12 +220,13 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   and tracks tagged `zxx` (no spoken language). A sample that can't be listened to means
   the track is tried again on a later pass.
   - What it hears is kept in Arrmada's database, never written into the file. The badges
-    show it as detected (a dashed chip, "English (detected)") and are coloured by it.
+    show it as detected (a dashed chip, "English (detected)").
   - **A detected language never makes Arrmada replace a file.** It counts when it's a
     language your profile asks for: a file whose untagged track is heard as your **Must**
-    language fits. A language it only seems to lack stays unknown, as before: it's never
-    upgraded, re-grabbed or counted in the save dialog for it. The badge still shows the
-    miss, and says it rests on a detection.
+    language fits, and its badge is green. A language it only seems to lack stays unknown,
+    as before: it's never upgraded, re-grabbed or counted in the save dialog for it, and
+    its badge has no colour (as for an untagged track nobody has heard) rather than red or
+    orange, nor is it counted among the season's misses.
   - It runs one file at a time, only while no subtitle is being made, at idle priority, and
     newly imported files go first. It never runs whisper alongside a subtitle: when one
     is waiting, it stops after the current sample and finishes the file later. Switch it

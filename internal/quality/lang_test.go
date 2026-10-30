@@ -650,7 +650,7 @@ func TestUnreadFilesAreLeftAlone(t *testing.T) {
 // A language only the AI heard on an untagged track (#90) counts when it's the one asked
 // for, but a miss resting on it is unknown to the engine: the file fits, isn't upgraded or
 // replaced for a language under Must, Prefer or Avoid (sweep and import gate alike), and
-// only the badge says what the detection suggests.
+// its badge shows no colour for a miss, only for a fit.
 func TestHeardLanguageNeverForcesAnUpgrade(t *testing.T) {
 	forEachRanking(t, func(t *testing.T, mode string) {
 		s, ctx := testService(t)
@@ -685,18 +685,23 @@ func TestHeardLanguageNeverForcesAnUpgrade(t *testing.T) {
 		if v := mustDE.JudgeFile(named); !v.Eligible || v.Current.langShort {
 			t.Errorf("GERMAN name + heard track: eligible %v short %v %q", v.Eligible, v.Current.langShort, v.Current.RejectReason)
 		}
-		// The badge goes by the detection, and says so.
-		sp := langStored(map[string]string{"de": PrefMust}, TriggerAny)
-		if f := sp.LanguageFit(cur); f == nil || f.Status != langs.AudioFitBad || !strings.Contains(f.Note, "detected") {
-			t.Errorf("badge %+v, want bad, going by the detection", f)
+		// A miss that rests on a detection has no colour, as an unheard untagged track has
+		// none: under Must, Prefer or Avoid, heard only or beside a tag.
+		for _, row := range []map[string]string{{"de": PrefMust}, {"de": PrefWant}, {"en": PrefAvoid}} {
+			sp := langStored(row, TriggerAny)
+			for name, c := range map[string]CurrentFile{"heard only": cur, "eng + heard en": engAndHeard} {
+				if f := sp.LanguageFit(c); f != nil {
+					t.Errorf("%v %s: badge %+v, want no colour for a miss on a detection", row, name, f)
+				}
+			}
 		}
 		// The other direction: heard as the Must, the file has it.
 		mustEN := langStored(map[string]string{"en": PrefMust, "de": PrefWant}, TriggerAny)
 		if v := mustEN.JudgeFile(cur); !v.Eligible || v.Current.langShort {
 			t.Errorf("heard English, English Must: eligible %v short %v", v.Eligible, v.Current.langShort)
 		}
-		if f := mustEN.LanguageFit(cur); f == nil || f.Status != langs.AudioFitPartial {
-			t.Errorf("heard English, Must en + Prefer de: %+v, want partial", f)
+		if f := mustEN.LanguageFit(cur); f != nil {
+			t.Errorf("heard English, Must en + Prefer de: %+v, want no colour", f)
 		}
 		if f := langStored(map[string]string{"en": PrefMust}, TriggerAny).LanguageFit(cur); f == nil || f.Status != langs.AudioFitGood {
 			t.Errorf("heard English, English Must: %+v, want good", f)

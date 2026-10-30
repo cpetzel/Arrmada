@@ -395,7 +395,8 @@ func unnamedReason(codes []string, r parser.Release, origKnown, tested bool) str
 // LanguageFit judges a file's audio languages against the profile's language rules, the
 // way the engine reads them (fileLangs): the colour of the detail pages' language badges.
 // nil when the profile has no rules for this title, or when the file can't be judged on
-// them — nothing to read, or an untagged track that might be the language asked for.
+// them — nothing to read, an untagged track that might be the language asked for, or a
+// miss that rests on a language the AI heard.
 func (sp StoredProfile) LanguageFit(cur CurrentFile) *langs.AudioFit {
 	if sp.Ideal == nil {
 		return nil
@@ -404,9 +405,10 @@ func (sp StoredProfile) LanguageFit(cur CurrentFile) *langs.AudioFit {
 	if len(rules) == 0 || !cur.known() {
 		return nil
 	}
-	// A file: judged on what it's known to carry, never on what its name leaves out. The
-	// badges take what the AI heard at its word (the engine doesn't, see fileLangs), and
-	// say so when that's what a miss rests on.
+	// A file: judged on what it's known to carry, never on what its name leaves out. A
+	// language the AI heard counts when it's one the rules ask for (green), but a miss
+	// beside it is unknown to the engine (fileLangs), so the badge shows no colour for it,
+	// as for an untagged track nobody has heard.
 	c := cur.candidate()
 	heardOnly := c.heard != nil && c.heard.AudioHeard
 	if heardOnly {
@@ -416,7 +418,7 @@ func (sp StoredProfile) LanguageFit(cur CurrentFile) *langs.AudioFit {
 	}
 	fit := languageFit(rules, judgeLangs(rules, c.audioLangs(), mustReading{}))
 	if fit != nil && heardOnly && fit.Status != langs.AudioFitGood {
-		fit.Note += " (going by the language detected on an untagged track, so the file isn't replaced for it automatically)"
+		return nil
 	}
 	return fit
 }
