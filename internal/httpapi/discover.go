@@ -341,7 +341,7 @@ func (a *api) movieAvailability(ctx context.Context, d *metadata.MediaDetail) *m
 			return &av
 		}
 	}
-	av := movies.AvailabilityFor("released", d.Status, "", d.Releases, now)
+	av := movies.AvailabilityFor("released", d.Status, d.ReleaseDate, d.Releases, now)
 	return &av
 }
 

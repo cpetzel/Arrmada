@@ -77,6 +77,9 @@ type MediaDetail struct {
 	BackdropURL   string       `json:"backdrop_url,omitempty"`
 	Runtime       int          `json:"runtime,omitempty"`
 	Status        string       `json:"status,omitempty"`
+	// ReleaseDate is a movie's main release date (YYYY-MM-DD), as the library stores it:
+	// its availability is worked out from it as a library film's is.
+	ReleaseDate string `json:"release_date,omitempty"`
 	Network       string       `json:"network,omitempty"`
 	Genres        []string     `json:"genres,omitempty"`
 	Certification string       `json:"certification,omitempty"`
@@ -188,7 +191,7 @@ func (t *TMDB) movieDetail(ctx context.Context, tmdbID int, region string) (*Med
 		MediaType: "movie", TMDBID: m.ID, IMDBID: firstNonEmpty(m.IMDBID, m.ExternalIDs.IMDBID),
 		Title: m.Title, Year: yearOf(m.ReleaseDate), Overview: m.Overview, Runtime: m.Runtime,
 		Status: m.Status, Certification: usCertification(m.ReleaseDates.Results),
-		Ratings: Ratings{TMDB: m.VoteAverage}, Adult: m.Adult,
+		Ratings: Ratings{TMDB: m.VoteAverage}, Adult: m.Adult, ReleaseDate: m.ReleaseDate,
 	}
 	if m.PosterPath != "" {
 		d.PosterURL = tmdbImageBase + m.PosterPath
