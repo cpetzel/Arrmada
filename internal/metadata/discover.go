@@ -67,19 +67,19 @@ type Ratings struct {
 
 // MediaDetail is the full record behind the discover detail modal.
 type MediaDetail struct {
-	MediaType     string       `json:"media_type"`
-	TMDBID        int          `json:"tmdb_id"`
-	IMDBID        string       `json:"imdb_id,omitempty"`
-	Title         string       `json:"title"`
-	Year          int          `json:"year"`
-	Overview      string       `json:"overview,omitempty"`
-	PosterURL     string       `json:"poster_url,omitempty"`
-	BackdropURL   string       `json:"backdrop_url,omitempty"`
-	Runtime       int          `json:"runtime,omitempty"`
-	Status        string       `json:"status,omitempty"`
+	MediaType   string `json:"media_type"`
+	TMDBID      int    `json:"tmdb_id"`
+	IMDBID      string `json:"imdb_id,omitempty"`
+	Title       string `json:"title"`
+	Year        int    `json:"year"`
+	Overview    string `json:"overview,omitempty"`
+	PosterURL   string `json:"poster_url,omitempty"`
+	BackdropURL string `json:"backdrop_url,omitempty"`
+	Runtime     int    `json:"runtime,omitempty"`
+	Status      string `json:"status,omitempty"`
 	// ReleaseDate is a movie's main release date (YYYY-MM-DD), as the library stores it:
 	// its availability is worked out from it as a library film's is.
-	ReleaseDate string `json:"release_date,omitempty"`
+	ReleaseDate   string       `json:"release_date,omitempty"`
 	Network       string       `json:"network,omitempty"`
 	Genres        []string     `json:"genres,omitempty"`
 	Certification string       `json:"certification,omitempty"`

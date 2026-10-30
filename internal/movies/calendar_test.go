@@ -15,7 +15,9 @@ func TestUpcomingMarksSearchStart(t *testing.T) {
 	s := titlesService(t, nil)
 	ctx := context.Background()
 	day := func(offset int) string { return time.Now().AddDate(0, 0, offset).Format(time.DateOnly) }
-	us := func(offset int) *metadata.DatedRelease { return &metadata.DatedRelease{Date: day(offset), Country: "US"} }
+	us := func(offset int) *metadata.DatedRelease {
+		return &metadata.DatedRelease{Date: day(offset), Country: "US"}
+	}
 	for _, m := range []Movie{
 		{TMDBID: 1, Title: "Digital", Monitored: true, MinAvailability: "released",
 			Extra: &MovieExtra{ReleaseDate: day(-10), Releases: &metadata.ReleaseDates{Cinema: us(-10), Digital: us(20)}}},
@@ -38,11 +40,11 @@ func TestUpcomingMarksSearchStart(t *testing.T) {
 		marks[key{u.Title, u.Release, u.ReleaseDate}] = u.SearchStart
 	}
 	want := map[key]bool{
-		{"Digital", "", day(-10)}:        false,
-		{"Digital", "digital", day(20)}:  true,
-		{"NoHome", "", day(-10)}:         false,
-		{"NoHome", "search", day(80)}:    true,
-		{"Unwanted", "", day(-10)}:       false,
+		{"Digital", "", day(-10)}:       false,
+		{"Digital", "digital", day(20)}: true,
+		{"NoHome", "", day(-10)}:        false,
+		{"NoHome", "search", day(80)}:   true,
+		{"Unwanted", "", day(-10)}:      false,
 	}
 	if len(marks) != len(want) {
 		t.Fatalf("entries = %v, want %v", marks, want)

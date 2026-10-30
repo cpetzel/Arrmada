@@ -19,7 +19,7 @@ func (f *digitalMeta) SearchMovie(context.Context, string) ([]metadata.MovieResu
 }
 func (f *digitalMeta) GetMovie(context.Context, int) (*metadata.MovieDetails, error) {
 	f.calls.Add(1)
-	return &metadata.MovieDetails{Title: "changed", Releases: &metadata.ReleaseDates{
+	return &metadata.MovieDetails{OriginalTitle: "changed", Releases: &metadata.ReleaseDates{
 		Digital: &metadata.DatedRelease{Date: time.Now().AddDate(0, 0, -1).Format(time.DateOnly), Country: "US"}}}, nil
 }
 func (f *digitalMeta) GetCollection(context.Context, int) (*metadata.Collection, error) {
