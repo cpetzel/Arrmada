@@ -67,8 +67,10 @@ func Available(m Movie, now time.Time) bool { return AvailabilityOf(m, now).Avai
 //   - "inCinemas": from the main release date; with none, when TMDB says Released or
 //     doesn't know (lenient: unchanged from before).
 //   - "released": from the earlier of the digital and disc dates. With neither, the cinema
-//     date (else the main release date) + HomeAfterCinema days. With no date at all, when
-//     TMDB says Released.
+//     date + HomeAfterCinema days. The cinema date is the earlier of the region's cinema
+//     date and the main release date, and a home date more than a year after it is a
+//     re-release: the film is out a year after it. With no date at all, when TMDB says
+//     Released.
 func AvailabilityFor(minAvail, status, mainDate string, rel *metadata.ReleaseDates, now time.Time) Availability {
 	switch minAvail {
 	case "inCinemas":
@@ -99,8 +101,10 @@ func releasedAvailability(status, mainDate string, rel *metadata.ReleaseDates, n
 				home, by = d, k.name
 			}
 		}
+		// The earlier of the main date and the region's cinema date: a region may list only a
+		// recent cinema re-run of an old film, which must not make it wait again.
 		if rel.Cinema != nil {
-			if d, ok := parseDay(rel.Cinema.Date); ok {
+			if d, ok := parseDay(rel.Cinema.Date); ok && (!haveCinema || d.Before(cinema)) {
 				cinema, haveCinema = d, true
 			}
 		}
