@@ -549,10 +549,17 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
     fills an episode with no file in the show's own `Title (Year)/Season N` folder, as
     before, so episodes named in another language or in romaji keep being found; when an
     import later brings the episode's file, the filled one goes to the recycle bin like any
-    replaced file.
+    replaced file. When several files could fill it, the one named as the show is taken
+    first, then one with no title, then one named otherwise, and only then the better copy.
+  - A copy of the show's own episode whose name doesn't match the show (a romaji title the
+    show has no alias for, a rip with no title) is no longer swapped in on rescan for being
+    the better copy, and isn't listed as a duplicate either. Import it by hand, or add the
+    name under the show's **Alternate titles** and rescan.
   - The duplicate check never offers the show's own copy for deletion beside a file named
-    otherwise, never offers a file named otherwise, and never offers a two-episode file
-    that is still the other episode's only file.
+    otherwise, and never offers a file named otherwise. It never offers a two-episode file
+    while it is the other episode's only copy: when that episode has no file recorded, or
+    its recorded file is gone, deleting it would have removed that episode too (this
+    happened in v0.3.3 as well).
   - A file recorded under a path that differs only in letter case is still the episode's
     recorded file on a disk that ignores case.
   - Episodes an earlier rescan already switched to another show's file are left as they
