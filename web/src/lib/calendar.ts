@@ -68,7 +68,8 @@ export function episodeCode(season: number, episode: number): string {
 export function itemLine(it: CalendarItem): string {
   if (it.type === "movie") {
     const kind = it.release === "digital" ? "Digital release" : it.release === "physical" ? "Physical release" : "Movie";
-    return it.year ? `${kind} · ${it.year}` : kind;
+    const line = it.year ? `${kind} · ${it.year}` : kind;
+    return it.search_start ? `${line} · search starts` : line;
   }
   // An album: 'Artist · EP'.
   if (it.type === "album") return it.artist ? `${it.artist} · ${it.album_type || "Album"}` : it.subtitle;

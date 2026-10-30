@@ -303,7 +303,7 @@ export interface WantedRow {
   due?: boolean; // the next automatic search is on the sweep's next run
   last_search?: AttemptSummary;
   available_at?: string; // Upcoming: release or air date (YYYY-MM-DD, or a bare year)
-  next_label?: string; // Upcoming series: "S02E13"
+  next_label?: string; // Upcoming series: "S02E13"; a movie: "Digital" or "Disc", the release it waits for
 }
 
 export interface WantedLists {
@@ -818,6 +818,8 @@ export interface CalendarItem {
   artist?: string; album_type?: string;
   // A movie entry's kind: absent for its main release date, else its digital or disc release.
   release?: "digital" | "physical";
+  // A movie entry on the day searching for it starts: a monitored, missing film reaches its minimum availability.
+  search_start?: boolean;
   // The viewer asked for this title or follows a request for it (APP-17).
   requested_by_me?: boolean;
 }
@@ -2172,7 +2174,14 @@ export interface MediaDetail {
   watch_links?: WatchLink[]; // a Watch link per media server that has it, the viewer's own first
   collection?: { id: number; name: string }; // a movie's franchise, for "Part of the … collection"
   releases?: ReleaseDates; // a movie's cinema, digital and physical release dates
+  availability?: MovieAvailability; // a movie: when Arrmada searches for it (a request's "Released", or the library film's own)
 }
+/**
+ * When a film reaches its minimum availability, and so is searched for (movies.AvailabilityOf).
+ * by: what `from` is — its digital or disc release, its cinema date + 90 days (no home date
+ * known), or its main release date (minimum "In cinemas").
+ */
+export interface MovieAvailability { available: boolean; from?: string; by?: "digital" | "physical" | "cinema" | "release" }
 /** One kind of a film's release: the day (YYYY-MM-DD) and whose release it is (ISO country code). */
 export interface DatedRelease { date: string; country: string }
 /** A film's cinema, digital and physical release dates, for the admin's region when it has them. */
@@ -4173,7 +4182,8 @@ export interface MovieAcquisition {
   upgrades_allowed: boolean;
   scanned_in: boolean;
   available: boolean;
-  available_from?: string;
+  available_from?: string; // the day it reaches its minimum availability, when a date decides it
+  available_by?: MovieAvailability["by"]; // what that day is
   downloading: boolean;
   download_title?: string;
   download_progress?: number;

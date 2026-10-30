@@ -4,6 +4,7 @@ import { PageHeader } from "../components/PageHeader";
 import { CastRow } from "../components/CastRow";
 import { releaseFacts, shownOverview, shownTitle } from "../lib/displayTitle";
 import { formatReleaseDay } from "../lib/format";
+import { availabilityWait } from "../lib/movieAvailability";
 import { AudioLangChips } from "../components/AudioLangChips";
 import { ReleaseSearchModal } from "../components/ReleaseSearchModal";
 import { UploadTorrentModal } from "../components/UploadTorrentModal";
@@ -1044,8 +1045,9 @@ function AcquisitionStatus({ movie, onChange, flash, searchInfo }: {
     );
   } else if (!acq.available) {
     tone = "var(--accent-text)";
-    const from = acq.available_from ? ` (expected ${fmtDate(acq.available_from)})` : "";
-    msg = `Monitored and missing. Arrmada starts searching once it's "${avail}"${from}, and grabs the best release for your quality profile.${noProfile}`;
+    // The server's rule says what it waits for: "Waiting for the digital release on 12 Dec".
+    const wait = availabilityWait({ available: false, from: acq.available_from, by: acq.available_by });
+    msg = `${wait}. Monitored and missing: searching starts then (minimum availability "${avail}") and grabs the best release for your quality profile.${noProfile}`;
   } else {
     tone = "var(--accent-text)";
     msg = `Monitored and missing — Arrmada searches automatically and grabs the best release for your quality profile.${noProfile}`;
@@ -1119,12 +1121,6 @@ function MonitorWithProfile({ movie, onDone, onDowngrade, flash }: {
       <Button size="sm" variant="primary" onClick={monitor} busy={busy} busyLabel="Monitoring…" disabled={!pick}>Monitor</Button>
     </>
   );
-}
-
-function fmtDate(s: string): string {
-  const d = new Date(s + "T00:00:00");
-  if (isNaN(d.getTime())) return s;
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
 // UpgradeHoldChip shows when a file of this movie was kept as it is when its profile

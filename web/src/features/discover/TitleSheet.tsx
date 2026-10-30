@@ -10,6 +10,7 @@ import { releaseFacts, shownOverview } from "../../lib/displayTitle";
 import { Button, IconButton, Sheet, StatusChip, POSTER_CHIP_BG, POSTER_TONE, type ToastFn } from "../../ui";
 import { WatchButton } from "../../components/brand/WatchPills";
 import { formatReleaseDay } from "../../lib/format";
+import { availabilityAhead } from "../../lib/movieAvailability";
 import { watchLinksOf } from "../../components/brand/servers";
 import { badgeFor, FOLLOWING, PosterPlaceholder, useCloseOverlay, useOpenOverlay, useOpenTitle, type OverlayState, type ReqStatus, type RowCtx } from "./shared";
 
@@ -192,6 +193,7 @@ function RequestDetailModal({ card, ctx, pick, onClose }: { card: DiscoverCard; 
   const overview = shownOverview(d) || shownOverview(c);
   const runtime = d?.runtime ? `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m` : "";
   const releases = releaseFacts(d?.releases);
+  const ahead = availabilityAhead(d?.availability);
   const director = crewByJob(d?.crew, "Director");
   const writer = crewByJob(d?.crew, "Writer");
   const producer = crewByJob(d?.crew, "Producer");
@@ -283,7 +285,11 @@ function RequestDetailModal({ card, ctx, pick, onClose }: { card: DiscoverCard; 
                 {r?.metacritic ? <RatingBadge label="MC" value={r.metacritic} bg="#00658f" fg="#fff" /> : null}
               </div>
             )}
-            {c.release_date && new Date(c.release_date) > new Date() && (
+            {/* A movie not out yet says when Arrmada will search for it (its digital or disc
+                release, for a request's "Released"); a sheet without that says its release date. */}
+            {ahead ? (
+              <div className="mt-2 font-mono text-xs" style={{ color: "var(--avoid-text)" }}>{ahead}</div>
+            ) : !d?.availability && c.release_date && new Date(c.release_date) > new Date() && (
               <div className="mt-2 font-mono text-xs" style={{ color: "var(--avoid-text)" }}>Releases {c.release_date} — request ahead</div>
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2">

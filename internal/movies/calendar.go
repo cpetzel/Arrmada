@@ -2,6 +2,7 @@ package movies
 
 import (
 	"context"
+	"time"
 
 	"github.com/tristenlammi/arrmada/internal/metadata"
 )
@@ -19,6 +20,9 @@ type UpcomingMovie struct {
 	PosterURL string `json:"poster_url"`
 	HasFile   bool   `json:"has_file"`
 	Monitored bool   `json:"monitored"`
+	// SearchStart: this is the day a monitored, missing film reaches its minimum
+	// availability (AvailabilityOf), so the day searching for it starts.
+	SearchStart bool `json:"search_start,omitempty"`
 	// CanonicalTitle is the film's own (TMDB English) title when Title is its shown one:
 	// the adult filter judges both.
 	CanonicalTitle string `json:"-"`
@@ -34,14 +38,20 @@ func (s *Service) Upcoming(ctx context.Context, from, to string) ([]UpcomingMovi
 		return nil, err
 	}
 	var out []UpcomingMovie
+	now := time.Now()
 	for _, m := range ms {
 		if m.Extra == nil {
 			continue
+		}
+		start := ""
+		if m.Monitored && !m.HasFile {
+			start = AvailabilityOf(m, now).From
 		}
 		entry := func(rd, release string) UpcomingMovie {
 			return UpcomingMovie{
 				ReleaseDate: rd, Release: release, ID: m.ID, TMDBID: m.TMDBID, Title: m.Shown(), Year: m.Year,
 				PosterURL: m.PosterURL, HasFile: m.HasFile, Monitored: m.Monitored, CanonicalTitle: m.Title,
+				SearchStart: start != "" && rd == start,
 			}
 		}
 		main := dayOf(m.Extra.ReleaseDate)
