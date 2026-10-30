@@ -4332,7 +4332,9 @@ export interface ReviewImportStarted extends JobRef {
 // almost equally, too few of an album's tracks, tags naming another album's recordings, and
 // AcoustID disagreeing with the tags.
 // title_conflict: a show's files whose episode titles and numbers disagree within the pack.
-export type ReviewReason = "mismatch" | "unmatched" | "numbering" | "title_conflict" | "import_failed" | "no_media"
+// same_name: grabbed for a show that shares its name with another, and the release doesn't
+// say which (#81).
+export type ReviewReason = "mismatch" | "same_name" | "unmatched" | "numbering" | "title_conflict" | "import_failed" | "no_media"
   | "low_confidence" | "close_editions" | "partial" | "tag_conflict" | "fingerprint_conflict";
 
 // One file inside a held download, with what its name says about episode numbering.

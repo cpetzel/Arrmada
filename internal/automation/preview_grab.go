@@ -201,7 +201,7 @@ func (c *Coordinator) tryPreviewedSeries(ctx context.Context, id int64, refs []R
 			continue
 		}
 		// An automatic pick, not a hand-picked one: the import gate still applies.
-		if err := c.grabForSeries(ctx, id, ref.Indexer, ref.DownloadURL, ref.Title, false, WholeShow); err != nil {
+		if err := c.grabForSeries(WithReleasePublished(ctx, ref.PublishedAt), id, ref.Indexer, ref.DownloadURL, ref.Title, false, WholeShow); err != nil {
 			c.log.Warn("request: couldn't grab a previewed release", "series", s.Title, "release", ref.Title, "err", err)
 			continue
 		}

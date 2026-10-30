@@ -186,6 +186,8 @@ func reviewReason(code string) string {
 	switch code {
 	case automation.ReasonMismatch:
 		return "it looks like a different title"
+	case automation.ReasonSameName:
+		return "two shows share its name"
 	case automation.ReasonUnmatched:
 		return "it matches nothing in the library"
 	case automation.ReasonNumbering:

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tristenlammi/arrmada/internal/books"
 	"github.com/tristenlammi/arrmada/internal/indexer"
@@ -293,6 +294,9 @@ func (c *Coordinator) issuePreview(p *Preview, rels []indexer.Release, kind, key
 		ref := ReleaseRef{
 			Indexer: rel.Indexer, DownloadURL: rel.DownloadURL, Title: rel.Title, InfoHash: rel.InfoHash,
 			Transport: string(rel.Transport), MediaKind: kind, PreviewKey: key, SizeGB: rel.SizeGB(),
+		}
+		if !rel.PublishedAt.IsZero() {
+			ref.PublishedAt = rel.PublishedAt.UTC().Format(time.RFC3339) // the grab records it (#81)
 		}
 		if kind == ReleaseKindSeries {
 			ref.Season = -1 // a whole-show grab, as the sweep makes it

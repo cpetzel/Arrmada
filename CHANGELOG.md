@@ -499,6 +499,46 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Fixed
 
+- **Two shows with the same name no longer get each other's episodes** (#81). With Scrubs
+  (2001) and the 2026 Scrubs both in the library, a release named `Scrubs.S02E03…` doesn't
+  say which show it's from. A search for one show grabbed it, and the import trusted the
+  grab, so the revival's S02E03 could replace the original's. This only changes anything
+  for a show that shares its name with another show in your library. Releases that name
+  the year (`Scrubs.2026.S02E03…`) or the country (`The.Office.US…`) work as before. For a
+  release that names neither:
+  - Searches use the release's publish date. A release posted before a show's season
+    began can't be from that season, so `Scrubs.S02E03` posted in 2015 is grabbed for the 2001 show
+    and never for the revival. A release for a season the other show doesn't list yet
+    only counts as the older show's if it was posted before the other show first aired.
+  - When a release could belong to either show, or the indexer gave no date, the
+    automatic searches, upgrades and quick **Grab** buttons skip it. The show's last
+    search says so, and **Choose release** still lists it with the reason, so you can
+    grab it by hand. In practice, the newer show only grabs releases that name its year.
+  - A grabbed download that could belong to either show goes to **Needs you** as **Which
+    show?**, naming both shows. It isn't imported or used to replace a file. **Import
+    anyway** puts it in the show it was grabbed for; **Choose different show…** puts it in
+    the other one. Either way, it only replaces a file it's better than; when it isn't
+    better, Needs you says **Kept the existing file** and leaves the download as it is.
+  - A release you pick by hand from **Choose release** imports as before.
+
+- **Library episodes named "1x8" are read** (reported in #81). A show whose files are
+  named with a single-digit episode — "11.22.63 - 1x8- The Day in Question [HDTVMux1080p
+  Ita 5.1].mkv" in an "S01" folder — had none of them read: the "1x08" form needed a
+  two-digit episode so an aspect ratio ("16x9") or a dimension ("4x4") is never taken for
+  one, and **Refresh & rescan** found 0 of 8 episodes. The library scan, a rescan and the
+  duplicate check now read a single-digit "NxE" in a file already in a show's folder when
+  it can't be anything else: after the show's title and set off by dashes ("Title - 1x8 -
+  Episode", "Title - 1x8- Episode", "Title – 1x8"), or after the title inside the season
+  folder of the same season ("S01", "Season 1", "Stagione 1"…). Never inside brackets or
+  after the release tags; never at the start of the name, where it is usually the show's
+  own title ("3x3 Eyes 05"); never "0x5" outside a Specials or Season 0 folder; never
+  against a season folder saying another season; never two candidates ("Kids 2x2 - 2x5");
+  never "1x8x9" or "1x8-9", whose other episodes can't be told; and "16x9", "4x3", "4x4",
+  "2x4" or the same number twice ("3x3", "1x1") only when both dashed and in that season's
+  folder. A file read this way only fills an episode nothing else holds: it never replaces
+  an episode's recorded file or another copy read by its name, and stays on disk listed as
+  a duplicate instead. Release names (searches, grabs, download imports) and **Manual
+  import** read exactly as before.
 - **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
   (reported in #94 by cpetzel). With qBittorrent's **Default Download Path (incomplete
   torrents)** on, a finished torrent is moved from that folder to its save folder, and

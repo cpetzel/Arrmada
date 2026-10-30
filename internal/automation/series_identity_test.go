@@ -111,14 +111,19 @@ func TestImportSameTitledShows(t *testing.T) {
 		t.Errorf("yearless release: review %q (%s), want both shows named", r.Reason, r.ReasonCode)
 	}
 
-	// The same yearless name, grabbed for the 2005 show, imports there.
+	// The same yearless name, grabbed for the 2005 show, can't be told from the 1990 show's
+	// either: nothing dates it, and the 1990 show lists no episodes to rule it out. It waits
+	// for a person instead of going into the show it was grabbed for (#81).
 	grabbed := "Show.S01E02.1080p.WEB-DL-OTHER"
 	gHash := hashFor(grabbed)
 	h.seriesGrab(t, grabbed, gHash)
 	h.completedTorrent(grabbed, seriesCategory, h.download(t, grabbed, grabbed+".mkv"))
 	h.c.ImportSeriesDownloads(h.ctx)
-	if !episodeHasFile(t, h, 1, 2) {
-		t.Error("a yearless release grabbed for the 2005 show didn't import into it")
+	if episodeHasFile(t, h, 1, 2) {
+		t.Error("a yearless release grabbed for the 2005 show was imported though the 1990 show shares its name")
+	}
+	if r := reviewFor(t, h.c, gHash); r.ReasonCode != ReasonSameName || r.ExpectedID != h.seriesID {
+		t.Errorf("grabbed yearless release: review %q (%s), want a same-name hold for the 2005 show", r.Reason, r.ReasonCode)
 	}
 }
 
