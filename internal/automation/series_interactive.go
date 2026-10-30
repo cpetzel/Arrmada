@@ -1121,8 +1121,8 @@ func recordedEpisodeFiles(s series.Series) map[[2]int]string {
 // keptEpisodeFile picks which of the files on disk claiming one episode of show s, recorded
 // as recorded, is kept, and the files that competed for it. The competitors are
 // episodeClaims; with none, the files only fill an episode whose recorded file is gone (or
-// that has none) — preferring one read by its name over one read only as "1x8" — and ok is
-// false while the recorded file is still there: it stays.
+// that has none) — the likeliest to be the show's first (fillRank), then the best — and ok
+// is false while the recorded file is still there: it stays.
 func keptEpisodeFile(found []library.FoundVideo, recorded string, s series.Series) (best library.FoundVideo, files []library.FoundVideo, ok bool) {
 	if files = episodeClaims(found, recorded, s); len(files) > 0 {
 		return keepOf(files), files, true
@@ -1131,10 +1131,33 @@ func keptEpisodeFile(found []library.FoundVideo, recorded string, s series.Serie
 		return library.FoundVideo{}, nil, false
 	}
 	files = found
-	if byName := slices.DeleteFunc(slices.Clone(found), func(f library.FoundVideo) bool { return library.ReadOnlyOnDisk(f.Path) }); len(byName) > 0 {
-		files = byName
+	if len(found) > 1 {
+		top := slices.MinFunc(found, func(a, b library.FoundVideo) int { return fillRank(a, s) - fillRank(b, s) })
+		files = slices.DeleteFunc(slices.Clone(found), func(f library.FoundVideo) bool { return fillRank(f, s) != fillRank(top, s) })
 	}
 	return keepOf(files), files, true
+}
+
+// fillRank orders the files that may fill an episode with no file, likeliest the show's
+// first: named as the show (0); named as the show but read only by the on-disk "1x8" rule
+// (1); a name with no title ("S01E03.mkv", 2); named as something else — another show, or
+// the show in a language it has no alias for (3); and last a file named otherwise that only
+// the "1x8" rule reads (4).
+func fillRank(f library.FoundVideo, s series.Series) int {
+	onDisk := library.ReadOnlyOnDisk(f.Path)
+	switch {
+	case series.FileFitsShow(f.Path, s):
+		if onDisk {
+			return 1
+		}
+		return 0
+	case onDisk:
+		return 4
+	case strings.TrimSpace(parser.Parse(filepath.Base(f.Path)).Title) == "":
+		return 2
+	default:
+		return 3
+	}
 }
 
 // episodeClaims is the files of one episode that may be kept as its file or offered as its
