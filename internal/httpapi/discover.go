@@ -16,6 +16,7 @@ import (
 	"github.com/tristenlammi/arrmada/internal/insights"
 	"github.com/tristenlammi/arrmada/internal/mediaserver"
 	"github.com/tristenlammi/arrmada/internal/metadata"
+	"github.com/tristenlammi/arrmada/internal/movies"
 	"github.com/tristenlammi/arrmada/internal/requests"
 	"github.com/tristenlammi/arrmada/internal/safego"
 )
