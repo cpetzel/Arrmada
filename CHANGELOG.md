@@ -11,7 +11,7 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-10-30
+## [0.4.0] - 2026-10-31
 
 ### Highlights
 
