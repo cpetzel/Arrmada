@@ -1040,18 +1040,30 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 	// beside the show's own.
 	recorded := recordedEpisodeFiles(s)
 	byEpisode := map[[2]int][]library.FoundVideo{}
+	holds := map[string][][2]int{} // each file's episodes, by cleaned path
 	for _, v := range c.showEpisodeVideos(ctx, s, imp, folder) {
 		for _, ref := range c.series.ResolveEpisodes(ctx, seriesID, library.ParseEpisodeFile(v.Path)) {
 			key := [2]int{ref.Season, ref.Episode}
 			byEpisode[key] = append(byEpisode[key], v)
+			holds[filepath.Clean(v.Path)] = append(holds[filepath.Clean(v.Path)], key)
 		}
 	}
 
 	// A file another episode has recorded (a two-episode file one of whose episodes now has
-	// a better copy) is that episode's only file: never offered for deletion.
+	// a better copy) is that episode's only file: never offered for deletion. Nor is a file
+	// that also holds another episode, unless that episode has its own file, recorded and on
+	// disk: "Show - S01E01E02" recorded for E2 alone is still E1's only copy.
 	elsewhere := func(f library.FoundVideo, key [2]int) bool {
 		for k, p := range recorded {
 			if k != key && samePath(f.Path, p) {
+				return true
+			}
+		}
+		for _, k := range holds[filepath.Clean(f.Path)] {
+			if k == key {
+				continue
+			}
+			if p := recorded[k]; p == "" || samePath(p, f.Path) || fileGone(p) {
 				return true
 			}
 		}
