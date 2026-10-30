@@ -159,11 +159,13 @@ func (t *TMDB) MediaDetails(ctx context.Context, media string, tmdbID int) (*Med
 	// v7 (movies only, so shows' records stay cached): movies carry their release dates,
 	// picked for the region, which the key names so a changed region doesn't serve another
 	// region's dates for half a day.
+	// v8 (movies only): movies carry their main release date and the earliest digital and
+	// disc dates anywhere, which minimum availability goes by.
 	key := "tmdb:detail:v6:tv:" + strconv.Itoa(tmdbID)
 	region := ""
 	if kind == "movie" {
 		region = t.regionCode()
-		key = "tmdb:detail:v7:movie:" + strconv.Itoa(tmdbID) + ":" + region
+		key = "tmdb:detail:v8:movie:" + strconv.Itoa(tmdbID) + ":" + region
 	}
 	return swr(ctx, t.disk, key, mediaDetailTTL, func(ctx context.Context) (*MediaDetail, error) {
 		if kind == "tv" {
