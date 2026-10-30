@@ -51,11 +51,12 @@ func TestMovieAcquisitionFields(t *testing.T) {
 		id, _ := res.LastInsertId()
 		return id
 	}
-	future := time.Now().AddDate(1, 0, 0).Format("2006-01-02")
+	future := time.Now().AddDate(0, 0, 60).Format("2006-01-02")
 	scanned := insert(1, "n/a", 0, 1, file("Scanned"), "")
 	noUpgrades := insert(2, stillRef, 1, 1, file("Stays"), "")
 	missing := insert(3, stillRef, 1, 1, filepath.Join(root, "Gone", "Gone.mkv"), "")
-	notOut := insert(4, stillRef, 1, 0, "", `{"release_date":"`+future+`"}`)
+	// In cinemas now, out on digital in 60 days: "Released" waits for the digital release.
+	notOut := insert(4, stillRef, 1, 0, "", `{"release_date":"`+time.Now().Format("2006-01-02")+`","releases":{"digital":{"date":"`+future+`","country":"US"}}}`)
 
 	get := func(id int64) movies.Acquisition {
 		t.Helper()
@@ -79,7 +80,7 @@ func TestMovieAcquisitionFields(t *testing.T) {
 	if a := get(missing); !a.FileMissing {
 		t.Errorf("recorded file gone from disk: %+v", a)
 	}
-	if a := get(notOut); a.Available || a.AvailableFrom != future || a.Downloading {
+	if a := get(notOut); a.Available || a.AvailableFrom != future || a.AvailableBy != movies.AvailableByDigital || a.Downloading {
 		t.Errorf("not yet released: %+v", a)
 	}
 }

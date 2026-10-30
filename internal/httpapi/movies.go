@@ -181,7 +181,10 @@ func (a *api) handleAddMovie(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if m.Monitored && searchOnAdd {
+	// Search on add is an automatic search, so it waits for the film's minimum availability
+	// as the scheduled one does (a film only in cinemas has little but cams); the sweep
+	// searches it from that day. A person's own Search doesn't wait.
+	if m.Monitored && searchOnAdd && a.deps.Movies.IsAvailable(m) {
 		_, _ = a.enqueueMovie(r, m.ID, triggered(automation.TriggerAdd, a.movieSearchJob(m.ID)))
 	}
 
@@ -549,13 +552,11 @@ func (a *api) movieAcquisition(ctx context.Context, m *movies.Movie, acqs []auto
 		Monitored:       m.Monitored,
 		UpgradesAllowed: m.UpgradesAllowed,
 		ScannedIn:       m.QualityProfile == "n/a",
-		Available:       a.deps.Movies.IsAvailable(*m),
 		FileMissing:     m.HasFile && m.File != nil && m.File.Missing,
 	}
+	av := a.deps.Movies.Availability(*m)
+	acq.Available, acq.AvailableFrom, acq.AvailableBy = av.Available, av.From, av.By
 	acq.ProfileKnown = !acq.ScannedIn && m.QualityProfile != "" && a.deps.Quality != nil && a.deps.Quality.Known(ctx, m.QualityProfile)
-	if m.Extra != nil {
-		acq.AvailableFrom = m.Extra.ReleaseDate
-	}
 	// In flight by the acquisition record — an upgrade for a film that has its file
 	// included — with the live progress when its torrent is in the queue.
 	if len(acqs) > 0 {

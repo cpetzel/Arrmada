@@ -67,16 +67,19 @@ type Ratings struct {
 
 // MediaDetail is the full record behind the discover detail modal.
 type MediaDetail struct {
-	MediaType     string       `json:"media_type"`
-	TMDBID        int          `json:"tmdb_id"`
-	IMDBID        string       `json:"imdb_id,omitempty"`
-	Title         string       `json:"title"`
-	Year          int          `json:"year"`
-	Overview      string       `json:"overview,omitempty"`
-	PosterURL     string       `json:"poster_url,omitempty"`
-	BackdropURL   string       `json:"backdrop_url,omitempty"`
-	Runtime       int          `json:"runtime,omitempty"`
-	Status        string       `json:"status,omitempty"`
+	MediaType   string `json:"media_type"`
+	TMDBID      int    `json:"tmdb_id"`
+	IMDBID      string `json:"imdb_id,omitempty"`
+	Title       string `json:"title"`
+	Year        int    `json:"year"`
+	Overview    string `json:"overview,omitempty"`
+	PosterURL   string `json:"poster_url,omitempty"`
+	BackdropURL string `json:"backdrop_url,omitempty"`
+	Runtime     int    `json:"runtime,omitempty"`
+	Status      string `json:"status,omitempty"`
+	// ReleaseDate is a movie's main release date (YYYY-MM-DD), as the library stores it:
+	// its availability is worked out from it as a library film's is.
+	ReleaseDate   string       `json:"release_date,omitempty"`
 	Network       string       `json:"network,omitempty"`
 	Genres        []string     `json:"genres,omitempty"`
 	Certification string       `json:"certification,omitempty"`
@@ -156,11 +159,13 @@ func (t *TMDB) MediaDetails(ctx context.Context, media string, tmdbID int) (*Med
 	// v7 (movies only, so shows' records stay cached): movies carry their release dates,
 	// picked for the region, which the key names so a changed region doesn't serve another
 	// region's dates for half a day.
+	// v8 (movies only): movies carry their main release date and the earliest digital and
+	// disc dates anywhere, which minimum availability goes by.
 	key := "tmdb:detail:v6:tv:" + strconv.Itoa(tmdbID)
 	region := ""
 	if kind == "movie" {
 		region = t.regionCode()
-		key = "tmdb:detail:v7:movie:" + strconv.Itoa(tmdbID) + ":" + region
+		key = "tmdb:detail:v8:movie:" + strconv.Itoa(tmdbID) + ":" + region
 	}
 	return swr(ctx, t.disk, key, mediaDetailTTL, func(ctx context.Context) (*MediaDetail, error) {
 		if kind == "tv" {
@@ -188,7 +193,7 @@ func (t *TMDB) movieDetail(ctx context.Context, tmdbID int, region string) (*Med
 		MediaType: "movie", TMDBID: m.ID, IMDBID: firstNonEmpty(m.IMDBID, m.ExternalIDs.IMDBID),
 		Title: m.Title, Year: yearOf(m.ReleaseDate), Overview: m.Overview, Runtime: m.Runtime,
 		Status: m.Status, Certification: usCertification(m.ReleaseDates.Results),
-		Ratings: Ratings{TMDB: m.VoteAverage}, Adult: m.Adult,
+		Ratings: Ratings{TMDB: m.VoteAverage}, Adult: m.Adult, ReleaseDate: m.ReleaseDate,
 	}
 	if m.PosterPath != "" {
 		d.PosterURL = tmdbImageBase + m.PosterPath

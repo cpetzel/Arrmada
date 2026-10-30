@@ -16,6 +16,7 @@ import (
 	"github.com/tristenlammi/arrmada/internal/insights"
 	"github.com/tristenlammi/arrmada/internal/mediaserver"
 	"github.com/tristenlammi/arrmada/internal/metadata"
+	"github.com/tristenlammi/arrmada/internal/movies"
 	"github.com/tristenlammi/arrmada/internal/requests"
 	"github.com/tristenlammi/arrmada/internal/safego"
 )
@@ -321,6 +322,27 @@ type mediaDetailResponse struct {
 	// DisplayOverview is the overview in the household's language (discover_overviews.go);
 	// empty when it is the English overview.
 	DisplayOverview string `json:"display_overview,omitempty"`
+	// Availability is, for a movie, when Arrmada searches for it (movies.AvailabilityFor):
+	// by the library film's own minimum availability, else a request's ("released", so its
+	// digital or disc release). Nil for a series.
+	Availability *movies.Availability `json:"availability,omitempty"`
+}
+
+// movieAvailability is a Discover movie's availability: the library film's when it is in
+// the library, else what a request would add it with ("released").
+func (a *api) movieAvailability(ctx context.Context, d *metadata.MediaDetail) *movies.Availability {
+	if d.MediaType != "movie" {
+		return nil
+	}
+	now := time.Now()
+	if a.deps.Movies != nil {
+		if m, err := a.deps.Movies.GetByTMDB(ctx, d.TMDBID); err == nil {
+			av := movies.AvailabilityOf(m, now)
+			return &av
+		}
+	}
+	av := movies.AvailabilityFor("released", d.Status, d.ReleaseDate, d.Releases, now)
+	return &av
 }
 
 // itemFromDetail is a detail record as the browse card it would be in a row.
@@ -380,7 +402,7 @@ func (a *api) handleMediaDetail(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := userFrom(r)
 	a.writeJSON(w, http.StatusOK, mediaDetailResponse{MediaDetail: d, Card: card,
 		PlexURL: linkFor(links, mediaserver.Plex), WatchLinks: a.leadWith(r.Context(), links, viewer),
-		DisplayOverview: shownOverview})
+		DisplayOverview: shownOverview, Availability: a.movieAvailability(r.Context(), d)})
 }
 
 // ratingsWait is how long a detail sheet waits for OMDb, and ratingsBudget how long the

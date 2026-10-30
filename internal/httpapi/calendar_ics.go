@@ -270,6 +270,8 @@ func writeICS(w io.Writer, items []CalendarItem, host string, now time.Time) err
 				summary += " — Digital release"
 			case "physical":
 				summary += " — Physical release"
+			case "search":
+				summary += " — search starts"
 			}
 		}
 		line("BEGIN:VEVENT")

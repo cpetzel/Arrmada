@@ -2,6 +2,7 @@ package movies
 
 import (
 	"context"
+	"time"
 
 	"github.com/tristenlammi/arrmada/internal/metadata"
 )
@@ -10,7 +11,8 @@ import (
 type UpcomingMovie struct {
 	ReleaseDate string `json:"release_date"`
 	// Release is which date this is: "" the film's main release date, "digital" or
-	// "physical" its digital or disc release (Extra.Releases).
+	// "physical" its digital or disc release (Extra.Releases), "search" the day searching
+	// starts when that is none of those (SearchStart).
 	Release   string `json:"release,omitempty"`
 	ID        int64  `json:"id"`
 	TMDBID    int    `json:"tmdb_id"`
@@ -19,6 +21,9 @@ type UpcomingMovie struct {
 	PosterURL string `json:"poster_url"`
 	HasFile   bool   `json:"has_file"`
 	Monitored bool   `json:"monitored"`
+	// SearchStart: this is the day a monitored, missing film reaches its minimum
+	// availability (AvailabilityOf), so the day searching for it starts.
+	SearchStart bool `json:"search_start,omitempty"`
 	// CanonicalTitle is the film's own (TMDB English) title when Title is its shown one:
 	// the adult filter judges both.
 	CanonicalTitle string `json:"-"`
@@ -34,19 +39,27 @@ func (s *Service) Upcoming(ctx context.Context, from, to string) ([]UpcomingMovi
 		return nil, err
 	}
 	var out []UpcomingMovie
+	now := time.Now()
 	for _, m := range ms {
 		if m.Extra == nil {
 			continue
+		}
+		start := ""
+		if m.Monitored && !m.HasFile {
+			start = AvailabilityOf(m, now).From
 		}
 		entry := func(rd, release string) UpcomingMovie {
 			return UpcomingMovie{
 				ReleaseDate: rd, Release: release, ID: m.ID, TMDBID: m.TMDBID, Title: m.Shown(), Year: m.Year,
 				PosterURL: m.PosterURL, HasFile: m.HasFile, Monitored: m.Monitored, CanonicalTitle: m.Title,
+				SearchStart: start != "" && rd == start,
 			}
 		}
 		main := dayOf(m.Extra.ReleaseDate)
+		marked := false // the start day has an entry of its own
 		if main != "" && main >= from && main <= to {
 			out = append(out, entry(main, ""))
+			marked = marked || main == start
 		}
 		if r := m.Extra.Releases; r != nil {
 			for _, k := range []struct {
@@ -58,8 +71,15 @@ func (s *Service) Upcoming(ctx context.Context, from, to string) ([]UpcomingMovi
 				}
 				if d := dayOf(k.rel.Date); d != "" && d != main && d >= from && d <= to {
 					out = append(out, entry(d, k.name))
+					marked = marked || d == start
 				}
 			}
+		}
+		// A start day that is no release of its own — cinema + 90 days with no home date
+		// known, or a year after cinemas past a re-release — gets an entry, so the Calendar
+		// shows when searching starts.
+		if !marked && start != "" && start >= from && start <= to && start != main {
+			out = append(out, entry(start, "search"))
 		}
 	}
 	return out, nil

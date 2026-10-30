@@ -33,9 +33,13 @@ type CalendarItem struct {
 	// An album's artist and kind (Album, EP, Single…). Albums are staff-only.
 	Artist    string `json:"artist,omitempty"`
 	AlbumType string `json:"album_type,omitempty"`
-	// Release is a movie entry's kind: "" its main release date, "digital" or "physical"
+	// Release is a movie entry's kind: "" its main release date, "search" the day its
+	// search starts when that is no release of its own (cinema + 90 days), "digital" or "physical"
 	// its digital or disc release, an entry of its own on that day.
 	Release string `json:"release,omitempty"`
+	// SearchStart: a movie entry on the day its search starts — the day the film reaches
+	// its minimum availability (movies.AvailabilityOf), for a monitored film still missing.
+	SearchStart bool `json:"search_start,omitempty"`
 	// CanonicalTitle is the title's own (TMDB English) name when Title is the shown one
 	// (Settings → Library → "Show titles as"); never sent, only judged by the adult filter.
 	CanonicalTitle string `json:"-"`
@@ -100,6 +104,8 @@ func (a *api) calendarItems(ctx context.Context, start, end string, albums bool)
 				sub = "Digital release"
 			case "physical":
 				sub = "Physical release"
+			case "search":
+				sub = "Search starts"
 			}
 			if m.Year > 0 {
 				sub += " · " + itoa(m.Year) // kind first, as the Calendar page writes it (lib/calendar.ts itemLine)
@@ -108,7 +114,7 @@ func (a *api) calendarItems(ctx context.Context, start, end string, albums bool)
 				Date: m.ReleaseDate, Type: "movie", Title: m.Title, Subtitle: sub,
 				PosterURL: m.PosterURL, RefID: m.ID, HasFile: m.HasFile, Monitored: m.Monitored,
 				TMDBID: m.TMDBID, MediaType: "movie", Year: m.Year, CanonicalTitle: m.CanonicalTitle,
-				Release: m.Release,
+				Release: m.Release, SearchStart: m.SearchStart,
 			})
 		}
 	}

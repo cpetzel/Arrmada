@@ -788,6 +788,28 @@ func main() {
 		coordinator.SearchMissing(ctx)
 		return nil
 	}, scheduler.Label("Search for missing movies"), scheduler.Description("Searches the indexers for monitored movies that don't have a file yet."))
+	// A film is often requested before TMDB knows its digital date; "Released" waits for
+	// that date, so read the dates of the films still waiting once a day (one every 2 s,
+	// at most 200), or it would wait for cinema + 90 days.
+	sched.Register("refresh-movie-release-dates", 24*time.Hour, false, func(ctx context.Context) error {
+		n, err := movieSvc.RefreshPendingReleases(ctx, 2*time.Second, 200)
+		if n > 0 {
+			log.Info("movies: read release dates of films not out yet", "movies", n)
+		}
+		return err
+	}, scheduler.Label("Check release dates of upcoming movies"), scheduler.Description("Once a day, reads the digital and disc release dates of monitored movies still waiting for them, so each is searched from the day it's out."))
+	// The scheduler counts its 24 h from start, so a server restarted daily would never run
+	// it: run it once ten minutes after start too, off the start-up rush.
+	grp.Go("movies: first release-date check", func(ctx context.Context) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Minute):
+		}
+		if _, _, err := sched.RunNow("refresh-movie-release-dates", scheduler.TriggerSchedule); err != nil && !errors.Is(err, scheduler.ErrBusy) {
+			log.Warn("couldn't start the first release-date check", "err", err)
+		}
+	})
 	// RSS sync: poll indexer feeds for new uploads matching wanted movies.
 	// What each Torznab indexer supports (its t=caps), for the Indexers page: read when
 	// never read or over a week old. Paced by the per-host throttle; paused indexers wait.

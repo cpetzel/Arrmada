@@ -234,7 +234,9 @@ function Rows({ rows, onChange, upcoming, cutoff }: { rows: MovieWantedRow[]; on
 // missing film, the target and the upgrade sweep's intent for a cutoff row.
 function rowWords(r: MovieWantedRow, upcoming?: boolean, cutoff?: boolean): { chip: string; tone: string; line: string } {
   if (upcoming) {
-    return { chip: r.available_at ? `Out ${r.available_at}` : "Not released", tone: "var(--ink-faint)", line: "Searched once it's released" };
+    // next_label names the release it waits for ("Digital", "Disc"), when it's one of those.
+    const line = r.next_label ? `Searched from its ${r.next_label.toLowerCase()} release` : "Searched once it's released";
+    return { chip: r.available_at ? `Out ${r.available_at}` : "Not released", tone: "var(--ink-faint)", line };
   }
   if (!cutoff) {
     const w = r as unknown as WantedRow; // a Missing row's state is always a shared Wanted state

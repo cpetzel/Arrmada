@@ -477,6 +477,16 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ### Changed
 
+- **"Released" now waits for the digital or disc release** (the cinema date + 90 days when
+  neither is known); pick **In cinemas** for cinema-time grabs. The earliest such release in
+  any country counts, so a film out on US digital isn't held back by a later local date. Before, "Released" counted
+  from the cinema release, when almost every release is a cam. The scheduled search, RSS,
+  search on add and a request approval's search all wait; **Search** on a film doesn't. The
+  film's page says what it waits for ("Waiting for the digital release on 12 Dec"), and
+  Wanted, the Calendar ("search starts"), Discover and request cards show the same day;
+  approving one says "searches from 12 Dec". A cinema re-run or a new 4K disc never holds
+  an older film back, and the dates of films still waiting are read again daily, so a
+  digital release TMDB learns of later counts.
 - **A library scan no longer guesses which show a year-less folder is** when more than one
   show has exactly its title ("Dark Matter": 2015 and 2024). The folder goes to review with the
   candidates, so you pick. A folder with a year, or a title only one show has, matches as

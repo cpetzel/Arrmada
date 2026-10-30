@@ -67,8 +67,10 @@ export function episodeCode(season: number, episode: number): string {
 /** The line under a title: 'S02E05 · Episode name', 'Movie · 2026' or 'Digital release · 2026'. */
 export function itemLine(it: CalendarItem): string {
   if (it.type === "movie") {
+    if (it.release === "search") return "Search starts"; // no release that day: cinema + 90 days
     const kind = it.release === "digital" ? "Digital release" : it.release === "physical" ? "Physical release" : "Movie";
-    return it.year ? `${kind} · ${it.year}` : kind;
+    const line = it.year ? `${kind} · ${it.year}` : kind;
+    return it.search_start ? `${line} · search starts` : line;
   }
   // An album: 'Artist · EP'.
   if (it.type === "album") return it.artist ? `${it.artist} · ${it.album_type || "Album"}` : it.subtitle;

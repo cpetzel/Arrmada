@@ -9,6 +9,7 @@ import { useRequestsFeed } from "../lib/useRequestsFeed";
 import { pickTab } from "../lib/useTabParam";
 import { formatSeasons, mediaLabel, requestAge, requestStage } from "../lib/requestStage";
 import { BookFormatBadge } from "../components/BookFormats";
+import { approvedSearch } from "../lib/movieAvailability";
 import { firstWatch } from "../components/brand/servers";
 import { DECLINE_REASON_MAX, ReRequestFlag, decisionLine } from "../components/DeclineReason";
 import { refreshAttention } from "../lib/useAttention";
@@ -149,8 +150,8 @@ export function Requests({ chrome = true }: { chrome?: boolean }) {
     setBusy(`approve:${rq.id}`);
     setRowErrors((e) => { const n = { ...e }; delete n[rq.id]; return n; });
     try {
-      await api.approveRequest(rq.id);
-      toast(`Approved “${rq.title}” — searching now`);
+      const r = await api.approveRequest(rq.id);
+      toast(`Approved “${rq.title}” — ${approvedSearch(r?.approve_grab)}`); // a movie not out yet: "searches from 12 Dec"
       refreshAttention(); // the sidebar's waiting count follows at once
       await load();
     } catch (e) {
