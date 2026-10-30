@@ -11,23 +11,72 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-30
+
 ### Highlights
 
-- **Kobo e-readers get KEPUB downloads**, which give Kobo's own reader real page numbers and
-  reading stats.
-- **Calibre libraries scan properly.** Point the Ebooks folder at a Calibre library and each
-  book is matched from its `metadata.opf`.
-- **Edit a book's details by hand.** The details the catalogue matched are kept underneath,
-  so you can reset any edit.
+- **Shows with `S01`-style season folders, or kept inside a category folder, work fully
+  again** (#56). New episodes go into the folders the show already has, and files v0.3.0
+  and v0.3.1 put in the wrong place are listed on the show's page to put back.
+- **"Released" now waits for the digital or disc release**, not the cinema date, when
+  almost every release is a cam. Films show their cinema, digital and physical release
+  dates, and the Calendar lists the digital and disc releases (#93).
+- **Untagged audio tracks are identified** (#90). Where the local AI (whisper) is set up,
+  Arrmada listens to tracks tagged `und` or nothing, so a Must audio language can judge them.
+- **A global seed goal** (#78) for indexers set to use it, never applied to anything
+  you already have.
+- **The disk guard works per drive** (#70). With two download clients on different drives,
+  only the full drive's downloads pause. It can also measure a different drive, for Unraid
+  cache pools and ZFS.
+- **Manual import suggests the downloads that match**, and can browse or search any
+  downloads or library folder you gave Arrmada.
+- **Imports wait for qBittorrent's move** (#94). A season pack is no longer blocklisted and
+  grabbed again while qBittorrent moves it out of its incomplete folder.
+- **Two shows with the same name no longer get each other's episodes** (#81), and episodes
+  named like `1x8` are read.
+- **A show's search fills from releases you don't avoid first**, so a starved
+  complete-series pack no longer beats good season packs.
+- **Arrmada never throws away a video it doesn't track.** Convert and imports keep it, and
+  a film's page shows **+1 other file** when its folder holds a video Arrmada doesn't use.
+- **Music (Preview) is rebuilt**: editions, a matcher that scores downloads like beets,
+  single-file albums split by their cue sheet, clean tags and naming, new releases followed,
+  and a fast library scan.
+- **Books**: KEPUB downloads for Kobo, Calibre libraries scanned from `metadata.opf`, and a
+  book's details editable by hand.
+- **SABnzbd and Prowlarr on Unraid**, built into the Unraid container and off until you
+  switch them on. There's also a guide to downloading through a VPN with Gluetun (#92).
 - **A round of security fixes** from a full audit, covering sign-in, saved passwords and keys,
-  the bundled download clients and file handling. Some of them change behaviour, so read
-  **Before you update**.
-- **The disk guard can measure a different drive**, for Unraid cache pools and ZFS.
-- **SABnzbd and Prowlarr on Unraid.** The Unraid container now has them built in, off until
-  you switch them on.
+  the bundled download clients and file handling, and Arrmada is built with Go 1.26.10.
+  Some of the fixes change behaviour, so read **Before you update**.
 
 ### Before you update
 
+- **"Released" now waits for the digital or disc release** (the cinema date + 90 days when
+  neither is known). It's the default for new films and requests, and every film already
+  on Released waits too: the scheduled search, RSS, search on add and a request approval's
+  search wait for that day. **Search** on a film doesn't. To keep grabbing at cinema time,
+  set the film's minimum availability to **In cinemas**. See Changed below.
+- **A release that doesn't say which of two same-named shows it's for is no longer grabbed
+  automatically** (#81). This only matters for a show that shares its title with another in
+  your library (Scrubs 2001 and 2026). A year-less release that could be either is skipped
+  by searches, and a grabbed one waits in **Needs you** as **Which show?** instead of
+  importing. See Fixed below. Separately, a library scan no longer guesses which show a
+  year-less folder is when more than one show has its exact title: it goes to review.
+- **A rescan no longer replaces an episode's file with one that isn't named as the show**,
+  and the duplicate check no longer offers the show's own copy for deletion beside it.
+  Episodes an earlier rescan already switched to another file aren't changed by the
+  update: check them and import the right file by hand. See Fixed below.
+- **Untagged audio tracks are listened to in the background** (#90). It's on by default
+  wherever a whisper model is installed, and uses the GPU or CPU whisper uses, one file at a
+  time and never alongside a subtitle. Turn it off under Settings → Subtitles → **Local AI
+  (whisper)** → **Identify untagged audio**. Without whisper it does nothing.
+- **Imports wait for qBittorrent to finish moving a torrent** (#94). With qBittorrent's
+  incomplete-torrents folder on, a finished download imports once it's in its final folder.
+  A download folder Arrmada can't read is held and shown in **Needs you**, never
+  blocklisted or deleted.
+- **An import never replaces a file no record owns.** It lands beside it with the version's
+  label (`Heat (1995) - 1080p BluRay - Default.mkv`), and a conversion whose new name is
+  taken waits under Convert's Problems until you rename or remove that file. See Fixed below.
 - **Refresh & rescan keeps a film's file while it's on disk.** It used to switch a film to
   the biggest video in its folder whenever that was a different file, even an extra
   version's file, a trailer or another film's, so two records could hold one file and
@@ -185,9 +234,9 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 - **Archive extraction has limits.** An archive may unpack to at most 1.5 times its size
   plus 1 GiB, and hold at most 20000 entries. One that goes over is skipped and reported,
   and the rest of the download still unpacks.
-- **Rolling back to v0.3.1 needs `./update.sh --rollback --with-db`.** This version adds a
-  database migration (0334, for book edits), so v0.3.1 refuses to start on the upgraded
-  database. `--with-db` puts back the backup from before the update, which loses anything
+- **Rolling back to v0.3.3 or earlier needs `./update.sh --rollback --with-db`.** This
+  version adds database migrations (0334 to 0351: book edits, the music library, the seed
+  goal, films' other files and more), so v0.3.x refuses to start on the upgraded database. `--with-db` puts back the backup from before the update, which loses anything
   recorded since. On Unraid, restore that backup before changing the Repository tag
   ([Updating](https://github.com/tristenlammi/Arrmada/blob/main/docs/updating.md#rolling-back-by-hand)).
 - **Subtitle sync-check refuses unknown language codes** (`POST /api/v1/subtitles/sync-check`
@@ -688,7 +737,7 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   film's page, posters and episode chips show one decimal (99.6%), and request cards round
   down.
 - **Built with Go 1.26.10**, which fixes a Go security advisory in certificate checking
-  (GO-2026-6809).
+  (GO-2026-6809), and with `golang.org/x/net` 0.62.0 (GO-2026-6860).
 - **With two download clients, the disk guard only pauses the full drive's downloads**
   (#70). A download placed on a drive of its own client's (its folder as Arrmada sees it,
   through the client's path mappings, or SABnzbd's incomplete folder for a job still
@@ -1128,7 +1177,8 @@ The first tagged release (early development).
 - **Safety nets**: hardlinked imports, a recycle bin, nightly backups, a blocklist, and
   `update.sh` with automatic rollback.
 
-[Unreleased]: https://github.com/tristenlammi/Arrmada/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/tristenlammi/Arrmada/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tristenlammi/Arrmada/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/tristenlammi/Arrmada/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tristenlammi/Arrmada/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tristenlammi/Arrmada/compare/v0.3.0...v0.3.1
