@@ -20,7 +20,7 @@ func TestApprovalSearchWaitsForTheDigitalRelease(t *testing.T) {
 		return movies.Movie{TMDBID: tmdb, Title: "film", Status: "Released", MinAvailability: "released",
 			Extra: &movies.MovieExtra{ReleaseDate: day(-20).Date, Releases: &metadata.ReleaseDates{Cinema: day(-20), Digital: day(digital)}}}
 	}
-	s, _, rec := quietFixture(t, film(901, 30), film(902, -1))
+	s, _, rec := quietFixture(t, film(901, 30), film(902, -1), film(903, 12))
 	ctx := context.Background()
 
 	got, _, err := s.Create(ctx, Request{MediaType: "movie", TMDBID: 901, Title: "Not On Digital", RequestedBy: 7}, CreateOptions{AutoApprove: true})
@@ -48,5 +48,21 @@ func TestApprovalSearchWaitsForTheDigitalRelease(t *testing.T) {
 	}
 	if len(rec.specs) != 1 || rec.specs[0].Kind != "movie.search" {
 		t.Fatalf("searches started = %+v, want one movie.search for the film out on digital", rec.specs)
+	}
+
+	// A staff Approve's answer says it waits, and from when: "Approved — searches from 12 Dec".
+	pending, _, err := s.Create(ctx, Request{MediaType: "movie", TMDBID: 903, Title: "Soon", RequestedBy: 7}, CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := s.Approve(ctx, pending.ID, ApproveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := approved.Grab; g == nil || g.Mode != "waiting" || g.From != day(12).Date {
+		t.Fatalf("approval answer = %+v, want waiting from %s", g, day(12).Date)
+	}
+	if len(rec.specs) != 1 {
+		t.Fatalf("the approval searched a film not out yet: %+v", rec.specs)
 	}
 }

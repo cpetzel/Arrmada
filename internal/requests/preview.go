@@ -523,10 +523,12 @@ func (s *Service) AttachPreviews(ctx context.Context, reqs []Request) {
 var ErrPreviewChanged = errors.New("the release preview was updated — look at it again before approving")
 
 // ApproveGrab says what an approval's search will be: the previewed release(s) grabbed
-// ("preview"), or the ordinary search ("search", with why when a grab was asked for).
+// ("preview"), or the ordinary search ("search", with why when a grab was asked for), or
+// none yet ("waiting": a movie not at its minimum availability, searched from From).
 type ApproveGrab struct {
 	Mode   string `json:"mode"`
 	Reason string `json:"reason,omitempty"` // expired | profile | seasons | none | already queued
+	From   string `json:"from,omitempty"`   // waiting: the day searching starts (YYYY-MM-DD), when a date decides it
 }
 
 // previewGrab is the previewed releases an approval grabs. used is set once the approval

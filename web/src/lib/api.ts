@@ -1758,7 +1758,8 @@ export interface MediaRequest {
   /** Staff only, on a request waiting for approval: the release approving it would grab. */
   preview?: RequestPreview;
   /** On an approval's answer: whether it grabs the previewed release or searches. */
-  approve_grab?: { mode: "preview" | "search"; reason?: "expired" | "profile" | "seasons" | "none" | "already queued" };
+  // "waiting": a movie not out yet (its minimum availability), searched from `from`.
+  approve_grab?: { mode: "preview" | "search" | "waiting"; reason?: "expired" | "profile" | "seasons" | "none" | "already queued"; from?: string };
 }
 
 /** A request's release preview (staff only): what a search would grab, checked in advance. */

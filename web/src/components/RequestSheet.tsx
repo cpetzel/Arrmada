@@ -5,6 +5,7 @@ import { qualityApi } from "../lib/qualityApi";
 import { isStaff, useMe } from "../lib/me";
 import { posterThumb } from "../lib/img";
 import { formatSeasons, libraryPath, mediaLabel, requestAge, requestStage } from "../lib/requestStage";
+import { approvedSearch } from "../lib/movieAvailability";
 import { Button, Sheet, StatusChip, useConfirm, useToast } from "../ui";
 import { BookFormatBadge } from "./BookFormats";
 import { SeasonTrim } from "./SeasonTrim";
@@ -129,7 +130,14 @@ export function RequestSheet({ requestId, initial, startDeclining = false, close
     folder === undefined
       ? api.approveRequest(rq.id, body)
       : (await import("../lib/foldersApi")).foldersApi.approve(rq.id, { ...body, folder_id: folder });
-  const approve = () => act("approve", () => approveWith({ quality_profile: profile || undefined, ...(keep ? { seasons: keep } : {}) }), `Approved “${rq.title}”${keep ? ` ${formatSeasons(keep)}` : ""} — searching now`, false);
+  // A movie not out yet is approved but not searched: the answer says from when.
+  const approve = () => {
+    let started = "searching now";
+    return act("approve", async () => {
+      const r = await approveWith({ quality_profile: profile || undefined, ...(keep ? { seasons: keep } : {}) });
+      started = approvedSearch(r?.approve_grab);
+    }, () => `Approved “${rq.title}”${keep ? ` ${formatSeasons(keep)}` : ""} — ${started}`, false);
+  };
   // Grabs the previewed release when it can still be had; the answer says if it searched instead.
   const approveGrab = (g: { checkedAt: number; title: string }) => {
     let msg = `Approved “${rq.title}” — grabbing ${g.title}`;

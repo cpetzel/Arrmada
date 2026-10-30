@@ -831,6 +831,7 @@ func (s *Service) Approve(ctx context.Context, id int64, o ApproveOptions) (Requ
 	// since the approver looked refuses the whole approval rather than half of it.
 	var grab *previewGrab
 	var grabMode *ApproveGrab
+	var waiting *ApproveGrab // a movie not out yet: approved, searched from its day
 	if o.GrabPreview && !o.DeferSearch && req.Status == StatusPending {
 		g, mode, err := s.planPreviewGrab(ctx, req, profile, o.PreviewAt)
 		if err != nil {
@@ -877,7 +878,12 @@ func (s *Service) Approve(ctx context.Context, id int64, o ApproveOptions) (Requ
 		// cams, and the sweep searches it from its digital or disc release. "Approve & grab
 		// this" is the approver's pick of a release, and is taken whatever the date.
 		picked := grab != nil && s.previewer != nil
-		if addErr == nil && m.ID > 0 && !o.DeferSearch && (picked || movies.Available(m, time.Now())) {
+		av := movies.AvailabilityOf(m, time.Now())
+		if addErr == nil && m.ID > 0 && !o.DeferSearch && !picked && !av.Available {
+			// The answer says so, for the approver's toast: "Approved — searches from 12 Dec".
+			waiting = &ApproveGrab{Mode: "waiting", From: av.From}
+		}
+		if addErr == nil && m.ID > 0 && !o.DeferSearch && (picked || av.Available) {
 			mid := m.ID
 			joined := s.background("movie.search", fmt.Sprintf("movie:%d", mid), trigger, req.Title, "movie", mid, 3*time.Minute, s.approvalSearch(grab, "movie", mid, func(c context.Context) (automation.SearchOutcome, error) {
 				return s.coord.SearchMovie(c, mid)
@@ -1027,6 +1033,8 @@ func (s *Service) Approve(ctx context.Context, id int64, o ApproveOptions) (Requ
 		s.kickAttention() // publishUpdated kicks otherwise
 	}
 	switch {
+	case waiting != nil:
+		grabMode = waiting
 	case grab != nil && grab.joined:
 		// A search of the title was already queued or running: that job runs, not the grab.
 		grabMode = &ApproveGrab{Mode: "search", Reason: "already queued"}

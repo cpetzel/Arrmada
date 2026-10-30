@@ -21,6 +21,15 @@ export function availabilityWait(av: MovieAvailability | undefined, now = Date.n
   }
 }
 
+/**
+ * What an approval started, for its toast: "searching now", or for a film not out yet
+ * (approve_grab mode "waiting") "searches from 12 Dec".
+ */
+export function approvedSearch(grab: { mode: string; from?: string } | undefined, now = Date.now()): string {
+  if (grab?.mode !== "waiting") return "searching now";
+  return grab.from ? `searches from ${formatReleaseDay(grab.from, now)}` : "searches once it's out";
+}
+
 /** Discover's line for a film not out yet: "Out on digital 12 Dec — request ahead". null once it's out. */
 export function availabilityAhead(av: MovieAvailability | undefined, now = Date.now()): string | null {
   if (!av || av.available || !av.from) return null;

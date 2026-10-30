@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatReleaseDay } from "./format";
-import { availabilityAhead, availabilityWait } from "./movieAvailability";
+import { approvedSearch, availabilityAhead, availabilityWait } from "./movieAvailability";
 
 const now = new Date(2026, 9, 30).getTime();
 // The day as the viewer's locale writes it ("12 Dec", "Dec 12"): the words are what's tested.
@@ -30,5 +30,14 @@ describe("availabilityAhead", () => {
     expect(availabilityAhead({ available: true, from: "2026-10-01", by: "digital" }, now)).toBeNull();
     expect(availabilityAhead({ available: false }, now)).toBeNull();
     expect(availabilityAhead(undefined, now)).toBeNull();
+  });
+});
+
+describe("approvedSearch", () => {
+  it("says an approval waits for a film not out yet", () => {
+    expect(approvedSearch(undefined, now)).toBe("searching now");
+    expect(approvedSearch({ mode: "search" }, now)).toBe("searching now");
+    expect(approvedSearch({ mode: "waiting", from: "2026-12-12" }, now)).toBe(`searches from ${dec12}`);
+    expect(approvedSearch({ mode: "waiting" }, now)).toBe("searches once it's out");
   });
 });
