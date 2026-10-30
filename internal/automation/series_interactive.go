@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -678,16 +679,20 @@ func (c *Coordinator) RescanSeries(ctx context.Context, seriesID int64) error {
 		return err // a rescan cut short writes nothing
 	}
 
+	// Which file an episode keeps (keptEpisodeFile): its recorded one, unless a file named as
+	// the show — read by its name, not only by the on-disk "1x8" rule (#81) — competes. A
+	// file read on the benefit of the doubt (another show's name in the show's own Season 1,
+	// a name with no title) or only as "1x8" never displaces the file an episode has; it may
+	// only fill an episode that has none.
 	recordedAt := recordedEpisodeFiles(s)
 	dupes := 0
-	for key, files := range byEpisode {
-		best, ok := keptEpisodeFile(files, recordedAt[key])
+	for key, found := range byEpisode {
+		best, files, ok := keptEpisodeFile(found, recordedAt[key], s)
 		if !ok {
-			// Only files read by the on-disk "1x8" rule, beside a recorded file that's still
-			// there: the recorded file stays.
-			dupes += len(files)
-			c.log.Info("series rescan: an episode keeps its recorded file; another copy read only as a library file is left as it is",
-				"series", s.Title, "episode", fmt.Sprintf("S%02dE%02d", key[0], key[1]), "kept", filepath.Base(recordedAt[key]))
+			dupes += len(found)
+			c.log.Info("series rescan: an episode keeps its recorded file; another copy whose name isn't the show's, or read only as a library file, is left as it is",
+				"series", s.Title, "episode", fmt.Sprintf("S%02dE%02d", key[0], key[1]),
+				"kept", filepath.Base(recordedAt[key]), "file", filepath.Base(found[0].Path))
 			continue
 		}
 		if len(files) > 1 {
@@ -1029,53 +1034,67 @@ func (c *Coordinator) SeriesDuplicates(ctx context.Context, seriesID int64) ([]D
 		return nil, ferr
 	}
 
-	// Offered for deletion: only a file the show recorded, or one whose name says it's the
-	// show's — never one a rescan reads on the benefit of the doubt ("Other Show - S01E01"
-	// in the show's own Season 1).
-	recorded := map[string]bool{}
-	for _, sn := range s.Seasons {
-		for _, e := range sn.Episodes {
-			if e.HasFile && e.FilePath != "" {
-				recorded[filepath.Clean(e.FilePath)] = true
-			}
-		}
-	}
+	// Offered for deletion: only what a rescan would weigh as the episode's file
+	// (episodeClaims) — never one it reads on the benefit of the doubt ("Other Show -
+	// S01E01" in the show's own Season 1) or only as "1x8" (#81), nor another show's file
+	// beside the show's own.
+	recorded := recordedEpisodeFiles(s)
 	byEpisode := map[[2]int][]library.FoundVideo{}
+	holds := map[string][][2]int{} // each file's episodes, by cleaned path
 	for _, v := range c.showEpisodeVideos(ctx, s, imp, folder) {
-		if !recorded[filepath.Clean(v.Path)] && !series.FileFitsShow(v.Path, s) {
-			continue
-		}
 		for _, ref := range c.series.ResolveEpisodes(ctx, seriesID, library.ParseEpisodeFile(v.Path)) {
 			key := [2]int{ref.Season, ref.Episode}
 			byEpisode[key] = append(byEpisode[key], v)
+			holds[filepath.Clean(v.Path)] = append(holds[filepath.Clean(v.Path)], key)
 		}
 	}
 
-	recordedAt := recordedEpisodeFiles(s)
+	// A file another episode has recorded (a two-episode file one of whose episodes now has
+	// a better copy) is that episode's only file: never offered for deletion. Nor is a file
+	// that also holds another episode, unless that episode has its own file, recorded and on
+	// disk: "Show - S01E01E02" recorded for E2 alone is still E1's only copy.
+	elsewhere := func(f library.FoundVideo, key [2]int) bool {
+		for k, p := range recorded {
+			if k != key && samePath(f.Path, p) {
+				return true
+			}
+		}
+		for _, k := range holds[filepath.Clean(f.Path)] {
+			if k == key {
+				continue
+			}
+			if p := recorded[k]; p == "" || samePath(p, f.Path) || fileGone(p) {
+				return true
+			}
+		}
+		return false
+	}
+
 	out := make([]DuplicateEpisodeFile, 0)
-	for key, files := range byEpisode {
+	for key, found := range byEpisode {
+		files := episodeClaims(found, recorded[key], s)
 		if len(files) < 2 {
 			continue
 		}
-		best, ok := keptEpisodeFile(files, recordedAt[key])
-		if !ok {
-			continue // the recorded file isn't among them: none of these is the one kept
-		}
-		// Offered for deletion only when both names say it's this episode as releases are
-		// read: never when the only evidence is the on-disk "1x8" reading (#81) of either.
-		if library.ReadOnlyOnDisk(best.Path) {
+		best := keepOf(files)
+		// A copy named as the show is never offered for deletion in favour of the recorded one
+		// when its name isn't the show's ("S01E02.mkv", another show's file an earlier rescan
+		// recorded, a romaji name): which is the episode's real file is for the owner to say.
+		// Nor is that recorded file offered beside the show's own copy. Nor is anything
+		// offered when the only evidence is the on-disk "1x8" reading (#81) of either name.
+		named := func(f library.FoundVideo) bool { return namedAsShow(f, s) }
+		if (!named(best) && slices.ContainsFunc(files, named)) || library.ReadOnlyOnDisk(best.Path) {
 			continue
 		}
 		d := DuplicateEpisodeFile{Season: key[0], Episode: key[1], Keeping: copyOf(best)}
 		for _, f := range files {
-			if f.Path != best.Path && !library.ReadOnlyOnDisk(f.Path) {
+			if f.Path != best.Path && (named(f) || !named(best)) && !elsewhere(f, key) && !library.ReadOnlyOnDisk(f.Path) {
 				d.Extras = append(d.Extras, copyOf(f))
 			}
 		}
-		if len(d.Extras) == 0 {
-			continue
+		if len(d.Extras) > 0 {
+			out = append(out, d)
 		}
-		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Season != out[j].Season {
@@ -1099,36 +1118,95 @@ func recordedEpisodeFiles(s series.Series) map[[2]int]string {
 	return out
 }
 
-// keptEpisodeFile picks which of the files on disk claiming one episode is kept: the best
-// (bestLibraryVideo). A file only the on-disk "1x8" rule reads (library.ReadOnlyOnDisk, #81)
-// only fills an episode nothing else holds: a file read by its name always wins over it —
-// even when it is the episode's recorded file, having filled the episode earlier — and it
-// never takes the place of the recorded file while that is still there. ok is false when
-// every candidate is such a file and the recorded one, still there, isn't among them — the
-// recorded file stays.
-func keptEpisodeFile(files []library.FoundVideo, recorded string) (library.FoundVideo, bool) {
-	var named []library.FoundVideo
-	for _, f := range files {
-		if !library.ReadOnlyOnDisk(f.Path) {
-			named = append(named, f)
+// keptEpisodeFile picks which of the files on disk claiming one episode of show s, recorded
+// as recorded, is kept, and the files that competed for it. The competitors are
+// episodeClaims; with none, the files only fill an episode whose recorded file is gone (or
+// that has none) — the likeliest to be the show's first (fillRank), then the best — and ok
+// is false while the recorded file is still there: it stays.
+func keptEpisodeFile(found []library.FoundVideo, recorded string, s series.Series) (best library.FoundVideo, files []library.FoundVideo, ok bool) {
+	if files = episodeClaims(found, recorded, s); len(files) > 0 {
+		return keepOf(files), files, true
+	}
+	if recorded != "" && !fileGone(recorded) {
+		return library.FoundVideo{}, nil, false
+	}
+	files = found
+	if len(found) > 1 {
+		top := slices.MinFunc(found, func(a, b library.FoundVideo) int { return fillRank(a, s) - fillRank(b, s) })
+		files = slices.DeleteFunc(slices.Clone(found), func(f library.FoundVideo) bool { return fillRank(f, s) != fillRank(top, s) })
+	}
+	return keepOf(files), files, true
+}
+
+// fillRank orders the files that may fill an episode with no file, likeliest the show's
+// first: named as the show (0); named as the show but read only by the on-disk "1x8" rule
+// (1); a name with no title ("S01E03.mkv", 2); named as something else — another show, or
+// the show in a language it has no alias for (3); and last a file named otherwise that only
+// the "1x8" rule reads (4).
+func fillRank(f library.FoundVideo, s series.Series) int {
+	onDisk := library.ReadOnlyOnDisk(f.Path)
+	switch {
+	case series.FileFitsShow(f.Path, s):
+		if onDisk {
+			return 1
+		}
+		return 0
+	case onDisk:
+		return 4
+	case strings.TrimSpace(parser.Parse(filepath.Base(f.Path)).Title) == "":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// episodeClaims is the files of one episode that may be kept as its file or offered as its
+// duplicates: those named as the show (namedAsShow: read by their name, not only by the
+// on-disk "1x8" rule, #81), and the one the episode has recorded — unless that one is read
+// only as "1x8" and a file named as the show is there: a file read by its name always wins
+// over it. The rest — read on the benefit of the doubt ("Other Show - 1x08" in the show's
+// own Season 1, "S01E08.mkv"), only as "1x8", or recorded as another episode ("Other Show -
+// S01E02E03" an earlier rescan gave E03) — never displace the recorded file.
+func episodeClaims(found []library.FoundVideo, recorded string, s series.Series) []library.FoundVideo {
+	var out []library.FoundVideo
+	var rec []library.FoundVideo
+	for _, f := range found {
+		switch {
+		case recorded != "" && samePath(f.Path, recorded):
+			rec = append(rec, f)
+		case namedAsShow(f, s):
+			out = append(out, f)
 		}
 	}
-	if len(named) == 0 && recorded != "" && !fileGone(recorded) {
-		// Only on-disk reads: the recorded file stays, whichever it is.
-		for _, f := range files {
-			if filepath.Clean(f.Path) == filepath.Clean(recorded) {
-				return f, true
-			}
+	for _, f := range rec {
+		if len(out) == 0 || !library.ReadOnlyOnDisk(f.Path) {
+			out = append(out, f)
 		}
-		return library.FoundVideo{}, false
 	}
-	if len(named) > 0 {
-		files = named
-	}
+	return out
+}
+
+// namedAsShow reports whether f's name says it's show s's (series.FileFitsShow) as a release
+// name would: a name read only by the on-disk "1x8" rule (library.ReadOnlyOnDisk) isn't.
+func namedAsShow(f library.FoundVideo, s series.Series) bool {
+	return series.FileFitsShow(f.Path, s) && !library.ReadOnlyOnDisk(f.Path)
+}
+
+// keepOf is the file kept of files (one or more): the best (bestLibraryVideo).
+func keepOf(files []library.FoundVideo) library.FoundVideo {
 	if len(files) == 1 {
-		return files[0], true
+		return files[0]
 	}
-	return bestLibraryVideo(files), true
+	return bestLibraryVideo(files)
+}
+
+// samePath reports whether a and b are the same file: equal once cleaned, or differing only
+// in letter case and one directory entry on disk (library.SamePlace) — as on Windows, macOS
+// or an SMB share, which ignore case. On a disk that doesn't, two such names are two files
+// (or one isn't there), so they stay different. Only a case-only difference touches the disk.
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	return a == b || (strings.EqualFold(a, b) && library.SamePlace(a, b))
 }
 
 func copyOf(v library.FoundVideo) DuplicateCopy {

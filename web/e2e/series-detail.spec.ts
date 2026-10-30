@@ -125,10 +125,15 @@ test.describe("desktop seasons", () => {
     const e9 = cards.nth(8).getByTestId("audio-langs");
     await expect(e9).toHaveAttribute("data-fit", "partial");
     await expect(e9).toHaveAttribute("aria-label", /Missing a preferred language: No English audio/);
-    await expect(cards.nth(9).locator("[title^='German (detected) — ']")).toHaveText("DE");
-    // The season line: languages over its analysed files, and the one that misses.
+    // A miss that rests on a detection has no colour: no fit, no mark, still marked detected.
+    const e10 = cards.nth(9).getByTestId("audio-langs");
+    await expect(e10.locator("[title^='French (detected) — ']")).toHaveText("FR");
+    await expect(e10).not.toHaveAttribute("data-fit");
+    await expect(e10).toHaveAttribute("aria-label", "Audio: English, French (detected)");
+    // The season line: languages over its analysed files, and the one that misses (the
+    // detected-only miss isn't one).
     const summary = page.getByTestId("season-audio");
-    await expect(summary).toContainText("DE 10/10 · EN 9/10");
+    await expect(summary).toContainText("EN 9/10 · DE 9/10 · FR 1/10");
     await expect(summary).toHaveAttribute("aria-label", /1 miss a preferred language/);
     if (process.env.LANG_SHOTS) await page.getByRole("region", { name: "Season 1" }).screenshot({ path: `${process.env.LANG_SHOTS}/series-episodes.png` });
 

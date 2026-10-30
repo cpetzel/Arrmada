@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tristenlammi/arrmada/internal/library"
+	"github.com/tristenlammi/arrmada/internal/series"
 )
 
 // #81: a file only the on-disk "1x8" rule reads fills an episode nothing else holds; it never
@@ -27,6 +28,7 @@ func TestKeptEpisodeFileNeverPrefersAnOnDiskOnlyRead(t *testing.T) {
 	other := mk("Dupe Show - S01E08 - Other [720p].mkv", 50)
 	newer := mk("Dupe Show - 1x8 - Title [1080p].mkv", 900)
 	newer2 := mk("Dupe Show - 1x8 - Title [2160p].mkv", 1900)
+	show := series.Series{Title: "Dupe Show", Year: 2012}
 	if !library.ReadOnlyOnDisk(newer.Path) || library.ReadOnlyOnDisk(old.Path) {
 		t.Fatal("ReadOnlyOnDisk misjudges the fixture")
 	}
@@ -48,7 +50,7 @@ func TestKeptEpisodeFileNeverPrefersAnOnDiskOnlyRead(t *testing.T) {
 		// Only on-disk reads, one of them recorded: the recorded one stays.
 		{"the recorded 1x8 copy beside another 1x8 copy", []library.FoundVideo{newer2, newer}, newer.Path, newer.Path, true},
 	} {
-		got, ok := keptEpisodeFile(c.files, c.recorded)
+		got, _, ok := keptEpisodeFile(c.files, c.recorded, show)
 		if ok != c.ok || (ok && got.Path != c.want) {
 			t.Errorf("%s: kept %q ok=%v, want %q ok=%v", c.name, filepath.Base(got.Path), ok, filepath.Base(c.want), c.ok)
 		}

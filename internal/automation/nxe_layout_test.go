@@ -33,6 +33,9 @@ import (
 // on all three. v033 and main are what those two record (NXE_LAYOUT_PRINT=1 prints a run's
 // readings instead of checking them); want is the fix. The only differences are the files
 // the #81 rule reads that nothing read before, filling episodes nothing else holds.
+//
+// want is also what main reads at 6554827c (#81 merged), and what it reads with the rescan
+// fix for files not named as the show merged in: no reading here changes with it.
 type nxeLayoutCase struct {
 	name    string
 	title   string

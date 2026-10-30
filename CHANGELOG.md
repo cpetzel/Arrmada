@@ -220,12 +220,13 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   and tracks tagged `zxx` (no spoken language). A sample that can't be listened to means
   the track is tried again on a later pass.
   - What it hears is kept in Arrmada's database, never written into the file. The badges
-    show it as detected (a dashed chip, "English (detected)") and are coloured by it.
+    show it as detected (a dashed chip, "English (detected)").
   - **A detected language never makes Arrmada replace a file.** It counts when it's a
     language your profile asks for: a file whose untagged track is heard as your **Must**
-    language fits. A language it only seems to lack stays unknown, as before: it's never
-    upgraded, re-grabbed or counted in the save dialog for it. The badge still shows the
-    miss, and says it rests on a detection.
+    language fits, and its badge is green. A language it only seems to lack stays unknown,
+    as before: it's never upgraded, re-grabbed or counted in the save dialog for it, and
+    its badge has no colour (as for an untagged track nobody has heard) rather than red or
+    orange, nor is it counted among the season's misses.
   - It runs one file at a time, only while no subtitle is being made, at idle priority, and
     newly imported files go first. It never runs whisper alongside a subtitle: when one
     is waiting, it stops after the current sample and finishes the file later. Switch it
@@ -545,6 +546,31 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
   an episode's recorded file or another copy read by its name, and stays on disk listed as
   a duplicate instead. Release names (searches, grabs, download imports) and **Manual
   import** read exactly as before.
+- **A rescan no longer swaps an episode's file for one that isn't named as the show.**
+  Another show's episode dropped in a show's season folder (`Beta - 1x08 - Other.mkv` in
+  `Show (2010)/Season 1`), or a file with no title in its name (`S01E08.mkv`), could take
+  the place of the episode's recorded file on **Refresh & rescan** when it was the bigger
+  or sharper copy, and the duplicate check then offered the show's real file for deletion.
+  Now:
+  - A file whose name isn't the show's never replaces the file an episode has. It still
+    fills an episode with no file in the show's own `Title (Year)/Season N` folder, as
+    before, so episodes named in another language or in romaji keep being found; when an
+    import later brings the episode's file, the filled one goes to the recycle bin like any
+    replaced file. When several files could fill it, the one named as the show is taken
+    first, then one with no title, then one named otherwise, and only then the better copy.
+  - A copy of the show's own episode whose name doesn't match the show (a romaji title the
+    show has no alias for, a rip with no title) is no longer swapped in on rescan for being
+    the better copy, and isn't listed as a duplicate either. Import it by hand, or add the
+    name under the show's **Alternate titles** and rescan.
+  - The duplicate check never offers the show's own copy for deletion beside a file named
+    otherwise, and never offers a file named otherwise. It never offers a two-episode file
+    while it is the other episode's only copy: when that episode has no file recorded, or
+    its recorded file is gone, deleting it would have removed that episode too (this
+    happened in v0.3.3 as well).
+  - A file recorded under a path that differs only in letter case is still the episode's
+    recorded file on a disk that ignores case.
+  - Episodes an earlier rescan already switched to another show's file are left as they
+    are: check the duplicate list and the episode's file, and import the right one by hand.
 - **A season pack is no longer blocklisted and grabbed again while qBittorrent moves it**
   (reported in #94 by cpetzel). With qBittorrent's **Default Download Path (incomplete
   torrents)** on, a finished torrent is moved from that folder to its save folder, and

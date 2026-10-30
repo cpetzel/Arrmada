@@ -35,12 +35,13 @@ const missing = { has_file: false, file_path: undefined, size_bytes: 0 } as cons
 
 // Season 1's files have been analysed (issue #12's badges) under a profile that requires
 // German and prefers the original English: E1–E8 carry both, E9 only German (orange), E10
-// English with an untagged track the AI heard as German. Season 2 isn't analysed yet.
+// English with an untagged track the AI heard as French — a German miss that rests on a
+// detection, so the server sends no fit (no colour). Season 2 isn't analysed yet.
 const EN: AudioLang = { code: "en", name: "English" };
 const DE: AudioLang = { code: "de", name: "German" };
 function s1Audio(n: number): Partial<Episode> {
   if (n === 9) return { audio_langs: [DE], audio_lang_fit: { status: "partial", note: "No English audio, which this profile prefers" } };
-  if (n === 10) return { audio_langs: [EN, { ...DE, detected: true }], audio_lang_fit: { status: "good", note: "Has English and German audio, as this profile asks" } };
+  if (n === 10) return { audio_langs: [EN, { code: "fr", name: "French", detected: true }] };
   return { audio_langs: [EN, DE], audio_lang_fit: { status: "good", note: "Has English and German audio, as this profile asks" } };
 }
 
