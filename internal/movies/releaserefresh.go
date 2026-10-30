@@ -3,14 +3,15 @@ package movies
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/tristenlammi/arrmada/internal/metadata"
 )
 
 // RefreshPendingReleases reads again the release dates of the films still waiting for
-// their minimum availability (releaseWaiting), one every `every`, at most limit a run, and
-// returns how many it read. A film is requested before TMDB knows its digital date; without
+// their minimum availability (releaseWaiting), one every `every`, at most limit a run
+// (nearest availability day first, no day last), and returns how many it read. A film is requested before TMDB knows its digital date; without
 // this its stored dates never change, and it would wait for cinema + 90 days even when it
 // came out on digital at day 30. Only $.releases is written (SetReleases), so nothing
 // else of the film moves. It stops when TMDB isn't configured or ctx ends; a film TMDB
@@ -28,15 +29,32 @@ func (s *Service) RefreshPendingReleases(ctx context.Context, every time.Duratio
 	}
 	region, _ := s.releaseRegion()
 	now := time.Now()
-	read := 0
+	// The films nearest their day first (the ones a newly known digital date can bring
+	// forward soonest), those with no date last, so a long wait list never starves them.
+	type waitingFilm struct {
+		m    Movie
+		from string
+	}
+	var queue []waitingFilm
 	for _, m := range all {
-		if read >= limit {
-			break
+		if releaseWaiting(m, now) {
+			queue = append(queue, waitingFilm{m, AvailabilityOf(m, now).From})
 		}
-		if !releaseWaiting(m, now) {
-			continue
+	}
+	sort.SliceStable(queue, func(i, j int) bool {
+		a, b := queue[i].from, queue[j].from
+		if (a == "") != (b == "") {
+			return b == ""
 		}
-		if read > 0 {
+		return a < b
+	})
+	if len(queue) > limit {
+		queue = queue[:limit]
+	}
+	read := 0
+	for i, w := range queue {
+		m := w.m
+		if i > 0 {
 			t := time.NewTimer(every)
 			select {
 			case <-ctx.Done():

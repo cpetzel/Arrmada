@@ -3,6 +3,7 @@ package movies
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,14 +12,21 @@ import (
 )
 
 // digitalMeta answers GetMovie with a digital release yesterday, counting calls.
-type digitalMeta struct{ calls atomic.Int32 }
+type digitalMeta struct {
+	calls atomic.Int32
+	mu    sync.Mutex
+	asked []int // TMDB ids, in order
+}
 
 func (f *digitalMeta) Available() bool { return true }
 func (f *digitalMeta) SearchMovie(context.Context, string) ([]metadata.MovieResult, error) {
 	return nil, nil
 }
-func (f *digitalMeta) GetMovie(context.Context, int) (*metadata.MovieDetails, error) {
+func (f *digitalMeta) GetMovie(_ context.Context, id int) (*metadata.MovieDetails, error) {
 	f.calls.Add(1)
+	f.mu.Lock()
+	f.asked = append(f.asked, id)
+	f.mu.Unlock()
 	return &metadata.MovieDetails{OriginalTitle: "changed", Releases: &metadata.ReleaseDates{
 		Digital: &metadata.DatedRelease{Date: time.Now().AddDate(0, 0, -1).Format(time.DateOnly), Country: "US"}}}, nil
 }
@@ -76,5 +84,33 @@ func TestRefreshPendingReleases(t *testing.T) {
 	// Out now: the next run asks TMDB nothing.
 	if n, err := s.RefreshPendingReleases(ctx, time.Millisecond, 10); err != nil || n != 0 || meta.calls.Load() != 1 {
 		t.Fatalf("second run read %d (%v), %d calls", n, err, meta.calls.Load())
+	}
+}
+
+// With more films waiting than a run reads, the ones nearest their day go first and the
+// ones with no date at all last, whatever order the library lists them in.
+func TestRefreshPendingReleasesNearestFirst(t *testing.T) {
+	meta := &digitalMeta{}
+	s := titlesService(t, meta)
+	ctx := context.Background()
+	day := func(offset int) string { return time.Now().AddDate(0, 0, offset).Format(time.DateOnly) }
+	for _, m := range []Movie{
+		{TMDBID: 1, Title: "NoDate", Status: "In Production"},
+		{TMDBID: 2, Title: "Far", Extra: &MovieExtra{ReleaseDate: day(-1), Releases: &metadata.ReleaseDates{}}},   // day 89
+		{TMDBID: 3, Title: "Near", Extra: &MovieExtra{ReleaseDate: day(-80), Releases: &metadata.ReleaseDates{}}}, // day 10
+		{TMDBID: 4, Title: "Middle", Extra: &MovieExtra{ReleaseDate: day(-40), Releases: &metadata.ReleaseDates{}}},
+	} {
+		m.Monitored, m.MinAvailability = true, "released"
+		if _, err := s.repo.Create(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.RefreshPendingReleases(ctx, time.Millisecond, 3); err != nil {
+		t.Fatal(err)
+	}
+	meta.mu.Lock()
+	defer meta.mu.Unlock()
+	if want := []int{3, 4, 2}; len(meta.asked) != len(want) || meta.asked[0] != 3 || meta.asked[1] != 4 || meta.asked[2] != 2 {
+		t.Fatalf("asked TMDB about %v, want %v (nearest first, no date left for later)", meta.asked, want)
 	}
 }

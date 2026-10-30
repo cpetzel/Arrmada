@@ -478,7 +478,8 @@ Arrmada is pre-1.0 (v0.x), so a minor version can change behaviour. The format f
 ### Changed
 
 - **"Released" now waits for the digital or disc release** (the cinema date + 90 days when
-  neither is known); pick **In cinemas** for cinema-time grabs. Before, "Released" counted
+  neither is known); pick **In cinemas** for cinema-time grabs. The earliest such release in
+  any country counts, so a film out on US digital isn't held back by a later local date. Before, "Released" counted
   from the cinema release, when almost every release is a cam. The scheduled search, RSS,
   search on add and a request approval's search all wait; **Search** on a film doesn't. The
   film's page says what it waits for ("Waiting for the digital release on 12 Dec"), and
