@@ -872,7 +872,12 @@ func (s *Service) Approve(ctx context.Context, id int64, o ApproveOptions) (Requ
 				s.movies.AddEvent(ctx, m.ID, "monitored", "Monitored by request from "+requesterName(req))
 			}
 		}
-		if addErr == nil && m.ID > 0 && !o.DeferSearch {
+		// The approval's own search is automatic, so it waits for the film's minimum
+		// availability as the scheduled search does: a film only in cinemas has little but
+		// cams, and the sweep searches it from its digital or disc release. "Approve & grab
+		// this" is the approver's pick of a release, and is taken whatever the date.
+		picked := grab != nil && s.previewer != nil
+		if addErr == nil && m.ID > 0 && !o.DeferSearch && (picked || movies.Available(m, time.Now())) {
 			mid := m.ID
 			joined := s.background("movie.search", fmt.Sprintf("movie:%d", mid), trigger, req.Title, "movie", mid, 3*time.Minute, s.approvalSearch(grab, "movie", mid, func(c context.Context) (automation.SearchOutcome, error) {
 				return s.coord.SearchMovie(c, mid)
@@ -1250,6 +1255,7 @@ func (s *Service) enrichAvailability(ctx context.Context, reqs []Request) {
 		lastSearch      string // when the sweep last looked, as stored
 		nextCheck       string // books: when the ladder looks again (RFC3339)
 		shown           string // a movie's or show's title as the library shows it
+		outOn           string // movies: the day a film not out yet is searched from (YYYY-MM-DD)
 	}
 	// Only these requests' media: a query per media type (per few hundred requests), not
 	// the whole library.
@@ -1281,10 +1287,18 @@ func (s *Service) enrichAvailability(ctx context.Context, reqs []Request) {
 		}
 		// The sweep's backoff for just these films; a failure only loses "last checked".
 		stamps, _ := s.movies.SearchStatesFor(ctx, movieLibIDs(ms))
+		now := time.Now()
 		for _, m := range ms {
 			st := stamps[m.ID]
-			movHave[m.TMDBID] = lib{id: m.ID, have: m.HasFile, released: m.Status == "" || m.Status == "Released",
+			// Out means at its minimum availability, the rule the searches go by: a film
+			// in cinemas but not yet out at home is "Out 12 Dec" on its card.
+			av := movies.AvailabilityOf(m, now)
+			l := lib{id: m.ID, have: m.HasFile, released: av.Available,
 				misses: st.Misses, lastSearch: st.LastAt, shown: m.Shown()}
+			if !av.Available {
+				l.outOn = av.From
+			}
+			movHave[m.TMDBID] = l
 		}
 	}
 	serHave := map[int]lib{}
@@ -1357,6 +1371,7 @@ func (s *Service) enrichAvailability(ctx context.Context, reqs []Request) {
 		switch reqs[i].MediaType {
 		case "movie":
 			l = movHave[reqs[i].TMDBID]
+			reqs[i].releaseDate = l.outOn
 		case "series":
 			l = serHave[reqs[i].TMDBID]
 		case "book":

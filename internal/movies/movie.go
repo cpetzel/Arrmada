@@ -94,7 +94,8 @@ type Acquisition struct {
 	ScannedIn bool `json:"scanned_in"`
 	// Available: past the minimum-availability threshold, so a missing file is searched for.
 	Available     bool   `json:"available"`
-	AvailableFrom string `json:"available_from,omitempty"` // release date, when known
+	AvailableFrom string `json:"available_from,omitempty"` // the day it becomes available, when a date decides it
+	AvailableBy   string `json:"available_by,omitempty"`   // what that day is: digital | physical | cinema | release (AvailableBy*)
 	// Downloading: a grab is in flight (a pending grab row, or a matching queue item).
 	Downloading      bool    `json:"downloading"`
 	DownloadTitle    string  `json:"download_title,omitempty"`
@@ -237,9 +238,9 @@ type MovieExtra struct {
 	DisplayNames *displaytitle.Names `json:"display_names,omitempty"`
 	// Releases are the cinema, digital and physical release dates, read for the discovery
 	// region when the metadata was (metadata.ReleaseDates): shown on the film's page and,
-	// digital and physical, on the Calendar. Display only — availability goes by
-	// ReleaseDate. Nil on records stored before they were kept, which the titles backfill
-	// fills in; read and empty when TMDB has none.
+	// digital and physical, on the Calendar. Minimum availability "released" waits for the
+	// digital or disc date (availability.go). Nil on records stored before they were kept,
+	// which the titles backfill fills in; read and empty when TMDB has none.
 	Releases *metadata.ReleaseDates `json:"releases,omitempty"`
 }
 

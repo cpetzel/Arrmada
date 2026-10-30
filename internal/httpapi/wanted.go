@@ -90,7 +90,7 @@ type wantedRow struct {
 	LastSearch *automation.AttemptSummary `json:"last_search,omitempty"`
 
 	AvailableAt string `json:"available_at,omitempty"` // Upcoming: release or air date
-	NextLabel   string `json:"next_label,omitempty"`   // Upcoming series: "S02E13"
+	NextLabel   string `json:"next_label,omitempty"`   // Upcoming series: "S02E13"; a movie: "Digital" or "Disc" (movieAvailableAt)
 }
 
 // wantedLists is the Wanted view: titles the sweeps search for, and titles not out yet.
@@ -290,11 +290,9 @@ func (b *wantedBuild) movies() (searching, upcoming []wantedRow) {
 		}
 		row := wantedRow{MediaType: automation.AttemptMovie, ID: m.ID, MovieID: m.ID, Title: m.Shown(), Year: m.Year,
 			PosterURL: m.PosterURL, QualityProfile: b.profile(m.QualityProfile), State: wantedSearching}
-		if !b.a.deps.Movies.IsAvailable(m) {
+		if av := b.a.deps.Movies.Availability(m); !av.Available {
 			row.State = wantedNotReleased
-			if m.Extra != nil && m.Extra.ReleaseDate != "" {
-				row.AvailableAt = m.Extra.ReleaseDate
-			}
+			row.AvailableAt, row.NextLabel = movieAvailableAt(av)
 			upcoming = append(upcoming, row)
 			continue
 		}
@@ -639,4 +637,17 @@ func (a *api) handleWantedSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.accepted(w, jobID, existing, map[string]any{"status": "searching", "started_at_ms": started})
+}
+
+// movieAvailableAt is an Upcoming movie row's day and label: the day its minimum
+// availability is reached (movies.AvailabilityOf), labelled when that is its digital or
+// disc release ("Digital · 12 Dec").
+func movieAvailableAt(av movies.Availability) (at, label string) {
+	switch av.By {
+	case movies.AvailableByDigital:
+		label = "Digital"
+	case movies.AvailableByPhysical:
+		label = "Disc"
+	}
+	return av.From, label
 }

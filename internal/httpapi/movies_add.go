@@ -117,7 +117,7 @@ func (a *api) handleBulkAddMovies(w http.ResponseWriter, r *http.Request) {
 		default:
 			res.Status, res.ID, res.Title = "added", m.ID, m.Title
 			added++
-			if m.Monitored && search {
+			if m.Monitored && search && a.deps.Movies.IsAvailable(m) { // waits as a single add does (handleAddMovie)
 				if _, qerr := a.enqueueMovie(r, m.ID, triggered(automation.TriggerAdd, a.movieSearchJob(m.ID))); qerr == nil {
 					res.Queued = true
 				}

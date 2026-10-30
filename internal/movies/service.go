@@ -1785,33 +1785,14 @@ func (s *Service) AddEvent(ctx context.Context, id int64, event, detail string) 
 }
 
 // IsAvailable reports whether a movie has reached its minimum-availability
-// threshold and should therefore be searched.
+// threshold and should therefore be searched (AvailabilityOf).
 func (s *Service) IsAvailable(m Movie) bool {
-	return available(m, time.Now())
+	return Available(m, time.Now())
 }
 
-func available(m Movie, now time.Time) bool {
-	switch m.MinAvailability {
-	case "announced":
-		return true
-	case "inCinemas", "released":
-		// A known release date is the source of truth. If it's still in the future the movie
-		// isn't out yet — don't search — even when TMDB's status says "Released" (it flips early
-		// on some entries, and bad/duplicate entries can be flat-out wrong). This is what stops a
-		// months-away film from being searched (and grabbing a wrong-title release) prematurely.
-		if m.Extra != nil && m.Extra.ReleaseDate != "" {
-			if t, err := time.Parse("2006-01-02", m.Extra.ReleaseDate); err == nil {
-				return !now.Before(t)
-			}
-		}
-		if m.Status == "Released" {
-			return true
-		}
-		// No parseable date and not marked Released — treat "released" strictly, cinemas leniently.
-		return m.MinAvailability == "inCinemas"
-	default:
-		return true
-	}
+// Availability is m's availability now: whether it is searched, and from when.
+func (s *Service) Availability(m Movie) Availability {
+	return AvailabilityOf(m, time.Now())
 }
 
 // Refresh re-pulls metadata from the provider and reconciles the movie's file

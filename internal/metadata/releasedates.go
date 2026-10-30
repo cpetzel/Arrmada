@@ -3,9 +3,8 @@ package metadata
 import "strings"
 
 // ReleaseDates are when a film reached cinemas, digital stores and disc, as Radarr and
-// Overseerr show them. Display only: nothing searches or grabs by them (minimum
-// availability still goes by the film's main release date). A kind TMDB has no date for
-// is nil.
+// Overseerr show them. Minimum availability "released" waits for the earlier of the
+// digital and physical dates (movies.AvailabilityFor). A kind TMDB has no date for is nil.
 type ReleaseDates struct {
 	Cinema   *DatedRelease `json:"cinema,omitempty"`
 	Digital  *DatedRelease `json:"digital,omitempty"`

@@ -85,6 +85,7 @@ type Tracking struct {
 	// ReleaseDate is, for a book that isn't out yet (Note "Not out yet"), the day it comes
 	// out (YYYY-MM-DD): a calendar day, sent as a date so every viewer's page shows the
 	// same day ("Out 12 Mar") whatever its time zone. NextCheckAt is then that day's start.
+	// For a movie, the day it reaches its minimum availability (movies.AvailabilityOf).
 	ReleaseDate string `json:"release_date,omitempty"`
 	// While it's searching: when it was last checked (RFC3339, UTC — the later of the
 	// sweep's own stamp and the newest stored search), how many searches in a row have
@@ -378,9 +379,14 @@ func track(rq *Request, acqs []automation.Acquisition, byHash map[string]*downlo
 		switch {
 		case !rq.released:
 			t.Note = "Not out yet"
-			if rq.MediaType == "book" {
+			switch rq.MediaType {
+			case "book":
 				// The release day is when it's first searched: "Out 12 Mar — we'll grab it then".
 				t.NextCheckAt, t.ReleaseDate = rq.nextCheckAt, rq.releaseDate
+			case "movie":
+				// The day it reaches its minimum availability (its digital or disc release,
+				// for "Released"), when a date decides it: the same "Out 12 Dec" line.
+				t.ReleaseDate = rq.releaseDate
 			}
 		case rq.MediaType == "book" && rq.searchMisses > 0:
 			// Searched and not found, as opposed to just added: say so, and when the

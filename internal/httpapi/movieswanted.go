@@ -140,9 +140,7 @@ func (a *api) missingVersionRows(ctx context.Context, queueKnown bool) ([]movieW
 		switch {
 		case !a.deps.Movies.IsAvailable(m):
 			row.State = wantedNotReleased
-			if m.Extra != nil {
-				row.AvailableAt = m.Extra.ReleaseDate
-			}
+			row.AvailableAt, row.NextLabel = movieAvailableAt(a.deps.Movies.Availability(m))
 		case !queueKnown:
 			row.State = wantedUnknown
 		case downloading:
