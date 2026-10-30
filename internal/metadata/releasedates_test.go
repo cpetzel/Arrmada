@@ -91,6 +91,36 @@ func TestPickReleaseDatesTieGoesToFirstCode(t *testing.T) {
 	}
 }
 
+// A GB admin's film reaches GB digital stores months after US ones: GB's date is shown,
+// and the earliest anywhere (the US's) is kept beside it for availability.
+func TestEarliestHomeReleaseAnywhere(t *testing.T) {
+	const sample = `{"id": 1, "title": "Late Here", "release_date": "2026-03-01",
+	  "release_dates": {"results": [
+	    {"iso_3166_1": "GB", "release_dates": [
+	      {"type": 3, "release_date": "2026-03-01T00:00:00.000Z"},
+	      {"type": 4, "release_date": "2026-09-17T00:00:00.000Z"},
+	      {"type": 5, "release_date": "2026-10-01T00:00:00.000Z"}]},
+	    {"iso_3166_1": "US", "release_dates": [
+	      {"type": 3, "release_date": "2026-03-01T00:00:00.000Z"},
+	      {"type": 4, "release_date": "2026-03-31T00:00:00.000Z"}]},
+	    {"iso_3166_1": "DE", "release_dates": [
+	      {"type": 5, "release_date": "2026-06-20T00:00:00.000Z"}]}
+	  ]}}`
+	m, err := parseTMDBMovieIn([]byte(sample), "GB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := m.Releases
+	if r.Digital == nil || r.Digital.Date != "2026-09-17" || r.Digital.Country != "GB" ||
+		r.Physical == nil || r.Physical.Date != "2026-10-01" || r.Physical.Country != "GB" {
+		t.Errorf("shown dates = %+v / %+v, want GB's own", r.Digital, r.Physical)
+	}
+	if r.EarliestDigital == nil || *r.EarliestDigital != (DatedRelease{Date: "2026-03-31", Country: "US"}) ||
+		r.EarliestPhysical == nil || *r.EarliestPhysical != (DatedRelease{Date: "2026-06-20", Country: "DE"}) {
+		t.Errorf("earliest anywhere = %+v / %+v, want US digital and DE disc", r.EarliestDigital, r.EarliestPhysical)
+	}
+}
+
 // A film TMDB has no release dates for still answers, with every kind empty.
 func TestPickReleaseDatesNone(t *testing.T) {
 	m, err := parseTMDBMovie([]byte(tmdbMovieSample))

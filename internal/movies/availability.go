@@ -66,7 +66,8 @@ func Available(m Movie, now time.Time) bool { return AvailabilityOf(m, now).Avai
 //   - "announced" (and an unknown value): always.
 //   - "inCinemas": from the main release date; with none, when TMDB says Released or
 //     doesn't know (lenient: unchanged from before).
-//   - "released": from the earlier of the digital and disc dates. With neither, the cinema
+//   - "released": from the earliest digital or disc date in any country (a film out on
+//     digital anywhere is on the web everywhere). With neither, the cinema
 //     date + HomeAfterCinema days. The cinema date is the earlier of the region's cinema
 //     date and the main release date, and a home date more than a year after it is a
 //     re-release: the film is out a year after it. With no date at all, when TMDB says
@@ -93,7 +94,12 @@ func releasedAvailability(status, mainDate string, rel *metadata.ReleaseDates, n
 		for _, k := range []struct {
 			r    *metadata.DatedRelease
 			name string
-		}{{rel.Digital, AvailableByDigital}, {rel.Physical, AvailableByPhysical}} {
+		}{
+			// The earliest anywhere decides (a film on US digital is on the web everywhere);
+			// the region's own dates count too, for dates stored before those were kept.
+			{rel.Digital, AvailableByDigital}, {rel.Physical, AvailableByPhysical},
+			{rel.EarliestDigital, AvailableByDigital}, {rel.EarliestPhysical, AvailableByPhysical},
+		} {
 			if k.r == nil {
 				continue
 			}
