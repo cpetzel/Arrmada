@@ -306,7 +306,8 @@ func TestIdentifyWorkerWaitsForTheQueue(t *testing.T) {
 
 // What the pass hears reaches the language rules the way Convert reads it: an untagged
 // file nobody listened to is unknown to a Must (no verdict, no upgrade); once heard as
-// English it's known to lack a German Must, and meets an English one.
+// English it meets an English Must, and a German Must it misses on a detection alone
+// stays unknown (no colour) rather than bad.
 func TestIdentifiedLanguageReachesTheRules(t *testing.T) {
 	ai := &listeningAI{fakeAI: &fakeAI{avail: true, transcribe: true}, heard: map[int]DetectedLang{0: {"en", 0.95}}}
 	s, video, _ := identifyFixture(t, func() *mediaInfo {
@@ -330,8 +331,8 @@ func TestIdentifiedLanguageReachesTheRules(t *testing.T) {
 	}
 	s.identifyFile(ctx, s.identifier(ctx), identifyItem{video, "Film"})
 	heard := s.DetectedAudio(ctx, map[string]int64{video: size})[video]
-	if got := fit("de", heard); got != "bad" {
-		t.Errorf("heard English, German Must: %s, want bad", got)
+	if got := fit("de", heard); got != "unknown" {
+		t.Errorf("heard English, German Must: %s, want unknown (a detection-only miss shows no colour)", got)
 	}
 	if got := fit("en", heard); got != "good" {
 		t.Errorf("heard English, English Must: %s, want good", got)
