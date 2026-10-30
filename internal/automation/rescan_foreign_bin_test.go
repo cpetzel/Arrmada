@@ -71,3 +71,31 @@ func TestForeignFilledEpisodeIsRecycledWhenAnImportReplacesIt(t *testing.T) {
 		t.Errorf("E1's file: %v", err)
 	}
 }
+
+// The recorded check sees a path spelt in another case as the recorded file only where the
+// disk says both spellings are one file (Windows, macOS, an SMB share); on a disk that
+// keeps case, two such names are two files.
+func TestSamePathCaseOnlyWhereTheDiskIgnoresCase(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "Show (2010)", "Season 1", "Show - S01E02.mkv")
+	sparseFile(t, p, 1<<20)
+	other := filepath.Join(dir, "Show (2010)", "Season 1", "SHOW - S01E02.mkv")
+	if !samePath(p, filepath.Join(dir, "Show (2010)", "Season 1", ".", "Show - S01E02.mkv")) {
+		t.Error("the same path cleaned differently isn't the same file")
+	}
+	if samePath(p, filepath.Join(dir, "Show (2010)", "Season 1", "Show - S01E03.mkv")) {
+		t.Error("another name is the same file")
+	}
+	_, err := os.Stat(other)
+	ignoresCase := err == nil
+	if got := samePath(p, other); got != ignoresCase {
+		t.Errorf("case-only spelling: same = %v, want %v (disk ignores case: %v)", got, ignoresCase, ignoresCase)
+	}
+	if !ignoresCase {
+		// Two files whose names differ only in case are two files.
+		sparseFile(t, other, 1<<20)
+		if samePath(p, other) {
+			t.Error("two files differing only in case are one")
+		}
+	}
+}

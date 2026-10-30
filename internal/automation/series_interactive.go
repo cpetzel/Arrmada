@@ -1165,8 +1165,14 @@ func keepOf(files []library.FoundVideo) library.FoundVideo {
 	return bestLibraryVideo(files)
 }
 
-// samePath reports whether a and b are the same file: equal once cleaned.
-func samePath(a, b string) bool { return filepath.Clean(a) == filepath.Clean(b) }
+// samePath reports whether a and b are the same file: equal once cleaned, or differing only
+// in letter case and one directory entry on disk (library.SamePlace) — as on Windows, macOS
+// or an SMB share, which ignore case. On a disk that doesn't, two such names are two files
+// (or one isn't there), so they stay different. Only a case-only difference touches the disk.
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	return a == b || (strings.EqualFold(a, b) && library.SamePlace(a, b))
+}
 
 func copyOf(v library.FoundVideo) DuplicateCopy {
 	return DuplicateCopy{Path: v.Path, Filename: filepath.Base(v.Path), SizeBytes: v.Size}
